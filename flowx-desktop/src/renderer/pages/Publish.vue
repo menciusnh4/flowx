@@ -1,0 +1,471 @@
+<script setup lang="ts">
+import { ref, computed, onMounted, reactive, nextTick } from 'vue'
+import { ElMessage } from 'element-plus'
+import { usePublishStore } from '../stores/publish'
+import { useAccountStore } from '../stores/account'
+import { electronApi } from '../utils/electron'
+import type { PublishRequest, PlatformType } from '../../types'
+
+const accountStore = useAccountStore()
+const publishStore = usePublishStore()
+
+// ============ 表单 ============
+const contentType = ref<'video' | 'image' | 'article'>('video')
+const title = ref('')
+const mediaFiles = ref<string[]>([])
+const content = ref('')
+const coverImage = ref('')
+const tagsRaw = ref('')
+const submitting = ref(false)
+
+// ============ UI ============
+const showDebug = ref(false)
+// el-collapse 在 accordion=false 时接收 string[]，用 Set 也不行；
+// 这里用数组 + 响应式替换来保证 UI 同步
+const openTaskIds = ref<string[]>([])
+
+// ============ 选择的账号 ID（用 reactive 保证 .has 也响应式）============
+// 注意：ref<Set<>> 不响应内部 .add/.delete，改用 reactive object + 显式数组
+const selectedIds = reactive<Record<string, boolean>>({})
+
+function toggleAccount(id: string) {
+  selectedIds[id] = !selectedIds[id]
+  // 不使用的 key 保留 false 也没问题；true 表示选中
+  console.log('[Publish.vue] toggleAccount', id, 'selectedCount=', getSelectedIds().length)
+}
+
+function getSelectedIds(): string[] {
+  return Object.keys(selectedIds).filter((k) => selectedIds[k])
+}
+
+function selectAll() {
+  currentAccounts.value.forEach((a) => { selectedIds[a.id] = true })
+  console.log('[Publish.vue] selectAll ->', getSelectedIds().length)
+}
+
+function clearSelection() {
+  for (const k of Object.keys(selectedIds)) delete selectedIds[k]
+  console.log('[Publish.vue] clearSelection')
+}
+
+// ============ 初始化 ============
+onMounted(async () => {
+  console.log('[Publish.vue] mounted, ensuring listener + loading accounts')
+  publishStore.ensureListener()
+  try {
+    if (accountStore.accounts.length === 0) {
+      console.log('[Publish.vue] accountStore is empty, calling refreshAccounts')
+      await accountStore.refreshAccounts()
+    }
+    if (accountStore.platforms.length === 0) {
+      await accountStore.loadPlatforms()
+    }
+  } catch (e) {
+    console.error('[Publish.vue] account refresh failed', e)
+  }
+  console.log('[Publish.vue] init done. accountsCount=', accountStore.accounts.length)
+})
+
+// ============ 计算属性 ============
+const videoAccounts = computed(() =>
+  accountStore.accounts.filter((a) => a.capabilities?.publishVideo)
+)
+const imageAccounts = computed(() =>
+  accountStore.accounts.filter((a) => a.capabilities?.publishImage)
+)
+const articleAccounts = computed(() =>
+  accountStore.accounts.filter((a) => a.capabilities?.publishArticle)
+)
+const currentAccounts = computed(() => {
+  if (contentType.value === 'video') return videoAccounts.value
+  if (contentType.value === 'image') return imageAccounts.value
+  return articleAccounts.value
+})
+
+// ============ 文件操作 ============
+async function pickMediaFiles() {
+  console.log('[Publish.vue] pickMediaFiles start')
+  try {
+    const r = await electronApi.openFileDialog({ mode: 'files' })
+    console.log('[Publish.vue] pickMediaFiles raw=', r)
+    if (r && !r.canceled && r.filePaths && r.filePaths.length > 0) {
+      mediaFiles.value = [...mediaFiles.value, ...r.filePaths]
+      console.log('[Publish.vue] pickMediaFiles -> ', mediaFiles.value.length, 'files')
+      ElMessage.success(`已添加 ${r.filePaths.length} 个文件`)
+    }
+  } catch (e) {
+    console.error('[Publish.vue] pickMediaFiles error', e)
+    ElMessage.error('选择文件失败')
+  }
+}
+
+function removeMediaFile(p: string) {
+  mediaFiles.value = mediaFiles.value.filter((x) => x !== p)
+  console.log('[Publish.vue] removeMediaFile', p, 'now size=', mediaFiles.value.length)
+}
+
+async function pickCover() {
+  try {
+    const r = await electronApi.openFileDialog({ mode: 'file' })
+    if (r && !r.canceled && r.filePaths && r.filePaths.length > 0) {
+      coverImage.value = r.filePaths[0]
+      console.log('[Publish.vue] pickCover=', coverImage.value)
+    }
+  } catch (e) {
+    console.error('[Publish.vue] pickCover error', e)
+  }
+}
+
+// ============ 提交 ============
+async function submitPublish() {
+  console.log('[Publish.vue] submitPublish clicked')
+
+  if (!title.value.trim()) {
+    ElMessage.warning('请输入标题')
+    console.warn('[Publish.vue] missing title, abort')
+    return
+  }
+  const accountIds = getSelectedIds()
+  if (accountIds.length === 0) {
+    ElMessage.warning('请至少选择一个账号')
+    console.warn('[Publish.vue] no accounts selected, abort')
+    return
+  }
+  if (contentType.value !== 'article' && mediaFiles.value.length === 0) {
+    ElMessage.warning('请上传素材文件')
+    console.warn('[Publish.vue] no media files, abort')
+    return
+  }
+
+  const tags = tagsRaw.value
+    .split(/[,，\s]+/)
+    .map((t) => t.trim().replace(/^#/, ''))
+    .filter((t) => t.length > 0)
+
+  const req: PublishRequest = {
+    contentType: contentType.value,
+    accountIds,
+    title: title.value.trim(),
+    mediaFiles: mediaFiles.value.slice(),
+    coverImage: coverImage.value,
+    tags,
+    category: '',
+    content: content.value,
+  }
+  console.log('[Publish.vue] sending request to main process:', {
+    contentType: req.contentType,
+    title: req.title,
+    accountCount: req.accountIds.length,
+    mediaCount: req.mediaFiles.length,
+  })
+
+  submitting.value = true
+  try {
+    const taskId = await publishStore.submit(req)
+    console.log('[Publish.vue] submitPublish success, taskId=', taskId)
+    ElMessage.success(`任务已提交：${taskId}`)
+
+    // 让新任务在折叠面板里默认展开
+    openTaskIds.value = [...new Set([...openTaskIds.value, taskId])]
+  } catch (e) {
+    console.error('[Publish.vue] submitPublish caught error:', e)
+    ElMessage.error(`发布失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    submitting.value = false
+    console.log('[Publish.vue] submitPublish flow finished')
+  }
+}
+
+// ============ 工具函数 ============
+function formatTime(ts?: number): string {
+  if (!ts) return '-'
+  const d = new Date(ts)
+  const p = (n: number) => n.toString().padStart(2, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+function statusLabel(s?: string): string {
+  switch (s) {
+    case 'queued': return '排队中'
+    case 'running': return '发布中'
+    case 'success': return '成功'
+    case 'failed': return '失败'
+    case 'cancelled': return '已取消'
+    default: return s || '-'
+  }
+}
+
+function platformName(p?: string): string {
+  if (!p) return '-'
+  const map: Record<string, string> = {
+    douyin: '抖音', kuaishou: '快手', xiaohongshu: '小红书',
+    bilibili: '哔哩哔哩', video: '视频号',
+  }
+  return map[p] || p
+}
+
+function iconOf(platform?: string): string {
+  const map: Record<string, string> = {
+    douyin: '🎵', kuaishou: '⚡', xiaohongshu: '📕', bilibili: '📺', video: '🎬',
+  }
+  return map[platform ?? ''] || '🔘'
+}
+
+function nicknameOf(accountId: string): string {
+  const a = accountStore.accounts.find((x) => x.id === accountId)
+  return a?.nickname || accountId
+}
+
+function toggleDebug() {
+  showDebug.value = !showDebug.value
+  console.log('[Publish.vue] showDebug=', showDebug.value, 'logCount=', publishStore.logs.length)
+}
+
+function clearTask(taskId: string) {
+  console.log('[Publish.vue] clearTask', taskId)
+  publishStore.remove(taskId)
+  openTaskIds.value = openTaskIds.value.filter((x) => x !== taskId)
+}
+
+function platformFromAccountId(accountId: string): PlatformType | undefined {
+  const a = accountStore.accounts.find((x) => x.id === accountId)
+  return a?.platform
+}
+</script>
+
+<template>
+  <div class="publish-page">
+    <div class="panel">
+      <h2 class="section-title">① 选择发布类型</h2>
+      <el-radio-group v-model="contentType" size="default">
+        <el-radio-button value="video">视频</el-radio-button>
+        <el-radio-button value="image">图文</el-radio-button>
+        <el-radio-button value="article">文章</el-radio-button>
+      </el-radio-group>
+      <el-divider />
+
+      <h2 class="section-title">② 标题与内容</h2>
+      <el-form label-width="80px" label-position="right">
+        <el-form-item label="标题">
+          <el-input v-model="title" placeholder="请输入标题" maxlength="80" show-word-limit />
+        </el-form-item>
+
+        <el-form-item v-if="contentType !== 'article'" label="素材">
+          <el-button @click="pickMediaFiles">选择文件</el-button>
+          <span v-if="mediaFiles.length > 0" style="margin-left:8px; color:#909399; font-size:12px;">
+            已选择 {{ mediaFiles.length }} 个文件
+          </span>
+          <div class="file-list" v-if="mediaFiles.length > 0">
+            <div v-for="(f, idx) in mediaFiles" :key="idx" class="file-item">
+              <span class="file-name">{{ f }}</span>
+              <el-button size="small" type="danger" link @click="removeMediaFile(f)">删除</el-button>
+            </div>
+          </div>
+        </el-form-item>
+
+        <el-form-item v-if="contentType === 'video'" label="封面">
+          <el-button @click="pickCover">选择封面</el-button>
+          <span v-if="coverImage" style="margin-left:8px; color:#909399; font-size:12px;">{{ coverImage }}</span>
+        </el-form-item>
+
+        <el-form-item label="描述">
+          <el-input
+            v-model="content"
+            type="textarea"
+            :rows="contentType === 'article' ? 8 : 4"
+            :placeholder="contentType === 'article' ? '请输入正文内容' : '可选：为视频/图文添加描述文案（将作为笔记正文发布）'"
+            maxlength="1000"
+            show-word-limit
+          />
+        </el-form-item>
+
+        <el-form-item label="话题">
+          <el-input v-model="tagsRaw" placeholder="多个话题用空格或逗号分隔，例如：美食探店 上海生活" />
+        </el-form-item>
+      </el-form>
+
+      <el-divider />
+
+      <h2 class="section-title">③ 选择发布账号</h2>
+      <div class="account-actions">
+        <el-button size="small" @click="selectAll">全选可见</el-button>
+        <el-button size="small" @click="clearSelection">清空</el-button>
+        <span class="hint">已选 {{ getSelectedIds().length }} / {{ currentAccounts.length }}</span>
+      </div>
+
+      <div v-if="currentAccounts.length === 0" class="empty">
+        <el-empty description="没有可用账号，请先在账号管理授权" />
+      </div>
+
+      <div v-else class="account-grid">
+        <div
+          v-for="a in currentAccounts"
+          :key="a.id"
+          class="account-card"
+          :class="{ selected: !!selectedIds[a.id] }"
+          @click="toggleAccount(a.id)"
+        >
+          <div class="platform-tag">{{ iconOf(a.platform) }} {{ platformName(a.platform) }}</div>
+          <div class="nickname">{{ a.nickname }}</div>
+          <div class="account-id">{{ a.id }}</div>
+          <div v-if="selectedIds[a.id]" class="selected-mark">✓</div>
+        </div>
+      </div>
+
+      <el-divider />
+
+      <div class="submit-row">
+        <el-button type="primary" :loading="submitting" :disabled="currentAccounts.length === 0" @click="submitPublish">
+          一键发布到 {{ getSelectedIds().length }} 个账号
+        </el-button>
+        <el-button @click="toggleDebug" :type="showDebug ? 'warning' : 'default'">
+          {{ showDebug ? '隐藏调试日志' : '调试模式' }}（{{ publishStore.logs.length }}）
+        </el-button>
+      </div>
+    </div>
+
+    <!-- ==================== 任务进行中 ==================== -->
+    <div v-if="publishStore.hasLiveTasks" class="panel">
+      <h2 class="section-title">任务进行中（{{ Object.keys(publishStore.liveTasks).length }}）</h2>
+      <el-collapse v-model="openTaskIds">
+        <el-collapse-item
+          v-for="t in publishStore.liveList"
+          :key="t.taskId"
+          :name="t.taskId"
+          :title="`任务 ${t.taskId.slice(0, 14)} | ${statusLabel(t.status)} | ${Math.round(t.overallProgress)}% | ${formatTime(t.startedAt)}`"
+        >
+          <div class="task-meta">
+            <span>标题：{{ t.request.title }}</span>
+            <span>类型：{{ t.request.contentType }}</span>
+            <span>账号数：{{ t.request.accountIds.length }}</span>
+            <el-button size="small" type="danger" link @click.stop="clearTask(t.taskId)">移除</el-button>
+          </div>
+          <el-progress
+            :percentage="Math.round(t.overallProgress)"
+            :status="t.status === 'success' ? 'success' : t.status === 'failed' ? 'exception' : undefined"
+          />
+          <el-table :data="t.items" size="small" style="margin-top: 10px;">
+            <el-table-column label="账号" min-width="200">
+              <template #default="{ row }">
+                <span>{{ iconOf(platformFromAccountId(row.accountId)) }} {{ nicknameOf(row.accountId) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="平台" width="120">
+              <template #default="{ row }">{{ platformName(platformFromAccountId(row.accountId)) }}</template>
+            </el-table-column>
+            <el-table-column label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag v-if="row.status === 'success'" type="success" size="small">成功</el-tag>
+                <el-tag v-else-if="row.status === 'failed'" type="danger" size="small">失败</el-tag>
+                <el-tag v-else-if="row.status === 'running'" type="primary" size="small">发布中</el-tag>
+                <el-tag v-else size="small">队列</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="进度" width="200">
+              <template #default="{ row }">
+                <el-progress :percentage="Math.round(row.progress ?? 0)" :stroke-width="10" />
+              </template>
+            </el-table-column>
+            <el-table-column prop="message" label="详情" min-width="220" show-overflow-tooltip />
+            <el-table-column label="链接" width="120">
+              <template #default="{ row }">
+                <el-link v-if="row.resultUrl" type="primary" :href="row.resultUrl" target="_blank" :disabled="false">查看</el-link>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-collapse-item>
+      </el-collapse>
+    </div>
+
+    <!-- ==================== 调试日志面板 ==================== -->
+    <div v-if="showDebug" class="panel">
+      <h2 class="section-title">实时调试日志（最近 {{ publishStore.logs.length }} 条）</h2>
+      <div class="debug-hint">
+        打开浏览器 DevTools (Ctrl+Shift+I) 可查看 console 实时日志；这里同时记录关键事件。
+      </div>
+      <div class="debug-actions">
+        <el-button size="small" @click="() => { console.log('[Publish.vue] store dump:', { liveTasks: publishStore.liveTasks, logs: publishStore.logs }); ElMessage.info('已输出到 console'); }">
+          把 store 打印到 console
+        </el-button>
+        <el-button size="small" @click="() => { console.log('[Publish.vue] accountStore:', accountStore.accounts); }">
+          打印账号列表
+        </el-button>
+      </div>
+      <div class="debug-log">
+        <div v-for="(l, idx) in publishStore.logs" :key="idx" class="log-line" :class="l.level">
+          <span class="log-time">{{ formatTime(l.ts) }}</span>
+          <span class="log-level">[{{ l.level === 'info' ? 'INFO' : l.level === 'warn' ? 'WARN' : 'ERR' }}]</span>
+          <span class="log-msg">{{ l.msg }}</span>
+          <span v-if="l.data" class="log-data">{{ JSON.stringify(l.data) }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.publish-page {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.panel {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  color: #303133;
+}
+.file-list { margin-top: 8px; max-height: 160px; overflow-y: auto; }
+.file-item { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 12px; color: #606266; }
+.file-name { word-break: break-all; }
+.account-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.hint { color: #909399; font-size: 12px; }
+.account-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.account-card {
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  padding: 10px;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.15s;
+}
+.account-card:hover { border-color: #409eff; background: #f4faff; }
+.account-card.selected { border-color: #409eff; background: #ecf5ff; border-width: 2px; padding: 9px; }
+.platform-tag { font-size: 12px; color: #909399; margin-bottom: 4px; }
+.nickname { font-size: 14px; font-weight: 500; color: #303133; }
+.account-id { font-size: 11px; color: #c0c4cc; margin-top: 4px; word-break: break-all; }
+.selected-mark { position: absolute; top: 8px; right: 10px; color: #409eff; font-weight: bold; }
+.submit-row { display: flex; gap: 10px; align-items: center; }
+
+/* 调试日志 */
+.debug-hint { font-size: 12px; color: #909399; margin-bottom: 6px; }
+.debug-actions { margin-bottom: 10px; display: flex; gap: 8px; }
+.debug-log {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 10px;
+  border-radius: 4px;
+  max-height: 420px;
+  overflow-y: auto;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.log-line { display: flex; gap: 6px; flex-wrap: wrap; }
+.log-line.warn { color: #e5c07b; }
+.log-line.error { color: #f48771; }
+.log-time { color: #858585; flex-shrink: 0; }
+.log-level { color: #6a9955; flex-shrink: 0; }
+.log-msg { color: #d4d4d4; }
+.log-data { color: #858585; margin-left: 4px; word-break: break-all; }
+.empty { padding: 20px 0; }
+.task-meta { display: flex; gap: 20px; color: #606266; font-size: 13px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+</style>

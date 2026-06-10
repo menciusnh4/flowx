@@ -1,0 +1,24 @@
+import { createRouter, createWebHashHistory, RouteRecordRaw } from 'vue-router';
+
+// 直接使用 dynamic import，不再用 defineAsyncComponent 包一层
+// （defineAsyncComponent 用于普通组件；路由本身已经是懒加载机制，
+//  双套一层会导致 Vue Router 警告并影响加载状态提示）
+const routes: RouteRecordRaw[] = [
+  { path: '/', redirect: '/dashboard' },
+  { path: '/dashboard', name: 'dashboard', component: () => import('@/pages/Dashboard.vue'), meta: { title: '仪表盘' } },
+  { path: '/accounts', name: 'accounts', component: () => import('@/pages/AccountPanel.vue'), meta: { title: '账号管理' } },
+  { path: '/publish', name: 'publish', component: () => import('@/pages/Publish.vue'), meta: { title: '一键发布' } },
+  { path: '/history', name: 'history', component: () => import('@/pages/History.vue'), meta: { title: '发布历史' } },
+];
+
+export const router = createRouter({
+  history: createWebHashHistory(),
+  routes,
+});
+
+router.beforeEach((to, _from, next) => {
+  if (to.meta?.title) {
+    document.title = `${to.meta.title as string} - FlowX`;
+  }
+  next();
+});
