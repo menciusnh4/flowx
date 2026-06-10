@@ -92,10 +92,40 @@ const adapter: PlatformAdapter = {
           var all = document.querySelectorAll('div, span, p');
           for (var i = 0; i < all.length; i++) {
             var txt = (all[i].textContent || '').trim();
-            var m = txt.match(/快手(号)?[\\s:：]*([0-9A-Za-z_\\-]+)/);
+            var m = txt.match(/快手(号)?[\s:：]*([0-9A-Za-z_\-]+)/);
             if (m && m[2]) { r.platformAccountId = m[2]; break; }
           }
         } catch (e) {}
+        // 兜底：从页面 cookie 解析 userId 作为快手号（快手页面有时不显示"快手号"文本）
+        // 常见 cookie 名：user_id / userId / userKey / kwaiUserId 等
+        if (!r.platformAccountId) {
+          try {
+            var ck = document.cookie || '';
+            var pairs = ck.split(';');
+            for (var ci = 0; ci < pairs.length; ci++) {
+              var kv = (pairs[ci] || '').trim();
+              var eq = kv.indexOf('=');
+              if (eq < 1) continue;
+              var cname = decodeURIComponent(kv.substring(0, eq)).trim().toLowerCase();
+              var cval = kv.substring(eq + 1);
+              try { cval = decodeURIComponent(cval); } catch (_) {}
+              var isUidName = (function (n) {
+                return n === 'user_id' || n === 'userid' || n === 'userId' || n === 'kwaiuserid' ||
+                       n === 'kuaishou_id' || n === 'kwai_id' ||
+                       n === 'user_key' || n === 'userkey' ||
+                       n === 'uid' || n === 'uid_key' ||
+                       n === 'kwaiuid' || n === 'user_id_';
+              })(cname);
+              if (isUidName && cval) {
+                cval = cval.trim();
+                if (cval.length >= 4 && cval.length <= 40 && /^[0-9A-Za-z_\-]+$/.test(cval)) {
+                  r.platformAccountId = cval;
+                  break;
+                }
+              }
+            }
+          } catch (e) {}
+        }
         // 粉丝/关注/获赞 — 快手创作者中心格式（数字在前，label 在后）：
         //   <div class="user-cnt">
         //     <div class="user-cnt__item"> 2<span>粉丝</span></div>
