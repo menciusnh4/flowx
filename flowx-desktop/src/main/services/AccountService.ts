@@ -355,6 +355,14 @@ export class AccountService {
           };
 
           this.saveCredential(credential);
+          // saveCredential 内部做了 dedup：如果命中旧账号则更新它而不是新增
+          // 这里重新从存储中读取真正被持久化的凭证，确保返回给调用方的 id 与磁盘一致
+          const persisted =
+            this.loadCredentials().find((c) => {
+              const pidMatch = credential.platformAccountId && c.platformAccountId === credential.platformAccountId;
+              const uidMatch = credential.userId && c.userId === credential.userId;
+              return c.platform === credential.platform && (pidMatch || uidMatch);
+            }) || credential;
 
           logger.info('\n' + '='.repeat(70));
           logger.info(`[Account-Auth] ✅ 保存成功！最终凭证:`);
@@ -372,7 +380,7 @@ export class AccountService {
 
           try { clearInterval(btnReinject); } catch { /* ignore */ }
           try { if (!authWin.isDestroyed()) authWin.destroy(); } catch { /* ignore */ }
-          resolve(this.toInfo(credential));
+          resolve(this.toInfo(persisted));
         } catch (err) {
           logger.error(`\n[Account-Auth] ❌ 授权失败: ${(err as Error).message}`);
           logger.error(`  堆栈: ${(err as Error).stack?.split('\n').slice(0, 3).join('\n')}`);
@@ -610,30 +618,11 @@ export class AccountService {
       logger.info(`[Account-Refresh] ⚠️  登录态已失效，启动重新授权`);
       win.destroy();
 
-      const newAccount = await AccountService.beginAuthorization(c.platform);
-      logger.info(`[Account-Refresh] ✅ 重新授权完成: ${newAccount.nickname}`);
-
-      // 判断新账号是否是同一个人（按平台账号ID匹配），如果是同一个则合并
-      if (newAccount.platformAccountId && c.platformAccountId &&
-          newAccount.platformAccountId === c.platformAccountId) {
-        logger.info(`[Account-Refresh] 检测到新账号与原账号平台ID一致(${c.platformAccountId})，合并更新而不是新增`);
-        // 再次刷新列表，找到新创建的账号复制信息到原账号，然后删除新账号
-        const refreshedList = this.loadCredentials();
-        const newIdx = refreshedList.findIndex((a) => a.id === newAccount.id);
-        const origIdx = refreshedList.findIndex((a) => a.id === c.id);
-        if (newIdx >= 0 && origIdx >= 0) {
-          const newCred = refreshedList[newIdx];
-          refreshedList[origIdx] = {
-            ...newCred,
-            id: c.id, // 保持原ID不变
-            authorizedAt: Date.now(),
-          };
-          refreshedList.splice(newIdx, 1); // 删除重复的新账号
-          this.saveCredentials(refreshedList);
-          return this.toInfo(refreshedList[origIdx]);
-        }
-      }
-      return newAccount;
+      // beginAuthorization 内部 saveCredential 已做 dedup：
+      // 若用户登录的是同一个账号，会直接更新现有记录（保留原 id），不会新增重复项
+      const refreshedAccount = await AccountService.beginAuthorization(c.platform);
+      logger.info(`[Account-Refresh] ✅ 重新授权完成: ${refreshedAccount.nickname}`);
+      return refreshedAccount;
     }
   }
 
@@ -650,7 +639,23 @@ export class AccountService {
 
   private static saveCredential(cred: AccountCredential): void {
     const list = this.loadCredentials();
-    list.unshift(cred);
+    // 判重：同平台 + (同 platformAccountId 或 同 userId) → 更新而不是新增
+    const idx = list.findIndex((c) => {
+      if (c.platform !== cred.platform) return false;
+      const pidMatch = cred.platformAccountId && c.platformAccountId === cred.platformAccountId;
+      const uidMatch = cred.userId && c.userId === cred.userId;
+      return pidMatch || uidMatch;
+    });
+    if (idx >= 0) {
+      // 保留原 id，更新所有动态字段
+      list[idx] = {
+        ...cred,
+        id: list[idx].id, // 保持原账号 id 不变
+      };
+      logger.info(`[Account-Auth] 🔄 检测到重复账号(${cred.platform})，更新已有记录而非新增`);
+    } else {
+      list.unshift(cred);
+    }
     this.saveCredentials(list);
   }
 
