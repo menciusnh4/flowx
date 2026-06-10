@@ -6,7 +6,7 @@ export const useAccountStore = defineStore('account', {
   state: () => ({
     loading: false,
     accounts: [] as AccountInfo[],
-    platforms: [] as { key: PlatformType; name: string; icon: string }[],
+    platforms: [] as { key: PlatformType; name: string; icon: string; platformAccountLabel: string }[],
     error: '' as string,
   }),
   getters: {

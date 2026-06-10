@@ -53,7 +53,7 @@
         <el-table-column label="平台账号" width="140">
           <template #default="{ row }">
             <div v-if="row.platformAccountId" style="font-size:13px; color:#303133">
-              <span style="color:#909399; font-size:12px">{{ row.platform === 'douyin' ? '抖音号' : '小红书号' }}</span>
+              <span style="color:#909399; font-size:12px">{{ accountStore.platforms.find((x) => x.key === row.platform)?.platformAccountLabel || '账号' }}</span>
               <br/>
               <span style="font-weight:500">{{ row.platformAccountId }}</span>
             </div>

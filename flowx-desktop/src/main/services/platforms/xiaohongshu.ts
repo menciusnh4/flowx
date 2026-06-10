@@ -24,6 +24,7 @@ const meta: PlatformMeta = {
   key: 'xiaohongshu',
   name: '小红书',
   icon: '📕',
+  platformAccountLabel: '小红书号',
   authUrl: 'https://creator.xiaohongshu.com/creator/home',
   publishUrl: 'https://creator.xiaohongshu.com/publish/publish',
   homeUrl: 'https://creator.xiaohongshu.com/creator/home',

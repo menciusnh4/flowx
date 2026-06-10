@@ -21,6 +21,8 @@ export interface PlatformMeta {
   contentTypes: ContentType[];
   /** 账号支持的发布能力 */
   capabilities: AccountCapabilities;
+  /** 平台内账号标识的显示名（如"抖音号"/"小红书号"/"快手号"） */
+  platformAccountLabel: string;
   /** 授权时 DOM 提取昵称的选择器（按顺序尝试） */
   nicknameSelectors?: string[];
   /** 授权时 DOM 提取头像的选择器（按顺序尝试，取 img 的 src） */

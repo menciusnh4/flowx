@@ -18,13 +18,16 @@ const meta: PlatformMeta = {
   key: 'douyin',
   name: '抖音',
   icon: '🎵',
+  platformAccountLabel: '抖音号',
   authUrl: 'https://creator.douyin.com/creator-micro/home',
   publishUrl: 'https://creator.douyin.com/creator-micro/content/upload',
   homeUrl: 'https://creator.douyin.com/creator-micro/home',
   contentTypes: ['video', 'image', 'article'],
   capabilities: { publishVideo: true, publishImage: true, publishArticle: true } as AccountCapabilities,
-  nicknameSelectors: ['[class*="header-"] [class*="name-"]', '[class*="name-_"]', '[class*="name-"]', '.name-box', '.user-name', '.nickname'],
-  avatarSelectors: ['img.user_avatar', '.user-info img', '[class*="avatar"] img', 'img[class*="avatar"]', '[class*="header-"] img'],
+  // 抖音创作中心 HTML：<div class="name-_lSSDc">用法用量</div>
+  nicknameSelectors: ['[class*="header-"] [class*="name-_"]', '[class*="name-_"]', '[class*="name-"]', '.name-box', '.user-name', '.nickname'],
+  // 头像：<div class="avatar-XoPjK6"><img class="img-PeynF_" src="..."></div>
+  avatarSelectors: ['[class*="avatar-"] img', 'img[class*="img-"]', 'img[class*="avatar"]', 'img.user_avatar', '.user-info img'],
   loginKeywords: ['创作中心', '内容管理', '发布', '作品', '数据', '粉丝'],
 };
 
@@ -87,7 +90,7 @@ const adapter: PlatformAdapter = {
             if (src && /^https?:\\/\\//.test(src)) { r.avatar = src; break; }
           }
         }
-        // 抖音号
+        // 抖音号：<div class="unique_id-EuH8eA">抖音号：20275758647</div>
         try {
           var all = document.querySelectorAll('div, span, p');
           for (var i = 0; i < all.length; i++) {
@@ -96,23 +99,72 @@ const adapter: PlatformAdapter = {
             if (m) { r.platformAccountId = m[1]; break; }
           }
         } catch (e) {}
-        // 粉丝/关注/获赞 — 抖音格式："xx 粉丝"、"xx 关注"、"xx 获赞"
+        // 粉丝/关注/获赞 — 抖音创作者中心格式：
+        //   <div class="statics-item-MDWoNA">关注 <span class="number-No6ev9">0</span></div>
+        //   <div class="statics-item-MDWoNA">粉丝 <span class="number-No6ev9">0</span></div>
+        //   <div class="statics-item-MDWoNA">获赞 <span class="number-No6ev9">0</span></div>
+        // 元素 textContent = "关注 0" / "粉丝 0" / "获赞 1.2万" 等（label 与 number 混在一起）
         try {
-          var allNodes = document.querySelectorAll('div, span, p');
-          var currentLabel = null;
-          for (var j = 0; j < allNodes.length; j++) {
-            var t2 = (allNodes[j].textContent || '').trim();
-            if (!t2 || t2.length > 10) continue;
-            if (/^(粉丝数?|关注数?|获赞数?)$/.test(t2)) { currentLabel = t2; continue; }
-            if (currentLabel && /^\\d+[.]?\\d*[万wWkK千]?$/.test(t2)) {
-              var num = parseFloat(t2);
-              if (/[万wW]/.test(t2)) num *= 10000;
-              else if (/[千kK]/.test(t2)) num *= 1000;
-              if (/^粉丝/.test(currentLabel)) r.fansCount = Math.round(num);
-              else if (/^关注/.test(currentLabel)) r.followCount = Math.round(num);
-              else if (/^获赞/.test(currentLabel)) r.likeCount = Math.round(num);
-              currentLabel = null;
-            } else { currentLabel = null; }
+          function parseCount(text) {
+            // 支持：0、1234、1.2万、1,234
+            var clean = (text || '').trim().replace(/[,\\s]/g, '');
+            var pm = clean.match(/^(\\d+(?:\\.\\d+)?)([万千wWkK])?$/);
+            if (!pm) return null;
+            var n = parseFloat(pm[1]);
+            if (pm[2]) {
+              if (/[万千wW]/.test(pm[2])) n *= 10000;
+              else if (/[千kK]/.test(pm[2])) n *= 1000;
+            }
+            return Math.round(n);
+          }
+          // 策略 A：识别 statics-item 元素（最常见的创作者中心 layout）
+          var statItems = document.querySelectorAll('[class*="statics-item"], [class*="statics-"] > *');
+          for (var a = 0; a < statItems.length; a++) {
+            var t = (statItems[a].textContent || '').trim();
+            if (!t || t.length > 30) continue;
+            var tm = t.match(/^(关注|粉丝|获赞)[\\s\\S]*?([\\d,]+(?:\\.\\d+)?(?:[万千wWkK])?)\\s*$/);
+            if (tm) {
+              var n = parseCount(tm[2]);
+              if (n !== null) {
+                if (tm[1] === '粉丝') r.fansCount = n;
+                else if (tm[1] === '关注') r.followCount = n;
+                else if (tm[1] === '获赞') r.likeCount = n;
+              }
+            }
+          }
+          // 策略 B：兜底 — 遍历所有 div/span，按 "label + 数字" 同一元素 或 相邻元素 两种结构识别
+          if (r.fansCount === null || r.followCount === null || r.likeCount === null) {
+            var allNodes = document.querySelectorAll('div, span, p');
+            var currentLabel = null;
+            for (var j = 0; j < allNodes.length; j++) {
+              var t2 = (allNodes[j].textContent || '').trim();
+              if (!t2 || t2.length > 30) continue;
+              // B.1 label+数字在同一元素："关注 1,234"、"粉丝 1.2万"、"获赞 0"
+              var tm2 = t2.match(/^(关注|粉丝|获赞)[\\s:：]*([\\d,]+(?:\\.\\d+)?(?:[万千wWkK])?)\\s*$/);
+              if (tm2) {
+                var n2 = parseCount(tm2[2]);
+                if (n2 !== null) {
+                  if (tm2[1] === '粉丝' && r.fansCount === null) r.fansCount = n2;
+                  else if (tm2[1] === '关注' && r.followCount === null) r.followCount = n2;
+                  else if (tm2[1] === '获赞' && r.likeCount === null) r.likeCount = n2;
+                }
+                currentLabel = null;
+                continue;
+              }
+              // B.2 label 与数字分开的相邻元素（部分页面样式）
+              if (/^(粉丝数?|关注数?|获赞数?)$/.test(t2)) { currentLabel = t2; continue; }
+              if (currentLabel && /^[\\d,]+[.]?\\d*[万wWkK千]?$/.test(t2)) {
+                var n3 = parseCount(t2);
+                if (n3 !== null) {
+                  if (/^粉丝/.test(currentLabel) && r.fansCount === null) r.fansCount = n3;
+                  else if (/^关注/.test(currentLabel) && r.followCount === null) r.followCount = n3;
+                  else if (/^获赞/.test(currentLabel) && r.likeCount === null) r.likeCount = n3;
+                }
+                currentLabel = null;
+              } else if (!/^(粉丝|关注|获赞)/.test(t2)) {
+                currentLabel = null;
+              }
+            }
           }
         } catch (e) {}
         return r;
