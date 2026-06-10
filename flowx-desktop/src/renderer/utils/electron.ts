@@ -133,10 +133,12 @@ async function invokeElectron<T>(
   ...args: unknown[]
 ): Promise<T> {
   const e = getElectronOrThrow();
-  const [ns, key] = pathA.split(':'); // e.g. "account:listPlatforms"
+  const [ns, key] = pathA.split(':'); // e.g. "account:beginAuth" -> ns="account", key="beginAuth"
   const obj = (e as Record<string, unknown>)[ns] as Record<string, unknown> | undefined;
   if (!obj || typeof obj[key] !== 'function') {
     throw new Error(`FlowX API 缺失：${debugName}（${ns}.${key}）。请确认 IPC 与 preload 已注册此通道。`);
   }
-  return await (obj[key] as (...a: unknown[]) => Promise<T>)(...args);
+  // ⚠️  注意：preload 中的 invoke() 已经把主进程 safeInvoke 返回的 { ok, data, error }
+  //     解包成纯 data（失败时直接 throw Error），所以这里不需要再次解包！
+  return (await (obj[key] as (...a: unknown[]) => Promise<T>)(...args)) as T;
 }

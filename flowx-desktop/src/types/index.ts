@@ -1,7 +1,10 @@
 // 全局类型定义 - 主进程与渲染进程共享
 
-/** 支持的平台 */
-export type PlatformType = 'douyin' | 'xiaohongshu';
+/** 支持的平台（由注册时校验） */
+export type PlatformType = string;
+
+/** 已知平台 key 列表（仅用于默认 UI 展示，实际支持以注册表为准） */
+export const KNOWN_PLATFORMS: string[] = ['douyin', 'xiaohongshu', 'kuaishou'];
 
 /** 平台元信息 */
 export interface PlatformMeta {
@@ -16,6 +19,14 @@ export interface PlatformMeta {
   homeUrl: string;
   /** 发布支持的内容类型 */
   contentTypes: ContentType[];
+  /** 账号支持的发布能力 */
+  capabilities: AccountCapabilities;
+  /** 授权时 DOM 提取昵称的选择器（按顺序尝试） */
+  nicknameSelectors?: string[];
+  /** 授权时 DOM 提取头像的选择器（按顺序尝试，取 img 的 src） */
+  avatarSelectors?: string[];
+  /** 页面已登录的启发式关键字（body 文本中含任意即判为已登录） */
+  loginKeywords?: string[];
 }
 
 /** 内容类型 */

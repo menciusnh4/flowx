@@ -3,97 +3,12 @@ import crypto from 'crypto';
 import { getStore, encrypt, decrypt } from '../store/SecureStore';
 import { logger } from '../utils/logger';
 import { PLATFORMS } from './PlatformRegistry';
+import { getPlatform, getAllPlatforms } from './platforms';
 import type {
   AccountCredential,
   AccountInfo,
   PlatformType,
 } from '../../types';
-
-// =======================================================================
-// 平台策略：登录入口 + 个人中心页 + DOM 选择器
-// =======================================================================
-interface PlatformStrategy {
-  // 授权窗口打开的第一页（直接在创作中心域登录，避免跨子域 401）
-  authUrl: string;
-  // 登录成功后理论上应该到达的 URL（用于"是否已登录"判定）
-  homeUrl: string;
-  // 提取昵称时的候选选择器（按顺序尝试）
-  nicknameSelectors: string[];
-  // 提取头像时的候选选择器（img 的 src）
-  avatarSelectors: string[];
-  // 页面已登录的启发式判定（body 文本中含任意关键字即判为已登录）
-  loginKeywords: string[];
-}
-
-const STRATEGIES: Record<PlatformType, PlatformStrategy> = {
-  xiaohongshu: {
-    authUrl: 'https://creator.xiaohongshu.com/creator/home',
-    homeUrl: 'https://creator.xiaohongshu.com/creator/home',
-    // 顺序很重要：最精确的放最前面
-    nicknameSelectors: [
-      '.account-name',          // 小红书创作者中心实际使用的昵称容器
-      '.name-box',
-      '.user_avatar + .name-box',
-      '.user-name',
-      '.nick-name',
-      '.author-name',
-      '.nickname',
-      '.user-info .name-box',
-      '.account-info .name-box',
-      '[class*="name-box"]',
-      '[class*="user-name"]',
-      '[class*="nick"]',
-      '[class*="account-name"]',
-    ],
-    avatarSelectors: [
-      'img.user_avatar',        // 小红书实际使用的头像 img
-      '.user_avatar',
-      '.user-info img',
-      'img.avatar',
-      '[class*="avatar"] img',
-      'img[class*="avatar"]',
-      '.header img',
-    ],
-    loginKeywords: ['创作中心', '数据中心', '作品管理', '发布笔记', '发布视频', '我的', '粉丝', '数据分析', '数据看板'],
-  },
-  douyin: {
-    authUrl: 'https://creator.douyin.com/creator-micro/home',
-    homeUrl: 'https://creator.douyin.com/creator-micro/home',
-    nicknameSelectors: [
-      // 抖音创作者中心实际使用的带随机后缀类名
-      '[class*="header-"] [class*="name-"]',
-      '[class*="name-_"]',
-      '[class*="name-"]',
-      // 常规兜底选择器
-      '.name-box',
-      '.user-name',
-      '.nickname',
-      '.header-user .name',
-      '[class*="user-name"]',
-      '[class*="nick"]',
-    ],
-    avatarSelectors: [
-      'img.user_avatar',
-      '.user-info img',
-      '.avatar img',
-      'img.avatar',
-      '[class*="avatar"] img',
-      'img[class*="avatar"]',
-      // 抖音：取 header 区域第一张头像
-      '[class*="header-"] img',
-      '[class*="left-"] img',
-    ],
-    loginKeywords: ['创作中心', '内容管理', '发布', '作品', '数据', '粉丝'],
-  },
-};
-
-// 让 PLATFORMS 注册表里的 authUrl 与我们策略中的保持一致
-for (const key of Object.keys(STRATEGIES) as PlatformType[]) {
-  if (PLATFORMS[key]) {
-    PLATFORMS[key].authUrl = STRATEGIES[key].authUrl;
-    PLATFORMS[key].homeUrl = STRATEGIES[key].homeUrl;
-  }
-}
 
 // =======================================================================
 // 工具：延迟
@@ -116,7 +31,7 @@ export class AccountService {
     if (AccountService.ready) return;
     AccountService.ready = true;
     AccountService.checkAllExpiration();
-    logger.info('[Account] 账号服务初始化完成，支持平台:', Object.keys(STRATEGIES).join(', '));
+    logger.info('[Account] 账号服务初始化完成，支持平台:', getAllPlatforms().map((p) => p.key).join(', '));
   }
 
   static listAccounts(): AccountInfo[] {
@@ -144,15 +59,16 @@ export class AccountService {
   //        · 读 partition 里所有 cookies（完整属性：secure/httpOnly/sameSite/expires）
   //        · 加密保存
   // -----------------------------------------------------------------------
-  static async beginAuthorization(platform: PlatformType): Promise<AccountInfo> {
-    const strategy = STRATEGIES[platform];
-    if (!strategy) throw new Error(`未知平台: ${platform}`);
+  static async beginAuthorization(platformKey: PlatformType): Promise<AccountInfo> {
+    const platform = getPlatform(platformKey);
+    if (!platform) throw new Error(`未知平台: ${platformKey}`);
+    const strategy = platform.meta;
 
-    const accountId = genId(platform);
+    const accountId = genId(platformKey);
     const partition = `persist:account_${accountId}`;
 
     logger.info('\n' + '='.repeat(70));
-    logger.info(`[Account-Auth] 🚀 开始授权 (${platform})`);
+    logger.info(`[Account-Auth] 🚀 开始授权 (${platformKey})`);
     logger.info(`[Account-Auth]   accountId  = ${accountId}`);
     logger.info(`[Account-Auth]   partition  = ${partition}`);
     logger.info(`[Account-Auth]   authUrl    = ${strategy.authUrl}`);
@@ -163,7 +79,7 @@ export class AccountService {
       height: 880,
       minWidth: 900,
       minHeight: 640,
-      title: `登录 ${PLATFORMS[platform]?.name ?? platform} - FlowX （登录完成后请点右上角红色按钮）`,
+      title: `登录 ${PLATFORMS[platformKey]?.name ?? platformKey} — FlowX （完成扫码后点击右上角"保存账号"按钮）`,
       autoHideMenuBar: true,
       webPreferences: {
         partition,
@@ -183,7 +99,11 @@ export class AccountService {
       logger.info(`[Account-Auth] → 页面内导航: ${url}`),
     );
 
-    // 每次页面渲染完成后注入"已登录完成，保存账号"按钮
+    // 保存信号魔法值（多机制并发触发，应对不同平台页面差异）
+    const SAVE_TITLE_MAGIC = '__FLOWX_SAVE_ACCOUNT_MAGIC__';
+    const SAVE_HASH_MAGIC = '#flowx-save-now-' + Math.random().toString(36).slice(2, 8);
+
+    // 每次页面渲染完成后注入"保存账号"按钮
     const injectSaveBtn = () => {
       if (authWin.isDestroyed()) return;
       authWin.webContents
@@ -192,14 +112,22 @@ export class AccountService {
             if (document.getElementById('flowx-account-save-btn')) return;
             var d = document.createElement('div');
             d.id = 'flowx-account-save-btn';
-            d.innerHTML = '✅ 登录完成，保存账号';
-            d.style.cssText = 'position:fixed;top:12px;right:12px;z-index:2147483647;background:#ff2442;color:#fff;padding:12px 18px;border-radius:8px;font-size:14px;font-family:"PingFang SC",sans-serif;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.35);font-weight:600;letter-spacing:1px';
+            d.innerHTML = '💾 保存账号';
+            d.title = '完成扫码登录后点击此按钮保存';
+            d.style.cssText = 'position:fixed;top:12px;right:12px;z-index:2147483647;background:#ff2442;color:#fff;padding:12px 18px;border-radius:8px;font-size:14px;font-family:"PingFang SC",sans-serif;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.35);font-weight:600;letter-spacing:1px;user-select:none';
             d.onclick = function(){
-              d.innerText = '正在保存，窗口将自动关闭...';
+              if (d.dataset.clicked) return;
+              d.dataset.clicked = '1';
+              d.innerText = '⏳ 正在验证登录状态...';
               d.style.pointerEvents='none';
               d.style.opacity='0.7';
-              // 告诉主进程可以保存了（通过 window.close 触发 close 事件）
-              setTimeout(function(){ window.close(); }, 400);
+              // 多信号并发：document.title / location.hash / 页面全局标记
+              // 主进程通过多种事件监听捕获，任何一种都能触发保存
+              setTimeout(function(){
+                try { document.title = '${SAVE_TITLE_MAGIC}'; } catch(e) {}
+                try { window.location.hash = '${SAVE_HASH_MAGIC}'; } catch(e) {}
+                try { window.__FLOWX_SAVE_NOW__ = 1; } catch(e) {}
+              }, 200);
             };
             document.body.appendChild(d);
           })();
@@ -218,50 +146,64 @@ export class AccountService {
     );
 
     return new Promise<AccountInfo>((resolve, reject) => {
+      // ===== 关键安全标志：防止 trySave 被重复触发（用户点按钮+关窗会两次调用）=====
+      let isTryingToSave = false;
+      // 每次 loadURL 超时限制（避免网络慢时 Promise 悬停）
+      const loadWithTimeout = (url: string, timeoutMs = 10000) => {
+        return new Promise<boolean>((done) => {
+          let finished = false;
+          authWin.loadURL(url)
+            .then(() => { if (!finished) { finished = true; done(true); } })
+            .catch(() => { if (!finished) { finished = true; done(false); } });
+          setTimeout(() => { if (!finished) { finished = true; done(false); } }, timeoutMs);
+        });
+      };
+
       const trySave = async () => {
+        // ===== 1. 防抖：正在处理中则直接跳过 =====
+        if (isTryingToSave) {
+          logger.info('[Account-Auth] ⏳ trySave 已在执行中，跳过重复调用');
+          return;
+        }
+        isTryingToSave = true;
+
         try {
           logger.info('\n' + '-'.repeat(70));
           logger.info(`[Account-Auth] 🔍 开始提取登录态...`);
           logger.info('-'.repeat(70));
 
           // -------- Step 1: 确保页面在已登录状态下 --------
-          // 当前 URL 不是 home 且页面无登录关键字时，主动跳 homeUrl 再等 3 秒
-          let currentUrl = authWin.webContents.getURL();
+          let isLoggedIn = false;
           let tries = 0;
-          while (tries < 2) {
+          while (tries < 2 && !authWin.isDestroyed()) {
+            const currentUrl = authWin.webContents.getURL();
             logger.info(`[Account-Auth] 当前 URL: ${currentUrl}`);
 
-            // 先尝试从当前页面读文本判断是否已登录
-            let bodyText = '';
-            try {
-              bodyText = await authWin.webContents.executeJavaScript(
-                `document.body ? document.body.innerText.slice(0,2000) : ''`,
-              );
-            } catch {
-              bodyText = '';
+            const check = await platform.detectLoggedIn(authWin);
+            logger.info(`[Account-Auth]   → 平台检测结果: loggedIn=${check.loggedIn}, 命中关键字=${check.matchedKeywords?.join(', ') ?? '(无)'}`);
+
+            if (check.loggedIn) {
+              isLoggedIn = true;
+              break;
             }
-            const loggedIn = strategy.loginKeywords.some((k) => bodyText.includes(k));
-            logger.info(`[Account-Auth]   → 登录关键字命中: ${loggedIn
-              ? strategy.loginKeywords.filter((k) => bodyText.includes(k)).join(', ')
-              : '无'}`);
 
-            if (loggedIn && currentUrl.includes('creator')) break;
-
-            // 尝试跳到 homeUrl，等 SPA 渲染
             tries++;
-            logger.info(`[Account-Auth]   → 尝试导航到 homeUrl (第 ${tries} 次): ${strategy.homeUrl}`);
-            try {
-              await authWin.loadURL(strategy.homeUrl);
-              await sleep(2500);
-              currentUrl = authWin.webContents.getURL();
-            } catch (e) {
-              logger.warn(`[Account-Auth]   → 导航失败: ${(e as Error).message}`);
-              await sleep(1500);
-              currentUrl = authWin.webContents.getURL();
-            }
+            logger.info(`[Account-Auth]   → 尝试导航到创作者中心首页 (第 ${tries} 次): ${strategy.homeUrl}`);
+            const loaded = await loadWithTimeout(strategy.homeUrl, 8000);
+            if (loaded) await sleep(2000);
           }
 
-          // -------- Step 2: 读 DOM 结构（先打印给我看，再拿昵称/头像/平台ID/粉丝数据） --------
+          // ========== 关键修复：强制登录态检查 ==========
+          // 用户可能没登录就直接关窗 —— 必须拒绝保存空账号
+          if (!isLoggedIn) {
+            throw new Error(
+              `未检测到有效登录态。\n` +
+              `请先在窗口中完成扫码/短信登录，确认已进入创作者中心后，\n` +
+              `再点击右上角红色"保存账号"按钮或关闭窗口。`,
+            );
+          }
+
+          // -------- Step 2: 让平台适配器从当前窗口 DOM 提取账号信息 --------
           let nickname = '';
           let avatar = '';
           let platformAccountId = '';
@@ -269,204 +211,27 @@ export class AccountService {
           let fansCount: number | undefined;
           let likeCount: number | undefined;
           try {
-            const info: any = await authWin.webContents.executeJavaScript(`
-              (function(){
-                var r = { url: location.href, title: document.title, body: (document.body ? document.body.innerText.slice(0,1200) : ''), texts:[], imgs:[], nickname:'', avatar:'', platformAccountId:'', followCount:null, fansCount:null, likeCount:null };
-                // 把页面里"有意义"的文本节点及其 class 路径打出来
-                try {
-                  var candidates = document.querySelectorAll('div, span, h1, h2, h3');
-                  for (var i=0; i<Math.min(candidates.length, 60); i++){
-                    var el = candidates[i];
-                    var txt = (el.textContent || '').trim();
-                    if (txt && txt.length >= 2 && txt.length <= 40 && !/登录|注册|扫码|忘记|验证码|协议|隐私|Copyright|ICP/i.test(txt)){
-                      var path = el.tagName.toLowerCase();
-                      if (el.className && typeof el.className === 'string') path += ' class="' + el.className.slice(0,80) + '"';
-                      else if (el.id) path += ' id="' + el.id + '"';
-                      r.texts.push(path + ' → "' + txt + '"');
-                    }
-                  }
-                } catch(e){}
-                try {
-                  var allImgs = document.querySelectorAll('img');
-                  for (var i=0; i<Math.min(allImgs.length, 15); i++){
-                    var src = allImgs[i].getAttribute('src') || '';
-                    if (!src || src.indexOf('data:') === 0) continue;
-                    var cls = allImgs[i].getAttribute('class') || '';
-                    var alt = allImgs[i].getAttribute('alt') || '';
-                    r.imgs.push('[img] class="' + cls.slice(0,60) + '" alt="' + alt + '" src=' + src.slice(0,140));
-                  }
-                } catch(e){}
-                // 1) 按选择器拿昵称/头像
-                var selectors = ${JSON.stringify({
-                  nicks: strategy.nicknameSelectors,
-                  avatars: strategy.avatarSelectors,
-                })};
-                for (var si=0; si<selectors.nicks.length; si++){
-                  var el = document.querySelector(selectors.nicks[si]);
-                  if (el && el.textContent && el.textContent.trim()){ r.nickname = el.textContent.trim(); break; }
-                }
-                for (var si=0; si<selectors.avatars.length; si++){
-                  var el = document.querySelector(selectors.avatars[si]);
-                  if (el && el.getAttribute){ var s = el.getAttribute('src') || ''; if (s && /^https?:\\/\\//.test(s)){ r.avatar = s; break; } }
-                }
-                // 2) 提取平台账号 ID（抖音号/小红书号）
-                try {
-                  var pidFound = false;
-                  // 方式1：抖音 "抖音号：xxx" 容器
-                  var pidEl = document.querySelector('[class*="unique_id-"]') || document.querySelector('[class*="accountId-"]');
-                  if (pidEl && pidEl.textContent) {
-                    var pidTxt = pidEl.textContent.trim();
-                    var pidMatch = pidTxt.match(/[:：]\\s*(\\S+)/);
-                    if (pidMatch) { r.platformAccountId = pidMatch[1].trim(); pidFound = true; }
-                    else { r.platformAccountId = pidTxt; pidFound = true; }
-                  }
-                  // 方式2：小红书创作者中心 - 精确 DOM 选择器优先
-                  // 小红书创作者中心会把账号信息放在 description-text / others 类名下
-                  if (!pidFound) {
-                    var pidEls = document.querySelectorAll(
-                      '[class*="description-text"] div, ' +
-                      '[class*="description-text"] span, ' +
-                      '[class*="others description-text"] div, ' +
-                      'div[class*="others"]'
-                    );
-                    for (var xi=0; xi<pidEls.length; xi++){
-                      var pidText = (pidEls[xi].textContent || '').trim();
-                      var pidXhsMatch = pidText.match(/小红书账号[\\s:：]*([\\dA-Za-z_\\-]+)/);
-                      if (pidXhsMatch) { r.platformAccountId = pidXhsMatch[1]; pidFound = true; break; }
-                      var pidDyMatch = pidText.match(/抖音号[\\s:：]*([\\dA-Za-z_\\-]+)/);
-                      if (pidDyMatch) { r.platformAccountId = pidDyMatch[1]; pidFound = true; break; }
-                    }
-                  }
-                  // 方式3：兜底遍历所有文本节点
-                  if (!pidFound) {
-                    var pidTextNodes2 = document.querySelectorAll('div, span, p');
-                    for (var pi2=0; pi2<pidTextNodes2.length; pi2++){
-                      var txt2 = (pidTextNodes2[pi2].textContent || '').trim();
-                      var xhsMatch2 = txt2.match(/小红书账号[\\s:：]*([\\dA-Za-z_\\-]+)/);
-                      if (xhsMatch2) { r.platformAccountId = xhsMatch2[1]; pidFound = true; break; }
-                      var douyinMatch2 = txt2.match(/抖音号[\\s:：]*([\\dA-Za-z_\\-]+)/);
-                      if (douyinMatch2) { r.platformAccountId = douyinMatch2[1]; pidFound = true; break; }
-                    }
-                  }
-                } catch(e){}
-                // 3) 提取粉丝/关注/获赞（抖音创作者中心 / 小红书创作者中心）
-                try {
-                  var allTextNodes = document.querySelectorAll('div, span, p');
-                  var statsMap = {};
-                  var currentLabel = null;  // 标签在前，数字在后（抖音："粉丝 123"）
-                  var currentNumStr = null; // 数字在前，标签在后（小红书："123 粉丝数"）
-                  var rawList = [];
-                  var fnParseNum = function(s){
-                    if (!s) return null;
-                    s = s.trim();
-                    if (!/^\\d+[.]?\\d*[万wWkK千]?$/.test(s)) return null;
-                    var n = parseFloat(s);
-                    if (/[万wW]/.test(s)) n = n * 10000;
-                    else if (/[千kK]/.test(s)) n = n * 1000;
-                    return Math.round(n);
-                  };
-                  for (var i=0; i<allTextNodes.length; i++){
-                    var t = (allTextNodes[i].textContent || '').trim();
-                    if (!t || t.length > 10) continue;
-                    rawList.push(t);
-                    // 寻找 "关注/粉丝/获赞/关注数/粉丝数/获赞与收藏" 标签 + 相邻数字
-                    if (/^(关注数?|粉丝数?|获赞(与收藏)?)$/.test(t)) {
-                      // 反向模式：先数字后标签（小红书）
-                      if (currentNumStr) {
-                        var n2 = fnParseNum(currentNumStr);
-                        if (n2 !== null) {
-                          if (/^关注/.test(t)) r.followCount = n2;
-                          else if (/^粉丝/.test(t)) r.fansCount = n2;
-                          else if (/^获赞/.test(t)) r.likeCount = n2;
-                        }
-                        currentNumStr = null;
-                      }
-                      // 正向模式：标签先数字后（抖音）
-                      currentLabel = t;
-                      continue;
-                    }
-                    if (currentLabel && /^\\d+[.]?\\d*[万wWkK千]?$/.test(t)) {
-                      // 解析带单位的数字
-                      var num = parseFloat(t);
-                      if (/[万wW]/.test(t)) num = num * 10000;
-                      else if (/[千kK]/.test(t)) num = num * 1000;
-                      if (/^关注/.test(currentLabel)) r.followCount = Math.round(num);
-                      else if (/^粉丝/.test(currentLabel)) r.fansCount = Math.round(num);
-                      else if (/^获赞/.test(currentLabel)) r.likeCount = Math.round(num);
-                      currentLabel = null;
-                    } else if (/^\\d+[.]?\\d*[万wWkK千]?$/.test(t)) {
-                      // 反向模式：数字在前，暂存等待下一轮的标签
-                      currentNumStr = t;
-                      currentLabel = null;
-                    } else {
-                      currentLabel = null;
-                    }
-                  }
-                  // 兜底：从 body 文本里正则匹配 "关注 123 / 粉丝 456 / 获赞 789" 这种格式
-                  var bodyText2 = document.body ? document.body.innerText : '';
-                  if (r.followCount == null) {
-                    var m1 = bodyText2.match(/关注[\\s:：]*([\\d.]+[万千万wWkK千]?)/);
-                    if (m1){ var n1 = parseFloat(m1[1]); if (/[万wW]/.test(m1[1])) n1*=10000; else if(/[千kK]/.test(m1[1])) n1*=1000; r.followCount = Math.round(n1); }
-                  }
-                  if (r.fansCount == null) {
-                    var m2 = bodyText2.match(/粉丝[\\s:：]*([\\d.]+[万千万wWkK千]?)/);
-                    if (m2){ var n2 = parseFloat(m2[1]); if (/[万wW]/.test(m2[1])) n2*=10000; else if(/[千kK]/.test(m2[1])) n2*=1000; r.fansCount = Math.round(n2); }
-                  }
-                  if (r.likeCount == null) {
-                    var m3 = bodyText2.match(/获赞[\\s:：]*([\\d.]+[万千万wWkK千]?)/);
-                    if (m3){ var n3 = parseFloat(m3[1]); if (/[万wW]/.test(m3[1])) n3*=10000; else if(/[千kK]/.test(m3[1])) n3*=1000; r.likeCount = Math.round(n3); }
-                  }
-                } catch(e){}
-                return r;
-              })();
-            `);
-
-            logger.info(`[Account-Auth] 🔹 页面快照:`);
-            logger.info(`  url    = ${info?.url}`);
-            logger.info(`  title  = ${info?.title}`);
-            logger.info(`  body(前1200字) =\n${(info?.body || '').split('\n').map((l: string) => '    ' + l).join('\n')}`);
-            if (info?.texts?.length) {
-              logger.info(`  可见文本候选:`);
-              info.texts.forEach((t: string, i: number) => logger.info(`    [${String(i).padStart(2, '0')}] ${t}`));
-            }
-            if (info?.imgs?.length) {
-              logger.info(`  图片候选:`);
-              info.imgs.forEach((t: string, i: number) => logger.info(`    [${String(i).padStart(2, '0')}] ${t}`));
-            }
-            nickname = info?.nickname || '';
-            avatar = info?.avatar || '';
-            platformAccountId = info?.platformAccountId || '';
-            followCount = typeof info?.followCount === 'number' ? info.followCount : undefined;
-            fansCount = typeof info?.fansCount === 'number' ? info.fansCount : undefined;
-            likeCount = typeof info?.likeCount === 'number' ? info.likeCount : undefined;
-            logger.info(`[Account-Auth] 🔹 选择器提取结果: nickname="${nickname}", avatar="${avatar}", id="${platformAccountId}", 关注=${followCount ?? '-'}, 粉丝=${fansCount ?? '-'}, 获赞=${likeCount ?? '-'}`);
+            const extracted = await platform.extractPageInfo(authWin);
+            nickname = extracted.nickname;
+            avatar = extracted.avatar || '';
+            platformAccountId = extracted.platformAccountId || '';
+            followCount = extracted.followCount;
+            fansCount = extracted.fansCount;
+            likeCount = extracted.likeCount;
+            logger.info(`[Account-Auth] 🔹 平台适配器提取结果: nickname="${nickname}", avatar="${avatar}", id="${platformAccountId}", 关注=${followCount ?? '-'}, 粉丝=${fansCount ?? '-'}, 获赞=${likeCount ?? '-'}`);
           } catch (e) {
             logger.warn(`[Account-Auth]   → DOM 提取失败: ${(e as Error).message}`);
           }
 
-          // -------- Step 3: 收集所有 cookies（含完整属性） --------
+          // -------- Step 3: 收集 cookies --------
           const sess = session.fromPartition(partition);
-          const rawCookies = await sess.cookies.get({});
-          logger.info(`\n[Account-Auth] 🔹 Cookies: 共 ${rawCookies.length} 条（按域名分组）`);
-
-          const byDomain = new Map<string, typeof rawCookies>();
-          rawCookies.forEach((c) => {
-            const key = c.domain || '(unknown)';
-            if (!byDomain.has(key)) byDomain.set(key, []);
-            byDomain.get(key)!.push(c);
-          });
-          byDomain.forEach((list, domain) => {
-            logger.info(`  [${domain}] (${list.length} 条)`);
-            list.forEach((c) => {
-              const valStr = (c.value || '').length > 60
-                ? (c.value || '').slice(0, 60) + `...(len=${(c.value || '').length})`
-                : (c.value || '(empty)');
-              logger.info(
-                `     ${c.name} = ${valStr}  ` +
-                `(path=${c.path || '/'}, httpOnly=${c.httpOnly}, secure=${c.secure}, sameSite=${c.sameSite || '-'}, expires=${c.expirationDate ? new Date(c.expirationDate * 1000).toISOString() : 'session'})`,
-              );
-            });
-          });
+          let rawCookies: any[] = [];
+          try {
+            rawCookies = await sess.cookies.get({});
+          } catch (e) {
+            logger.warn(`[Account-Auth]   → 读取 cookies 失败: ${(e as Error).message}`);
+          }
+          logger.info(`[Account-Auth] 🔹 共读取到 ${rawCookies.length} 条 cookies`);
 
           // -------- Step 4: 从 cookies 拿 userId --------
           let userId = '';
@@ -479,24 +244,92 @@ export class AccountService {
             }
           }
 
-          // -------- Step 5: 兜底 + 校验 --------
-          const finalNick =
-            nickname.trim() || (userId ? `${PLATFORMS[platform]?.name ?? platform}账号 (${userId.slice(-4)})` : `${PLATFORMS[platform]?.name ?? platform}账号`);
-          if (!nickname.trim()) {
-            logger.info(`[Account-Auth] 🔹 DOM 未提取到昵称，降级为: "${finalNick}"`);
+          // -------- Step 5: 兜底 + 强校验 --------
+          // 5.1 账号信息强校验：必须从 DOM 提取到真实昵称或平台账号ID
+          //   —— 过滤明显的默认/占位文字（如"抖音创作者中心·创作者"）
+          const BLACKLISTED_NICKNAMES = [
+            '抖音创作者中心',
+            '抖音创作者',
+            '创作者中心',
+            '创作中心',
+            '小红书账号',
+            '快手账号',
+            '登录',
+            '登录中',
+            '未登录',
+            'loading',
+            '未命名',
+            '匿名用户',
+          ];
+          const trimmedNickname = nickname.trim();
+          const nicknameLooksReal =
+            trimmedNickname.length > 0 &&
+            !BLACKLISTED_NICKNAMES.some((b) => trimmedNickname.includes(b)) &&
+            trimmedNickname.length < 40;
+          const platformAccountIdLooksReal = platformAccountId && platformAccountId.trim().length > 2 && platformAccountId.trim().length < 30;
+
+          // 用户信息必须来自真实 DOM 提取（昵称 or 平台账号ID），userId（cookie a1 等）不能作为唯一凭据
+          const hasMeaningfulInfo = nicknameLooksReal || !!platformAccountIdLooksReal;
+          if (!hasMeaningfulInfo) {
+            throw new Error(
+              `未在页面中找到真实账号信息（昵称/平台账号ID 均为空或为默认文字）。\n` +
+              `请确认已完成登录并成功进入创作者中心后再保存。\n` +
+              `（当前提取到的昵称: "${trimmedNickname || '(空)'}"）`,
+            );
           }
 
-          if (rawCookies.length === 0) {
-            throw new Error(
-              `未检测到 ${PLATFORMS[platform]?.name ?? platform} 登录态（partition 中无 cookies）。\n` +
-              `请在窗口内完成扫码/短信登录后，再点右上角红色按钮或关闭窗口。`,
+          // 5.2 Cookies 校验：仅当 cookies 数量合理且包含登录相关 cookie 时才视为有效
+          //   —— 纯浏览页面也会有 1~2 个 gdpr/tracker cookie，但真正登录后 cookies 数量通常 ≥ 5
+          const hasLoginCookie = rawCookies.some((c) => {
+            const name = c.name.toLowerCase();
+            return (
+              name.includes('session') ||
+              name.includes('sid') ||
+              name.includes('token') ||
+              name.includes('auth') ||
+              name.includes('login') ||
+              name.includes('user_id') ||
+              name.includes('uid') ||
+              name.includes('a1') ||  // 小红书
+              name.includes('sec_user_id') ||  // 抖音/小红书
+              name === 'sessionid' ||
+              name === 'sid_guard'
             );
+          });
+          if (rawCookies.length === 0 || (!hasLoginCookie && rawCookies.length < 5)) {
+            throw new Error(
+              `未检测到 ${PLATFORMS[platformKey]?.name ?? platformKey} 有效登录凭证（partition 中无登录相关 cookies）。\n` +
+              `请在窗口内完成扫码/短信登录后，再点右上角红色"保存账号"按钮或关闭窗口。`,
+            );
+          }
+
+          // 5.3 昵称兜底：仅在有其他可靠凭据（如真实平台账号ID）时才允许用默认昵称做兜底
+          //     （如果 DOM 昵称空、平台账号ID也空、粉丝数据也空，说明没有真登录，不该保存）
+          const hasStatsData =
+            typeof fansCount === 'number' || typeof followCount === 'number' || typeof likeCount === 'number';
+          const realPlatformAccountId = platformAccountId && platformAccountId.trim().length > 2 && platformAccountId.trim().length < 30;
+          const needsFallback = !nickname.trim();
+
+          if (needsFallback && !realPlatformAccountId && !hasStatsData) {
+            throw new Error(
+              `页面没有真实账号数据（无昵称、无平台账号ID、无粉丝/关注数据）。\n` +
+              `请确认已成功登录并进入创作者中心首页后再保存。`,
+            );
+          }
+
+          const finalNick =
+            nickname.trim() ||
+            (realPlatformAccountId
+              ? `${PLATFORMS[platformKey]?.name ?? platformKey}账号 (${platformAccountId.slice(-4)})`
+              : `${PLATFORMS[platformKey]?.name ?? platformKey}账号`);
+          if (!nickname.trim()) {
+            logger.info(`[Account-Auth] 🔹 DOM 未提取到昵称，降级为: "${finalNick}"`);
           }
 
           // -------- Step 6: 构造凭证并持久化 --------
           const credential: AccountCredential = {
             id: accountId,
-            platform,
+            platform: platformKey,
             cookies: rawCookies
               .filter((c) => !!c.value && !c.name.startsWith('__flowx_'))
               .map((c) => ({
@@ -538,36 +371,85 @@ export class AccountService {
           logger.info('='.repeat(70) + '\n');
 
           try { clearInterval(btnReinject); } catch { /* ignore */ }
-          try { authWin.destroy(); } catch { /* ignore */ }
+          try { if (!authWin.isDestroyed()) authWin.destroy(); } catch { /* ignore */ }
           resolve(this.toInfo(credential));
         } catch (err) {
           logger.error(`\n[Account-Auth] ❌ 授权失败: ${(err as Error).message}`);
           logger.error(`  堆栈: ${(err as Error).stack?.split('\n').slice(0, 3).join('\n')}`);
           try { clearInterval(btnReinject); } catch { /* ignore */ }
-          try { authWin.destroy(); } catch { /* ignore */ }
+          try { if (!authWin.isDestroyed()) authWin.destroy(); } catch { /* ignore */ }
           reject(err);
         }
       };
 
-      // 窗口关闭 → 保存
-      authWin.on('close', (e) => {
-        e.preventDefault();
-        logger.info(`[Account-Auth] 收到窗口关闭事件 → 开始保存...`);
-        trySave();
-      });
-
-      // 兜底超时（20 分钟）
-      const timeoutHandle = setTimeout(() => {
-        if (!authWin.isDestroyed()) {
-          logger.warn(`[Account-Auth] ⏰ 授权超时，强制关闭`);
+      // ================ 核心保存信号（多机制并发监听，任何一个命中即触发）================
+      // 机制 1: page-title-updated（对小红书等简单页面有效）
+      authWin.on('page-title-updated', (evt, title) => {
+        if (title === SAVE_TITLE_MAGIC) {
+          evt.preventDefault();
+          logger.info(`[Account-Auth] 🎯 捕获保存信号 [title] → 开始保存流程`);
           trySave();
         }
-      }, 20 * 60 * 1000);
+      });
+
+      // 机制 2: did-navigate-in-page（hash 变更，对 SPA/框架页面更可靠）
+      authWin.webContents.on('did-navigate-in-page', (_evt, url) => {
+        if (url.includes(SAVE_HASH_MAGIC)) {
+          logger.info(`[Account-Auth] 🎯 捕获保存信号 [hash] → 开始保存流程 (url=${url})`);
+          trySave();
+        }
+      });
+
+      // 机制 3: 轮询兜底（每 500ms 通过 executeJavaScript 检查信号标记）
+      //    应对任何事件机制都无法触发的平台（如强 CSP 或特殊 iframe 结构）
+      const signalPoller = setInterval(() => {
+        if (isTryingToSave || authWin.isDestroyed()) return;
+        authWin.webContents
+          .executeJavaScript(
+            `(function(){ try { return { t: document.title, h: location.hash, f: window.__FLOWX_SAVE_NOW__ }; } catch(e) { return {}; } })()`,
+          )
+          .then((info: any) => {
+            if (!info || isTryingToSave) return;
+            const hit =
+              info.t === SAVE_TITLE_MAGIC ||
+              (info.h && info.h.includes(SAVE_HASH_MAGIC.replace('#', ''))) ||
+              info.f === 1;
+            if (hit) {
+              logger.info(`[Account-Auth] 🎯 捕获保存信号 [poll] → 开始保存流程 (t=${info.t?.slice(0, 30)}, h=${info.h?.slice(0, 30)}, f=${info.f})`);
+              trySave();
+            }
+          })
+          .catch(() => { /* 忽略轮询过程中的临时错误 */ });
+      }, 500);
+
+      // 用户手动关闭窗口（点击 X 按钮）→ 同样触发保存流程
+      authWin.on('close', (e) => {
+        if (!isTryingToSave) {
+          e.preventDefault();
+          logger.info(`[Account-Auth] 收到窗口关闭事件 → 开始保存...`);
+          trySave();
+        }
+      });
+
+      // 兜底超时（10 分钟）
+      const timeoutHandle = setTimeout(() => {
+        if (!authWin.isDestroyed()) {
+          logger.warn(`[Account-Auth] ⏰ 授权超时，强制结束`);
+          // 如果 trySave 还没开始，直接 reject
+          if (!isTryingToSave) {
+            isTryingToSave = true;
+            clearInterval(signalPoller);
+            try { if (!authWin.isDestroyed()) authWin.destroy(); } catch { /* ignore */ }
+            reject(new Error('授权超时（10 分钟内未完成登录操作）'));
+          }
+        }
+      }, 10 * 60 * 1000);
 
       // 窗口被销毁时清定时器
       authWin.on('closed', () => {
         clearTimeout(timeoutHandle);
         clearInterval(btnReinject);
+        clearInterval(signalPoller);
       });
     });
   }
@@ -621,7 +503,8 @@ export class AccountService {
     const idx = list.findIndex((a) => a.id === id);
     if (idx < 0) throw new Error('账号不存在');
     const c = list[idx];
-    const strategy = STRATEGIES[c.platform];
+    const platform = getPlatform(c.platform);
+    if (!platform) throw new Error(`未知平台: ${c.platform}`);
 
     logger.info(`\n[Account-Refresh] 🔄 开始刷新账号 ${c.nickname} (${c.platform})`);
 
@@ -643,7 +526,7 @@ export class AccountService {
     win.setMenuBarVisibility(false);
 
     try {
-      await win.loadURL(strategy.homeUrl);
+      await win.loadURL(platform.meta.homeUrl);
     } catch (e) {
       logger.warn(`[Account-Refresh] 加载页面失败: ${(e as Error).message}`);
     }
@@ -651,148 +534,43 @@ export class AccountService {
     // 等待 SPA 渲染（给3秒让页面加载完）
     await new Promise((r) => setTimeout(r, 3000));
 
-    // Step 2: 检测当前页面是否已登录
-    const checkResult: { loggedIn: boolean; body: string; url: string } = await win.webContents
-      .executeJavaScript(`(function(){
-        var body = document.body ? document.body.innerText.slice(0,2000) : '';
-        var keywords = ${JSON.stringify(strategy.loginKeywords)};
-        var hit = keywords.some(function(k){ return body.indexOf(k) >= 0; });
-        return { loggedIn: hit, body: body.slice(0,500), url: location.href };
-      })()`)
-      .catch(() => ({ loggedIn: false, body: '', url: '' }));
-
+    // Step 2: 检测当前页面是否已登录（交给平台适配器）
+    const checkResult = await platform.detectLoggedIn(win);
     logger.info(`[Account-Refresh] 检测: loggedIn=${checkResult.loggedIn}, url=${checkResult.url}`);
 
     if (checkResult.loggedIn) {
       // ========== 登录有效：直接更新信息 ==========
-      logger.info(`[Account-Refresh] ✅ 登录态有效，直接提取最新信息`);
+      logger.info(`[Account-Refresh] ✅ 登录态有效，提取最新信息`);
 
-      const info: any = await win.webContents.executeJavaScript(`
-        (function(){
-          var r = { nickname:'', avatar:'', platformAccountId:'', followCount:null, fansCount:null, likeCount:null };
-          var selectors = ${JSON.stringify({
-            nicks: strategy.nicknameSelectors,
-            avatars: strategy.avatarSelectors,
-          })};
-          for (var si=0; si<selectors.nicks.length; si++){
-            var el = document.querySelector(selectors.nicks[si]);
-            if (el && el.textContent && el.textContent.trim()){ r.nickname = el.textContent.trim(); break; }
-          }
-          for (var si=0; si<selectors.avatars.length; si++){
-            var el = document.querySelector(selectors.avatars[si]);
-            if (el && el.getAttribute){ var s = el.getAttribute('src') || ''; if (s && /^https?:\\/\\//.test(s)){ r.avatar = s; break; } }
-          }
-          // 2) 提取平台账号 ID（抖音号/小红书号）
-          try {
-            var pidFound = false;
-            // 方式1：抖音 "抖音号：xxx" 容器
-            var pidEl = document.querySelector('[class*="unique_id-"]') || document.querySelector('[class*="accountId-"]');
-            if (pidEl && pidEl.textContent) {
-              var pidTxt = pidEl.textContent.trim();
-              var pidMatch = pidTxt.match(/[:：]\\s*(\\S+)/);
-              if (pidMatch) { r.platformAccountId = pidMatch[1].trim(); pidFound = true; }
-              else { r.platformAccountId = pidTxt; pidFound = true; }
-            }
-            // 方式2：小红书创作者中心 - 精确 DOM 选择器优先
-            if (!pidFound) {
-              var pidEls = document.querySelectorAll(
-                '[class*="description-text"] div, ' +
-                '[class*="description-text"] span, ' +
-                '[class*="others description-text"] div, ' +
-                'div[class*="others"]'
-              );
-              for (var xi=0; xi<pidEls.length; xi++){
-                var pidText = (pidEls[xi].textContent || '').trim();
-                var pidXhsMatch = pidText.match(/小红书账号[\\s:：]*([\\dA-Za-z_\\-]+)/);
-                if (pidXhsMatch) { r.platformAccountId = pidXhsMatch[1]; pidFound = true; break; }
-                var pidDyMatch = pidText.match(/抖音号[\\s:：]*([\\dA-Za-z_\\-]+)/);
-                if (pidDyMatch) { r.platformAccountId = pidDyMatch[1]; pidFound = true; break; }
-              }
-            }
-            // 方式3：兜底遍历所有文本节点
-            if (!pidFound) {
-              var pidTextNodes2 = document.querySelectorAll('div, span, p');
-              for (var pi2=0; pi2<pidTextNodes2.length; pi2++){
-                var txt2 = (pidTextNodes2[pi2].textContent || '').trim();
-                var xhsMatch2 = txt2.match(/小红书账号[\\s:：]*([\\dA-Za-z_\\-]+)/);
-                if (xhsMatch2) { r.platformAccountId = xhsMatch2[1]; pidFound = true; break; }
-                var douyinMatch2 = txt2.match(/抖音号[\\s:：]*([\\dA-Za-z_\\-]+)/);
-                if (douyinMatch2) { r.platformAccountId = douyinMatch2[1]; pidFound = true; break; }
-              }
-            }
-          } catch(e){}
-          try {
-            var allTextNodes = document.querySelectorAll('div, span, p');
-            var currentLabel = null;  // 标签在前，数字在后（抖音："粉丝 123"）
-            var currentNumStr = null; // 数字在前，标签在后（小红书："123 粉丝数"）
-            var fnParseNum = function(s){
-              if (!s) return null;
-              s = s.trim();
-              if (!/^\\d+[.]?\\d*[万wWkK千]?$/.test(s)) return null;
-              var n = parseFloat(s);
-              if (/[万wW]/.test(s)) n = n * 10000;
-              else if (/[千kK]/.test(s)) n = n * 1000;
-              return Math.round(n);
-            };
-            for (var i=0; i<allTextNodes.length; i++){
-              var t = (allTextNodes[i].textContent || '').trim();
-              if (!t || t.length > 10) continue;
-              if (/^(关注数?|粉丝数?|获赞(与收藏)?)$/.test(t)) {
-                // 反向模式：先数字后标签（小红书）
-                if (currentNumStr) {
-                  var n2 = fnParseNum(currentNumStr);
-                  if (n2 !== null) {
-                    if (/^关注/.test(t)) r.followCount = n2;
-                    else if (/^粉丝/.test(t)) r.fansCount = n2;
-                    else if (/^获赞/.test(t)) r.likeCount = n2;
-                  }
-                  currentNumStr = null;
-                }
-                // 正向模式：标签先数字后（抖音）
-                currentLabel = t;
-                continue;
-              }
-              if (currentLabel && /^\\d+[.]?\\d*[万wWkK千]?$/.test(t)) {
-                var num = parseFloat(t);
-                if (/[万wW]/.test(t)) num = num * 10000;
-                else if (/[千kK]/.test(t)) num = num * 1000;
-                if (/^关注/.test(currentLabel)) r.followCount = Math.round(num);
-                else if (/^粉丝/.test(currentLabel)) r.fansCount = Math.round(num);
-                else if (/^获赞/.test(currentLabel)) r.likeCount = Math.round(num);
-                currentLabel = null;
-              } else if (/^\\d+[.]?\\d*[万wWkK千]?$/.test(t)) {
-                // 反向模式：数字在前，暂存等待下一轮的标签
-                currentNumStr = t;
-                currentLabel = null;
-              } else {
-                currentLabel = null;
-              }
-            }
-          } catch(e){}
-          try {
-            var bodyText = document.body ? document.body.innerText : '';
-            var m1 = bodyText.match(/关注[\\s:：]*([\\d.]+[万千万wWkK千]?)/);
-            if (m1){ var n1 = parseFloat(m1[1]); if (/[万wW]/.test(m1[1])) n1*=10000; else if(/[千kK]/.test(m1[1])) n1*=1000; if (r.followCount == null) r.followCount = Math.round(n1); }
-            var m2 = bodyText.match(/粉丝[\\s:：]*([\\d.]+[万千万wWkK千]?)/);
-            if (m2){ var n2 = parseFloat(m2[1]); if (/[万wW]/.test(m2[1])) n2*=10000; else if(/[千kK]/.test(m2[1])) n2*=1000; if (r.fansCount == null) r.fansCount = Math.round(n2); }
-            var m3 = bodyText.match(/获赞[\\s:：]*([\\d.]+[万千万wWkK千]?)/);
-            if (m3){ var n3 = parseFloat(m3[1]); if (/[万wW]/.test(m3[1])) n3*=10000; else if(/[千kK]/.test(m3[1])) n3*=1000; if (r.likeCount == null) r.likeCount = Math.round(n3); }
-          } catch(e){}
-          return r;
-        })();
-      `).catch(() => ({}));
+      let nickname = '';
+      let avatar = '';
+      let platformAccountId = '';
+      let followCount: number | undefined;
+      let fansCount: number | undefined;
+      let likeCount: number | undefined;
+      try {
+        const extracted = await platform.extractPageInfo(win);
+        nickname = extracted.nickname;
+        avatar = extracted.avatar || '';
+        platformAccountId = extracted.platformAccountId || '';
+        followCount = extracted.followCount;
+        fansCount = extracted.fansCount;
+        likeCount = extracted.likeCount;
+      } catch (e) {
+        logger.warn(`[Account-Refresh]   → 信息提取失败: ${(e as Error).message}`);
+      }
 
       // 提取最新 cookies
       const sess = session.fromPartition(partition);
       const freshCookies = await sess.cookies.get({});
 
       // 更新凭证：优先用新提取的信息，保留已有字段
-      const newNick = (info?.nickname || c.nickname).trim() || c.nickname;
-      const newAvatar = info?.avatar || c.avatar;
-      const newPid = info?.platformAccountId || c.platformAccountId;
-      const newFollow = typeof info?.followCount === 'number' ? info.followCount : c.followCount;
-      const newFans = typeof info?.fansCount === 'number' ? info.fansCount : c.fansCount;
-      const newLikes = typeof info?.likeCount === 'number' ? info.likeCount : c.likeCount;
+      const newNick = (nickname || c.nickname).trim() || c.nickname;
+      const newAvatar = avatar || c.avatar;
+      const newPid = platformAccountId || c.platformAccountId;
+      const newFollow = typeof followCount === 'number' ? followCount : c.followCount;
+      const newFans = typeof fansCount === 'number' ? fansCount : c.fansCount;
+      const newLikes = typeof likeCount === 'number' ? likeCount : c.likeCount;
 
       // 更新 cookies（保留 remark cookie）
       const remarkCookie = c.cookies.find((x) => x.name === '__flowx_remark__');
@@ -882,20 +660,9 @@ export class AccountService {
     let status: AccountInfo['status'] = 'active';
     if (c.expiresAt && c.expiresAt < Date.now()) status = 'expired';
 
-    // 根据平台推断发布能力：
-    //   - xiaohongshu: 支持视频笔记 + 图文笔记
-    //   - douyin: 支持视频发布 + 图文作品
-    let capabilities: AccountInfo['capabilities'];
-    switch (c.platform) {
-      case 'xiaohongshu':
-        capabilities = { publishVideo: true, publishImage: true, publishArticle: false };
-        break;
-      case 'douyin':
-        capabilities = { publishVideo: true, publishImage: true, publishArticle: true };
-        break;
-      default:
-        capabilities = { publishVideo: true, publishImage: false, publishArticle: false };
-    }
+    // 从平台注册表读取 capabilities（新增平台时无需再改这里）
+    const p = getPlatform(c.platform);
+    const capabilities = p ? p.capabilities : { publishVideo: true, publishImage: false, publishArticle: false };
 
     return {
       id: c.id,
@@ -930,8 +697,8 @@ export class AccountService {
   /**
    * 用已保存的登录态打开平台创作中心窗口（验证登录态是否有效）。
    *  - 使用与授权时相同的 partition: persist:account_<id>
-   *  - 先注入凭证 cookies，再跳转到 homeUrl
-   *  - 返回 { ok, windowOpened, cookiesInjected, skipped, url } 便于调试
+   *  - 先注入 cookies，再跳转到 homeUrl
+   *  - 返回 { ok, url, injected, skipped, failed, error? } 便于调试
    */
   static async openCreatorPlatform(
     accountId: string,
@@ -940,13 +707,14 @@ export class AccountService {
     if (!cred) {
       return { ok: false, url: '', injected: 0, skipped: 0, failed: 0, error: '账号不存在' };
     }
-    const strategy = STRATEGIES[cred.platform];
-    if (!strategy) {
+    const platform = getPlatform(cred.platform);
+    if (!platform) {
       return { ok: false, url: '', injected: 0, skipped: 0, failed: 0, error: '未知平台: ' + cred.platform };
     }
+    const homeUrl = platform.meta.homeUrl;
 
     // 1. 注入 cookies 到该账号的 partition
-    const { ok, fail, skipped } = await injectAccountCookies(accountId, strategy.homeUrl);
+    const { ok, fail, skipped } = await injectAccountCookies(accountId, homeUrl);
 
     // 2. 打开 BrowserWindow，使用同一 partition（这样 cookies + localStorage + session 都共享）
     const partition = `persist:account_${accountId}`;
@@ -968,12 +736,12 @@ export class AccountService {
 
     // 3. 加载创作中心首页
     try {
-      await win.loadURL(strategy.homeUrl);
+      await win.loadURL(homeUrl);
     } catch (e) {
       logger.error(`[Account] openCreator loadURL failed: ${(e as Error).message}`);
       return {
         ok: false,
-        url: strategy.homeUrl,
+        url: homeUrl,
         injected: ok,
         skipped,
         failed: fail + 1,
@@ -982,10 +750,10 @@ export class AccountService {
     }
 
     logger.info(
-      `[Account] 打开创作中心: ${cred.platform} | ${cred.nickname} | url=${strategy.homeUrl} | cookies ok=${ok}, skip=${skipped}, fail=${fail}`,
+      `[Account] 打开创作中心: ${cred.platform} | ${cred.nickname} | url=${homeUrl} | cookies ok=${ok}, skip=${skipped}, fail=${fail}`,
     );
 
-    return { ok: true, url: strategy.homeUrl, injected: ok, skipped, failed: fail };
+    return { ok: true, url: homeUrl, injected: ok, skipped, failed: fail };
   }
 }
 
