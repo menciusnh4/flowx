@@ -36,6 +36,14 @@ export interface AccountInfo {
   avatar?: string;
   /** 平台用户 ID（如小红书 a1） */
   userId?: string;
+  /** 抖音号 / 小红书号（平台内展示的账号标识） */
+  platformAccountId?: string;
+  /** 粉丝数 */
+  fansCount?: number;
+  /** 关注数 */
+  followCount?: number;
+  /** 获赞数 */
+  likeCount?: number;
   /** 授权时间 */
   authorizedAt: number;
   /** token 过期时间戳（毫秒） */
@@ -69,6 +77,14 @@ export interface AccountCredential {
   /** 用户名/昵称 */
   nickname: string;
   avatar?: string;
+  /** 抖音号 / 小红书号（平台内展示的账号标识） */
+  platformAccountId?: string;
+  /** 粉丝数 */
+  fansCount?: number;
+  /** 关注数 */
+  followCount?: number;
+  /** 获赞数 */
+  likeCount?: number;
   /** 原始登录地址 */
   authUrl: string;
   /** 授权时间 */

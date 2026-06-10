@@ -25,23 +25,39 @@
             <span>{{ platformIcon(row.platform) }} {{ platformName(row.platform) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="账号" min-width="240">
+        <el-table-column label="账号" min-width="220">
           <template #default="{ row }">
             <div style="display:flex; align-items:center; gap:10px">
               <el-avatar
-                :size="36"
+                :size="40"
                 :src="row.avatar"
                 :style="{ background: row.avatar ? 'transparent' : '#ec4899', color: '#fff', fontWeight: 600 }"
               >
                 {{ (row.nickname || 'U').slice(0, 1) }}
               </el-avatar>
-              <div style="line-height:1.3">
+              <div style="line-height:1.4; flex:1">
                 <div style="font-size:14px; color:#303133; font-weight:500">{{ row.nickname }}</div>
-                <div v-if="row.userId" style="font-size:11px; color:#909399; margin-top:2px">
-                  ID: {{ row.userId }}
+                <div v-if="row.userId" style="font-size:11px; color:#909399; margin-top:3px">
+                  ID: {{ row.userId?.slice(0, 16) }}{{ row.userId && row.userId.length > 16 ? '...' : '' }}
+                </div>
+                <div v-if="row.fansCount !== undefined || row.followCount !== undefined || row.likeCount !== undefined"
+                     style="font-size:11px; color:#606266; margin-top:3px">
+                  <span style="margin-right:12px">粉丝: {{ formatCount(row.fansCount) }}</span>
+                  <span style="margin-right:12px">关注: {{ formatCount(row.followCount) }}</span>
+                  <span>获赞: {{ formatCount(row.likeCount) }}</span>
                 </div>
               </div>
             </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="平台账号" width="140">
+          <template #default="{ row }">
+            <div v-if="row.platformAccountId" style="font-size:13px; color:#303133">
+              <span style="color:#909399; font-size:12px">{{ row.platform === 'douyin' ? '抖音号' : '小红书号' }}</span>
+              <br/>
+              <span style="font-weight:500">{{ row.platformAccountId }}</span>
+            </div>
+            <span v-else style="color:#c0c4cc; font-size:12px">—</span>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="90">
@@ -147,6 +163,12 @@ function platformName(p: string) {
 }
 function platformIcon(p: string) {
   return accountStore.platforms.find((x) => x.key === p)?.icon || '';
+}
+function formatCount(n: number | undefined): string {
+  if (typeof n !== 'number' || Number.isNaN(n)) return '—';
+  if (n >= 10000) return (n / 10000).toFixed(n >= 100000 ? 0 : 1).replace(/\.0$/, '') + '万';
+  if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+  return String(n);
 }
 
 async function openAuthDialog() {
