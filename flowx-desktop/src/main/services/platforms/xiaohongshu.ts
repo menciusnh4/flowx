@@ -175,90 +175,94 @@ const adapter: PlatformAdapter = {
             return false;
           }
 
-          // ---------- 方法 A：单元素 "标签 数字" 模式 ----------
+          // ---------- 方法 A：单元素 "数字+标签" / "标签+数字" 模式 ----------
+          // 注意：先执行"数字+标签"（小红书实际格式是 "16 关注数"、"12 粉丝数"）
+          // 后执行"标签+数字"，使用严格正则，防止 "关注数12粉丝数62" 被错误拆分
           for (var a = 0; a < textBlobs.length; a++) {
             var blob = textBlobs[a].text;
-            // 粉丝 / 关注 / 获赞(与收藏)? 后跟数字
-            var combinedM = blob.match(/(粉丝数?|关注数?|获赞(?:与收藏)?|点赞数?|收藏数?)\\s*[:：]?\\s*(\\d[\\d,.，万wWkK千\\s]*)/);
-            if (combinedM) {
-              trySetCount(combinedM[1], combinedM[2]);
+            // A1: 严格 "数字 + 标签" 模式（必须是完整的元素文本）
+            var mDigitFirst = blob.match(/^(\d+(?:\.\d+)?\s*[万wWkK千]?)\s*(粉丝数?|关注数?|获赞(?:与收藏)?)$/);
+            if (mDigitFirst) {
+              trySetCount(mDigitFirst[2], mDigitFirst[1]);
+              continue;
             }
-            // 反向：数字 + 标签  (如 "1.2万 粉丝")
-            var combinedM2 = blob.match(/(\\d[\\d,.，万wWkK千]*)\\s*(粉丝数?|关注数?|获赞)/);
-            if (combinedM2) {
-              trySetCount(combinedM2[2], combinedM2[1]);
+            // A2: 严格 "标签 + 数字" 模式
+            var mLabelFirst = blob.match(/^(粉丝数?|关注数?|获赞(?:与收藏)?|点赞数?|收藏数?)\s*[:：]?\s*(\d+(?:\.\d+)?\s*[万wWkK千]?)$/);
+            if (mLabelFirst) {
+              trySetCount(mLabelFirst[1], mLabelFirst[2]);
             }
           }
 
           // ---------- 方法 B：标签 + 数字 分离模式 ----------
-          // 找所有标签元素，然后在相邻 ±5 个元素中找数字
+          // 精确：收集所有纯标签元素和纯数字元素，然后按最近距离配对
+          var pureLabels = [];  // {index, label}
+          var pureNumbers = {}; // index -> number
           for (var b = 0; b < textBlobs.length; b++) {
             var tText = textBlobs[b].text;
-            var isLabel = false;
-            var labelKw = '';
-            if (/^(粉丝数?|关注数?|获赞(与收藏)?)$/.test(tText)) {
-              isLabel = true;
-              labelKw = tText;
-            } else if (/^粉丝数?$|^关注数?$|^获赞与收藏$|^获赞数?$/.test(tText)) {
-              isLabel = true;
-              labelKw = tText;
+            // 纯标签元素（只包含标签关键字，不含数字）
+            var labelMatch = tText.match(/^(粉丝数?|关注数?|获赞(?:与收藏)?|获赞数?)$/);
+            if (labelMatch) {
+              pureLabels.push({ index: b, label: labelMatch[1] });
+              continue;
             }
-            if (!isLabel) continue;
-            // 已通过 A 方法设置则跳过
-            if ((/粉丝/.test(labelKw) && r.fansCount !== null) ||
-                (/关注/.test(labelKw) && r.followCount !== null) ||
-                (/获赞/.test(labelKw) && r.likeCount !== null)) continue;
+            // 纯数字元素
+            var pn = parseNumber(tText);
+            if (pn !== null && pn > 0 && pn < 1000000000) {
+              pureNumbers[b] = pn;
+            }
+          }
+          // 为每个纯标签找最近的数字元素
+          for (var bi = 0; bi < pureLabels.length; bi++) {
+            var pl = pureLabels[bi];
+            var needFans = /粉丝/.test(pl.label) && r.fansCount === null;
+            var needFollow = /关注/.test(pl.label) && r.followCount === null;
+            var needLike = /获赞|收藏/.test(pl.label) && r.likeCount === null;
+            if (!needFans && !needFollow && !needLike) continue;
 
-            // 在 ±8 个元素范围内查找数字
-            var maxRange = Math.min(8, textBlobs.length);
-            var closestNum = null;
-            var closestDist = 99;
-            for (var offset = 1; offset <= maxRange; offset++) {
-              for (var dir = -1; dir <= 1; dir += 2) {
-                var pos = b + dir * offset;
-                if (pos < 0 || pos >= textBlobs.length) continue;
-                var cand = textBlobs[pos].text;
-                var pn = parseNumber(cand);
-                if (pn !== null && offset < closestDist) {
-                  closestNum = pn;
-                  closestDist = offset;
-                  break;
-                }
-                // 也处理 "1.2万粉丝"（标签和数字连在一起）
-                var merged = blob.match(/(\\d+(?:\\.\\d+)?\\s*[万wWkK千]?)\\s*(粉丝数?|关注数?|获赞)/);
-                if (merged) {
-                  trySetCount(merged[2], merged[1]);
-                  closestNum = -1; // 标记已处理
-                  break;
-                }
+            // 在 ±8 范围内找最近的数字元素
+            var bestNum = null;
+            var bestDist = 99;
+            var numKeys = Object.keys(pureNumbers);
+            for (var nk = 0; nk < numKeys.length; nk++) {
+              var nIdx = parseInt(numKeys[nk]);
+              var dist = Math.abs(nIdx - pl.index);
+              if (dist > 0 && dist <= 8 && dist < bestDist) {
+                bestNum = pureNumbers[nIdx];
+                bestDist = dist;
               }
-              if (closestNum !== null) break;
             }
-            if (closestNum !== null && closestNum > 0) {
-              if (/粉丝/.test(labelKw)) r.fansCount = closestNum;
-              else if (/关注/.test(labelKw)) r.followCount = closestNum;
-              else if (/获赞/.test(labelKw)) r.likeCount = closestNum;
+            if (bestNum !== null) {
+              if (needFans) r.fansCount = bestNum;
+              else if (needFollow) r.followCount = bestNum;
+              else if (needLike) r.likeCount = bestNum;
             }
           }
 
-          // ---------- 方法 C：冒号分隔的键值对（全页面扫描） ----------
+          // ---------- 方法 C：全文扫描兜底（保守正则）----------
+          // 只匹配 "数字 标签" 或 "标签 数字" 的紧邻格式，避免 "关注数12粉丝数62" 被错误拆解
           var fullText = document.body ? (document.body.innerText || '') : '';
-          function scanFullText(pattern) {
+          function scanFullTextC(pattern) {
             var matches = fullText.match(pattern);
-            if (matches && matches[1]) return parseNumber(matches[1]);
+            if (matches) {
+              // 取第一个非空的捕获组（支持可选捕获）
+              for (var gi = 1; gi < matches.length; gi++) {
+                if (matches[gi]) return parseNumber(matches[gi]);
+              }
+            }
             return null;
           }
           if (r.fansCount === null) {
-            var ff = scanFullText(/粉丝[^\\d\\n]{0,5}([\\d,.，万wWkK千]+)/i);
-            if (ff !== null) r.fansCount = ff;
+            // 匹配 "12粉丝" / "粉丝 12" / "粉丝数 12" / "粉丝数:12"
+            var fd = scanFullTextC(/(\d+(?:\.\d+)?[万wWkK千]?)\s*粉丝|粉丝\s*[数:：]?\s*(\d+(?:\.\d+)?[万wWkK千]?)/i);
+            if (fd !== null) r.fansCount = fd;
           }
           if (r.followCount === null) {
-            var ffg = scanFullText(/关注[^\\d\\n]{0,5}([\\d,.，万wWkK千]+)/i);
-            if (ffg !== null) r.followCount = ffg;
+            var fl = scanFullTextC(/(\d+(?:\.\d+)?[万wWkK千]?)\s*关注|关注\s*[数:：]?\s*(\d+(?:\.\d+)?[万wWkK千]?)/i);
+            if (fl !== null) r.followCount = fl;
           }
           if (r.likeCount === null) {
-            var ll = scanFullText(/(?:获赞|点赞|收藏)[^\\d\\n]{0,5}([\\d,.，万wWkK千]+)/i);
-            if (ll !== null) r.likeCount = ll;
+            var lc = scanFullTextC(/(\d+(?:\.\d+)?[万wWkK千]?)\s*(?:获赞|点赞|收藏)|(?:获赞|点赞|收藏)[与\s]*[与收藏数:：]*\s*(\d+(?:\.\d+)?[万wWkK千]?)/i);
+            if (lc !== null) r.likeCount = lc;
           }
         } catch (e) {}
 
