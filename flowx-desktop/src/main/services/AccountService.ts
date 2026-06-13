@@ -539,8 +539,8 @@ export class AccountService {
       logger.warn(`[Account-Refresh] 加载页面失败: ${(e as Error).message}`);
     }
 
-    // 等待 SPA 渲染（给3秒让页面加载完）
-    await new Promise((r) => setTimeout(r, 3000));
+    // 等待 SPA 渲染（首次给 4 秒，然后会在 extractPageInfo 内多次尝试）
+    await new Promise((r) => setTimeout(r, 4000));
 
     // Step 2: 检测当前页面是否已登录（交给平台适配器）
     const checkResult = await platform.detectLoggedIn(win);
@@ -556,16 +556,35 @@ export class AccountService {
       let followCount: number | undefined;
       let fansCount: number | undefined;
       let likeCount: number | undefined;
-      try {
-        const extracted = await platform.extractPageInfo(win);
-        nickname = extracted.nickname;
-        avatar = extracted.avatar || '';
-        platformAccountId = extracted.platformAccountId || '';
-        followCount = extracted.followCount;
-        fansCount = extracted.fansCount;
-        likeCount = extracted.likeCount;
-      } catch (e) {
-        logger.warn(`[Account-Refresh]   → 信息提取失败: ${(e as Error).message}`);
+
+      // ✅ 改进：最多尝试 3 次提取信息，间隔 2 秒
+      //   小红书的数据看板是异步加载的，首次尝试可能 stats 还没渲染
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const extracted = await platform.extractPageInfo(win);
+          nickname = extracted.nickname;
+          avatar = extracted.avatar || '';
+          platformAccountId = extracted.platformAccountId || '';
+          followCount = extracted.followCount;
+          fansCount = extracted.fansCount;
+          likeCount = extracted.likeCount;
+
+          logger.info(`[Account-Refresh]   → 第${attempt}次提取: 粉丝=${fansCount ?? '-'}, 关注=${followCount ?? '-'}, 获赞=${likeCount ?? '-'}`);
+
+          // 有至少一个统计数据 或 已获取到昵称和头像 → 认为够用
+          const hasAnyStat = typeof fansCount === 'number' || typeof followCount === 'number' || typeof likeCount === 'number';
+          const hasBasicInfo = !!nickname && !!avatar;
+          if ((hasAnyStat || hasBasicInfo) && attempt > 1) break;
+          if (hasAnyStat && hasBasicInfo) break;
+
+          if (attempt < 3) {
+            logger.info(`[Account-Refresh]   → 数据不完整，等待 2s 后重试...`);
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+        } catch (e) {
+          logger.warn(`[Account-Refresh]   → 第${attempt}次提取异常: ${(e as Error).message}`);
+          if (attempt < 3) await new Promise((r) => setTimeout(r, 2000));
+        }
       }
 
       // 提取最新 cookies
