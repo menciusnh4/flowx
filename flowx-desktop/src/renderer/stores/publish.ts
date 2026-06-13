@@ -33,6 +33,8 @@ export const usePublishStore = defineStore('publish', {
     liveTasks: {} as Record<string, LiveTask>,
     _listenerInstalled: false,
     _listenerCleanup: null as (() => void) | null,
+    // 自动清理已完成任务的定时器
+    _autoRemoveTimers: {} as Record<string, number>,
 
     // ========== 历史任务（从主进程查询） ==========
     history: [] as PublishTask[],
@@ -44,6 +46,7 @@ export const usePublishStore = defineStore('publish', {
   }),
   getters: {
     hasLiveTasks(): boolean {
+      // liveTasks 中的任务仍在面板展示，8/15 秒后由定时器自动移除
       return Object.keys(this.liveTasks).length > 0;
     },
     liveList(): LiveTask[] {
@@ -152,6 +155,27 @@ export const usePublishStore = defineStore('publish', {
         finishedAt: raw.finishedAt ?? prev?.finishedAt,
         error: raw.error ?? prev?.error,
       };
+
+      // ✅ 关键修复：任务完成（success/failed）后，8 秒自动从 liveTasks 移除
+      //    让"任务进行中"的标题消失，避免用户困惑"为什么发布成功了还在这里"
+      if (nextStatus === 'success' || nextStatus === 'failed') {
+        // 若已有旧定时器，先清理（可能任务从 failed 重试到 success）
+        if (this._autoRemoveTimers[taskId]) {
+          window.clearTimeout(this._autoRemoveTimers[taskId]);
+        }
+        const removeDelay = nextStatus === 'success' ? 8000 : 15000; // 成功展示 8s，失败展示 15s
+        this._autoRemoveTimers[taskId] = window.setTimeout(() => {
+          this._logLine('info', `auto-remove task ${taskId} (status=${nextStatus}) from liveTasks`);
+          if (this.liveTasks[taskId]) {
+            delete this.liveTasks[taskId];
+          }
+          delete this._autoRemoveTimers[taskId];
+        }, removeDelay) as unknown as number;
+      } else if (this._autoRemoveTimers[taskId]) {
+        // 任务重新进入执行状态 → 取消之前计划的移除（例如从 failed 重试）
+        window.clearTimeout(this._autoRemoveTimers[taskId]);
+        delete this._autoRemoveTimers[taskId];
+      }
 
       // 同步刷新 history 列表中对应 task（如果已存在），让界面一致
       const idx = this.history.findIndex((t) => t.id === taskId);
