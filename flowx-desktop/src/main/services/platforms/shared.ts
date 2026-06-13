@@ -1168,6 +1168,20 @@ export async function runStandardPublish(
       }
     }
 
+    // ✅ 发布成功后自动关闭窗口（给 3 秒展示时间）
+    if (win && !win.isDestroyed()) {
+      log('info', 'auto-close', `🎯 发布成功！3 秒后自动关闭发布窗口…`);
+      try {
+        await sleep(3000);
+        if (!win.isDestroyed()) {
+          win.destroy();
+          log('info', 'auto-close', `✅ 发布窗口已关闭`);
+        }
+      } catch (closeErr) {
+        log('warn', 'auto-close', `关闭窗口异常: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`);
+      }
+    }
+
     onProgress(100, '发布流程完成');
     return finalize(
       'success',
@@ -1180,11 +1194,7 @@ export async function runStandardPublish(
     return finalize('failed', `发布失败: ${msg}`);
   } finally {
     if (tracker) { try { tracker.dispose(); } catch { /* ignore */ } }
-    if (win && !win.isDestroyed()) {
-      // 不要立刻 destroy，给平台一点时间；主调方（PublishEngine）通常会自行关闭
-      // 这里保留 open 便于用户手动确认。主调方若想关闭可自行调用。
-      try { /* leave open */ } catch { /* ignore */ }
-    }
+    // 窗口已在成功分支中关闭（或失败分支中保留让用户处理）
   }
 }
 

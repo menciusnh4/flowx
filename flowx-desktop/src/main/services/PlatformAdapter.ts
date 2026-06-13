@@ -2147,6 +2147,20 @@ const xiaohongshuAdapter: PlatformAdapter = {
         log('warn', 'submit', `点击发布按钮总异常: ${e instanceof Error ? e.message : String(e)}`);
       }
 
+      // ✅ 自动关闭发布窗口（发布成功后 3 秒关闭；失败则保留让用户手动处理）
+      if (publishSuccessDetected && win && !win.isDestroyed()) {
+        log('info', 'auto-close', `🎯 发布成功！3 秒后自动关闭发布窗口…`);
+        try {
+          await sleep(3000);
+          if (!win.isDestroyed()) {
+            win.destroy();
+            log('info', 'auto-close', `✅ 发布窗口已关闭`);
+          }
+        } catch (closeErr) {
+          log('warn', 'auto-close', `关闭窗口异常: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`);
+        }
+      }
+
       onProgress(100, publishSuccessDetected ? '发布成功！' : '发布流程完成');
 
       // 最终状态报告
