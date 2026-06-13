@@ -1,5 +1,6 @@
+import type { BrowserWindow } from 'electron';
 import type { PlatformAdapter, ExtractedAccountInfo, LoginCheckResult, ProgressCallback } from './types';
-import { sleep, makePublishLogger, evalJS, makePublishWindow, uploadViaCDP, waitForUploadComplete, buildPageStructureProbe, buildFillTitle, buildFillContent, buildPublishButtonClicker } from './shared';
+import { runStandardPublish } from './shared';
 import { registerPlatform } from './registry';
 import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities } from '../../../types';
 
@@ -222,75 +223,14 @@ const adapter: PlatformAdapter = {
   },
 
   async publish(accountId: string, request: PublishRequest, onProgress: ProgressCallback): Promise<PublishItemProgress> {
-    const startedAt = Date.now();
-    const log = makePublishLogger({ accountId, platform: 'kuaishou' });
-    log('info', 'init', `开始发布到快手（演示实现）`, { title: request.title, mediaFiles: request.mediaFiles.length });
-
-    let win: any = null;
-    try {
-      onProgress(5, '打开发布窗口…');
-      win = makePublishWindow(accountId, '快手发布 - FlowX');
-      onProgress(10, '加载发布页面…');
-      await win.loadURL(meta.publishUrl, {
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      });
-      await sleep(4000);
-
-      try {
-        await evalJS(win, buildPageStructureProbe(), 'page-probe', log);
-      } catch { /* ignore */ }
-
-      onProgress(15, '检查登录状态…');
-      const auth = await this.detectLoggedIn(win);
-      if (!auth.loggedIn) {
-        if (!win.isDestroyed()) win.show();
-        return { accountId, platform: 'kuaishou', status: 'failed', progress: 100, message: '登录态失效，请在窗口中重新登录后重试', startedAt, finishedAt: Date.now() };
-      }
-      if (!win.isDestroyed()) { win.show(); win.focus(); }
-
-      if (request.mediaFiles.length > 0) {
-        onProgress(30, '上传素材…');
-        await uploadViaCDP(win, request.mediaFiles, log);
-      }
-      const uploadResult = await waitForUploadComplete(win, log, onProgress, 300000);
-
-      onProgress(75, '填写内容…');
-      if (request.title) {
-        try { await evalJS(win, buildFillTitle(request.title), 'fill-title', log); } catch (e) { log('warn', 'fill', `标题异常: ${(e as Error).message}`); }
-      }
-      const combined = (request.content || '') + (request.tags?.length ? '\n' + request.tags.map((t) => `#${t}`).join(' ') : '');
-      if (combined.trim().length > 0) {
-        try { await evalJS(win, buildFillContent(combined), 'fill-content', log); } catch (e) { log('warn', 'fill', `正文异常: ${(e as Error).message}`); }
-      }
-
-      await sleep(1500);
-      onProgress(90, '点击发布…');
-      const keywords = ['立即发布', '发布', '确认发布', '发布作品'];
-      for (let i = 0; i < keywords.length; i++) {
-        try {
-          const res: any = await evalJS(win, buildPublishButtonClicker(keywords[i]), `click-${keywords[i]}`, log);
-          if (res && res.clicked) { log('info', 'submit', `点击成功: ${keywords[i]}`); break; }
-        } catch { /* ignore */ }
-      }
-      await sleep(2500);
-
-      onProgress(100, '发布流程完成');
-      return {
-        accountId,
-        platform: 'kuaishou',
-        status: 'success',
-        progress: 100,
-        message: uploadResult.ready ? '快手发布流程已完成（演示实现）' : '上传未完成，请在窗口中手动确认',
-        resultUrl: meta.homeUrl,
-        startedAt,
-        finishedAt: Date.now(),
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log('error', 'fatal', `发布流程异常: ${msg}`);
-      if (win && !win.isDestroyed()) { try { win.show(); } catch { /* ignore */ } }
-      return { accountId, platform: 'kuaishou', status: 'failed', progress: 100, message: `发布失败: ${msg}`, startedAt, finishedAt: Date.now() };
-    }
+    return runStandardPublish(accountId, request, onProgress, {
+      platform: 'kuaishou',
+      meta: { publishUrl: meta.publishUrl, homeUrl: meta.homeUrl },
+      detectLoggedIn: (win: BrowserWindow) => this.detectLoggedIn(win),
+      publishKeywords: ['立即发布', '发布', '确认发布', '发布作品'],
+      enableConfirmStep: false,
+      fillWaitMs: 1500,
+    });
   },
 };
 

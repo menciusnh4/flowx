@@ -1,22 +1,11 @@
+import type { BrowserWindow } from 'electron';
 import type {
   PlatformAdapter,
   ExtractedAccountInfo,
   LoginCheckResult,
   ProgressCallback,
 } from './types';
-import {
-  sleep,
-  makePublishLogger,
-  evalJS,
-  makePublishWindow,
-  uploadViaCDP,
-  waitForUploadComplete,
-  buildPageStructureProbe,
-  buildFillTitle,
-  buildFillContent,
-  buildPublishButtonClicker,
-  buildPublishVerifier,
-} from './shared';
+import { runStandardPublish } from './shared';
 import { registerPlatform } from './registry';
 import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities } from '../../../types';
 
@@ -183,137 +172,14 @@ const adapter: PlatformAdapter = {
     request: PublishRequest,
     onProgress: ProgressCallback,
   ): Promise<PublishItemProgress> {
-    const startedAt = Date.now();
-    const log = makePublishLogger({ accountId, platform: 'xiaohongshu' });
-    log('info', 'init', `开始发布到小红书，内容类型=${request.contentType}`, { title: request.title, mediaFiles: request.mediaFiles, tagCount: request.tags?.length ?? 0 });
-
-    let win = null as any;
-    try {
-      onProgress(5, '打开发布窗口…');
-      win = makePublishWindow(accountId, '小红书发布 - FlowX');
-      log('info', 'navigate', `导航到: ${meta.publishUrl}`);
-      onProgress(10, '加载发布页面…');
-
-      await win.loadURL(meta.publishUrl, {
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      });
-      await sleep(4000);
-
-      // 初始诊断
-      try {
-        const probe = (await evalJS(win, buildPageStructureProbe(), 'page-probe', log)) as any;
-        log('info', 'probe', `页面结构`, { inputsCount: probe.inputs?.length, buttonsCount: probe.buttons?.length, hasFileInput: probe.hasFileInput });
-      } catch { /* ignore */ }
-
-      // 登录检测
-      onProgress(15, '检查登录状态…');
-      const auth = await this.detectLoggedIn(win);
-      log('info', 'auth', `登录状态`, { loggedIn: auth.loggedIn, matchedKeywords: auth.matchedKeywords?.join(',') });
-      if (!auth.loggedIn) {
-        if (!win.isDestroyed()) win.show();
-        return { accountId, platform: 'xiaohongshu', status: 'failed', progress: 100, message: '登录态失效，请在窗口中重新登录后重试', startedAt, finishedAt: Date.now() };
-      }
-
-      if (!win.isDestroyed()) { win.show(); win.focus(); }
-
-      // 上传素材
-      if (request.mediaFiles.length > 0) {
-        onProgress(30, '上传素材…');
-        await uploadViaCDP(win, request.mediaFiles, log);
-      } else {
-        onProgress(50, '无素材，跳过上传');
-      }
-
-      // 等待上传完成
-      const uploadResult = await waitForUploadComplete(win, log, onProgress, 300000);
-      if (!uploadResult.ready) {
-        onProgress(60, '上传未完成，继续尝试填写…');
-      } else {
-        onProgress(65, '上传完成，开始填写内容…');
-      }
-
-      // 填写标题
-      if (request.title) {
-        try {
-          const res: any = await evalJS(win, buildFillTitle(request.title), 'fill-title', log);
-          log('info', 'fill', `标题填写: ${JSON.stringify(res)}`);
-          if (!res.verified) {
-            await sleep(1000);
-            await evalJS(win, buildFillTitle(request.title), 'fill-title-retry', log).catch(() => {});
-          }
-        } catch (e) { log('warn', 'fill', `标题填写异常: ${(e as Error).message}`); }
-      }
-
-      // 填写正文 + 话题
-      const combinedContent = (request.content || '') +
-        (request.tags && request.tags.length ? '\n' + request.tags.map((t) => `#${t}`).join(' ') : '');
-      if (combinedContent.trim().length > 0) {
-        try {
-          const res: any = await evalJS(win, buildFillContent(combinedContent), 'fill-content', log);
-          log('info', 'fill', `正文填写: ${JSON.stringify(res)}`);
-          if (!res.verified) {
-            await sleep(1000);
-            await evalJS(win, buildFillContent(combinedContent), 'fill-content-retry', log).catch(() => {});
-          }
-        } catch (e) { log('warn', 'fill', `正文填写异常: ${(e as Error).message}`); }
-      }
-
-      await sleep(1500);
-
-      // 点击发布按钮（CDP + 多层策略）
-      onProgress(90, '点击发布…');
-      let successFlag = false;
-      try {
-        // 先尝试用 buildPublishButtonClicker 点击"发布"按钮
-        const clickRes1: any = await evalJS(win, buildPublishButtonClicker('发布'), 'click-publish', log);
-        log('info', 'submit', `点击发布结果: ${JSON.stringify(clickRes1).slice(0, 200)}`);
-        await sleep(3000);
-
-        // 验证
-        const v1: any = await evalJS(win, buildPublishVerifier(), 'verify-1', log);
-        log('info', 'verify', `验证1: ${v1.verdict}`);
-
-        if (v1.verdict === 'success' || v1.verdict === 'maybe_success_url_changed') {
-          successFlag = true;
-        } else if (v1.verdict === 'need_confirm') {
-          // 有确认弹窗，再点一次确认
-          await evalJS(win, buildPublishButtonClicker('确认发布'), 'click-confirm', log).catch(() => {});
-          await sleep(2500);
-          const v2: any = await evalJS(win, buildPublishVerifier(), 'verify-2', log).catch(() => ({ verdict: 'unknown' }));
-          if (v2.verdict === 'success' || v2.verdict === 'maybe_success_url_changed') successFlag = true;
-        } else if (v1.verdict === 'saved_as_draft') {
-          // 内容保存为草稿，尝试其他关键词
-          const tryKeys = ['发布笔记', '立即发布', '发布视频'];
-          for (const kw of tryKeys) {
-            const r: any = await evalJS(win, buildPublishButtonClicker(kw), `click-${kw}`, log).catch(() => ({}));
-            if (r && r.clicked) {
-              await sleep(2500);
-              const v3: any = await evalJS(win, buildPublishVerifier(), `verify-${kw}`, log).catch(() => ({ verdict: 'unknown' }));
-              if (v3.verdict === 'success' || v3.verdict === 'maybe_success_url_changed') { successFlag = true; break; }
-            }
-          }
-        }
-      } catch (e) {
-        log('warn', 'submit', `发布总异常: ${(e as Error).message}`);
-      }
-
-      onProgress(100, successFlag ? '发布成功！' : '发布流程完成');
-      return {
-        accountId,
-        platform: 'xiaohongshu',
-        status: successFlag ? 'success' : 'success',
-        progress: 100,
-        message: successFlag ? '✅ 发布成功！' : (uploadResult.ready ? '内容已填写并尝试发布。如未成功发布，请在打开的窗口中手动点击发布' : '上传自动完成失败，请在窗口中检查最终状态'),
-        resultUrl: meta.homeUrl,
-        startedAt,
-        finishedAt: Date.now(),
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log('error', 'fatal', `发布流程异常: ${msg}`);
-      if (win && !win.isDestroyed()) { try { win.show(); } catch { /* ignore */ } }
-      return { accountId, platform: 'xiaohongshu', status: 'failed', progress: 100, message: `发布失败: ${msg}`, startedAt, finishedAt: Date.now() };
-    }
+    return runStandardPublish(accountId, request, onProgress, {
+      platform: 'xiaohongshu',
+      meta: { publishUrl: meta.publishUrl, homeUrl: meta.homeUrl },
+      detectLoggedIn: (win: BrowserWindow) => this.detectLoggedIn(win),
+      publishKeywords: ['发布', '立即发布', '发布笔记', '发布视频'],
+      enablePostClickVerify: true,
+      fillWaitMs: 1500,
+    });
   },
 };
 

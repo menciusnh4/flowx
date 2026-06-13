@@ -21,6 +21,16 @@ export {
   __internalRegistry,
 } from './registry';
 
+// 共享工具函数（polyfill 注入 / 窗口创建 / 上传 等）
+export {
+  applyDouyinAntiCrash,
+  makePublishWindow,
+  makeFailedResult,
+  uploadViaCDP,
+  sleep,
+  makePublishLogger,
+} from './shared';
+
 // Side effect imports —— 触发各平台的 registerPlatform() 调用
 import './xiaohongshu';
 import './douyin';

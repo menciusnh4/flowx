@@ -13,6 +13,30 @@ import { PublishEngine } from './services/PublishEngine';
 // 安全基线：禁用不安全的 API
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true';
 
+// ✅ 关键修复（Electron 31 + GPU 隔离方案，详见抖音发布解救方案报告）
+//    抖音 creator 编辑页上传视频后会触发 0xC0000005 (STATUS_ACCESS_VIOLATION)
+//    渲染进程崩溃（exitCode: -1073741819），根源：
+//      1) Chromium 旧版本 GLES3 上下文虚拟化共享缺陷
+//      2) 无沙盒模式下第三方网页 JS 越权访问本地大文件
+//      3) GPU 硬件加速兼容性死锁
+//    本项目采用：Electron 31 大版本升级 + GPU 进程隔离 双保险
+app.disableHardwareAcceleration();
+// 1. 关闭 GPU 沙盒，防止 Windows 系统沙盒误杀 Chromium 图形上下文
+app.commandLine.appendSwitch('disable-gpu-sandbox');
+// 2. 规避图形合成器渲染冲突（核心开关之一）
+app.commandLine.appendSwitch('disable-gpu-compositing');
+// 3. 禁用硬件视频解码/编码（视频上传时最容易触发驱动崩溃的路径）
+app.commandLine.appendSwitch('disable-accelerated-video-decode');
+app.commandLine.appendSwitch('disable-accelerated-video-encode');
+// 4. 禁用 WebGL（抖音 AI 封面提取用 WebGL，容易崩溃）
+app.commandLine.appendSwitch('disable-webgl');
+// 5. 保留软件 GL 回退（当 GPU 被禁用时使用）
+app.commandLine.appendSwitch('use-gl', 'swiftshader');
+// 6. 给渲染进程更多内存空间，防止大页面 OOM
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=8192');
+// 7. 允许混合内容，防止抖音接口被浏览器安全策略拦截
+app.commandLine.appendSwitch('allow-insecure-localhost');
+
 let isReady = false;
 
 async function bootstrap() {

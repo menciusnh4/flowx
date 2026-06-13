@@ -464,16 +464,55 @@ class PublishEngineClass {
       };
 
       const totalWindows = windows.length;
-      const aliveWindows = windows.filter((w: { isDestroyed: () => boolean }) => !w.isDestroyed());
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const aliveWindows = windows.filter((w: any) => w && typeof w.isDestroyed === 'function' && !w.isDestroyed());
       const sentTo: number[] = [];
-      for (const w of aliveWindows) {
+      let skippedPublishWindows = 0;
+      for (const w of windows) {
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (w as any).webContents.send('publish:statusChanged', payload);
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          sentTo.push((w as any).id ?? -1);
-        } catch (sendErr) {
-          logger.warn('[Publish] notifyStatus: 单个窗口发送失败', sendErr);
+          const anyW = w as any;
+          // 多层防御：窗口已销毁 / webContents 不存在 / webContents 自身已销毁
+          if (!anyW || typeof anyW.isDestroyed !== 'function' || anyW.isDestroyed()) continue;
+          const wc = anyW.webContents;
+          if (!wc || typeof wc.isDestroyed === 'function' && wc.isDestroyed()) continue;
+          if (typeof wc.send !== 'function') continue;
+
+          // ✅ 关键修复：跳过发布窗口！对 creator.douyin.com / xiaohongshu.com 这类外部页面
+          // 发送 IPC ('publish:statusChanged') 会导致它的 render frame 被销毁，
+          // 从而让后续 executeJavaScript 调用全部失败 ("Render frame was disposed")
+          // — 两种识别方式，任一命中就跳过：
+          //   (a) 窗口自身带 _flowxPublishWindow=true 标记
+          //   (b) webContents 已加载外部 URL（非 file:// 协议）
+          let isPublishWin = false;
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            if ((anyW as any)._flowxPublishWindow === true) {
+              isPublishWin = true;
+            } else {
+              const url = typeof wc.getURL === 'function' ? wc.getURL() : '';
+              if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+                // heuristic: 任何 http(s) URL 的窗口都不是我们需要发 IPC 的主窗口
+                // — 主窗口用的是 file:// / vite dev server
+                if (url.includes('douyin.com') || url.includes('xiaohongshu.com') || url.includes('kuaishou.com')) {
+                  isPublishWin = true;
+                }
+              }
+            }
+          } catch { /* ignore */ }
+          if (isPublishWin) {
+            skippedPublishWindows++;
+            continue;
+          }
+
+          try {
+            wc.send('publish:statusChanged', payload);
+            sentTo.push(anyW.id ?? -1);
+          } catch (sendErr) {
+            logger.debug('[Publish] notifyStatus: 单个窗口发送跳过', sendErr instanceof Error ? sendErr.message : String(sendErr));
+          }
+        } catch (outerErr) {
+          logger.warn('[Publish] notifyStatus: 单个窗口预处理失败', outerErr);
         }
       }
 
@@ -487,13 +526,14 @@ class PublishEngineClass {
           level: 'info',
           taskId: task.id,
           stage: 'notify',
-          message: `已推送状态（第${c}次）：status=${task.status} overall=${overall}% sentToWindows=${sentTo.length}`,
+          message: `已推送状态（第${c}次）：status=${task.status} overall=${overall}% sentToWindows=${sentTo.length} skippedPublishWindows=${skippedPublishWindows}`,
           data: {
             status: task.status,
             overallProgress: overall,
             notifyCount: c,
             totalWindows,
             aliveWindows: aliveWindows.length,
+            skippedPublishWindows,
             itemSummary: task.items.map((i) => `${i.accountId}:${i.status}/${i.progress}`),
           },
         });
