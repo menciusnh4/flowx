@@ -2,6 +2,8 @@ import { BrowserWindow } from 'electron';
 import { PLATFORMS } from './PlatformRegistry';
 import { writePublishLog } from '../utils/logger';
 import { applyDouyinAntiCrash } from './platforms/shared';
+// 新平台注册表（通过 side-effect import 触发注册）
+import { getPlatform } from './platforms/index';
 import type {
   PublishItemProgress,
   PublishRequest,
@@ -2776,6 +2778,12 @@ const douyinAdapter: PlatformAdapter = {
 };
 
 export function getAdapter(platform: PlatformType): PlatformAdapter {
+  // 优先从新平台注册表中查找（支持 xiaohongshu / douyin / kuaishou 及未来新增的平台）
+  const adapterFromRegistry = getPlatform(platform);
+  if (adapterFromRegistry && typeof adapterFromRegistry.publish === 'function') {
+    return adapterFromRegistry;
+  }
+  // 兜底：旧 switch 逻辑（保持向后兼容）
   switch (platform) {
     case 'xiaohongshu':
       return xiaohongshuAdapter;

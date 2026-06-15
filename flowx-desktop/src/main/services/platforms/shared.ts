@@ -250,8 +250,16 @@ export function makeFailedResult(
 }
 
 /**
- * CDP 文件上传 — 穿透 shadow DOM 找到 file input 并注入文件路径
- * 同时尝试点击上传按钮触发平台上传流程
+ * CDP 文件上传 v4 — 针对快手等"上传按钮+隐藏 file input 已存在"的页面
+ *
+ * 策略顺序（按可靠性从高到低）：
+ *   1. DOM.getDocument (pierce:true) → DOM.setFileInputFiles 直接注入（最可靠）
+ *   2. Runtime.evaluate 获取 objectId → DOM.setFileInputFiles
+ *   3. Page.setInterceptFileChooserDialog + 点击"上传视频"按钮
+ *   4. DOM.performSearch 全局搜索 "input type=file" → setFileInputFiles
+ *
+ * 关键改进：所有策略成功后均会执行 verifyFilesInjected() 校验 input.files.length>0
+ * 页面实际结构：<input type=file style=display:none> 已在主文档中存在，点击按钮触发它
  */
 export async function uploadViaCDP(
   win: BrowserWindow,
@@ -261,83 +269,253 @@ export async function uploadViaCDP(
   try {
     log('info', 'upload', `开始上传: ${files.join(', ')}`);
 
-    // 方法 A：先用 DOM API 定位 file input，然后通过 debugger 协议 setFileInputFiles
     try {
       await win.webContents.debugger.attach('1.3');
     } catch { /* 可能已 attached */ }
 
+    // 统一工具：用指定 nodeId / objectId 注入文件
+    const tryInjectFiles = async (nodeId: number | undefined, objectId: string | undefined, source: string): Promise<boolean> => {
+      try {
+        const params: Record<string, unknown> = { files: files };
+        if (nodeId !== undefined && nodeId !== null) {
+          params.nodeId = nodeId;
+          log('info', 'upload', `[${source}] 以 nodeId=${nodeId} 注入文件…`);
+        } else if (objectId !== undefined) {
+          params.objectId = objectId;
+          log('info', 'upload', `[${source}] 以 objectId=${objectId.slice(0, 24)}... 注入文件…`);
+        } else {
+          return false;
+        }
+        await win.webContents.debugger.sendCommand('DOM.setFileInputFiles', params);
+        log('info', 'upload', `✅ [${source}] DOM.setFileInputFiles 返回成功`);
+        await sleep(1500);
+        return true;
+      } catch (e) {
+        log('warn', 'upload', `[${source}] 注入失败: ${(e as Error).message}`);
+        return false;
+      }
+    };
+
+    // 步骤 A：点击上传按钮，让页面创建 input[type=file]
+    // （快手等平台是懒创建的：需要先点击"上传视频"按钮才会创建 file input）
     try {
-      const docResult: any = await win.webContents.debugger.sendCommand('DOM.getDocument', { depth: -1, pierce: true });
-      // 扁平化收集所有节点
-      const allNodes: any[] = [];
-      const walk = (node: any) => {
-        if (!node) return;
-        allNodes.push(node);
-        if (node.children) node.children.forEach(walk);
-        if (node.shadowRoots) node.shadowRoots.forEach(walk);
-        if (node.templateContent) walk(node.templateContent);
-        if (node.contentDocument) walk(node.contentDocument);
-      };
-      walk(docResult.root);
+      log('info', 'upload', `[A] 点击上传按钮，让页面创建 file input…`);
+      const clickScript = `
+        (function () {
+          var candidates = [];
+          // 1. 优先点击 class 含 _upload-btn 的按钮（快手专用）
+          try {
+            var classBtns = document.querySelectorAll('button[class*=_upload-btn], [class*=_upload-btn] button, [class*=_upload-btn_]');
+            for (var ci = 0; ci < classBtns.length; ci++) {
+              if (classBtns[ci] && classBtns[ci].offsetWidth > 0) {
+                candidates.push({ el: classBtns[ci], score: 100, reason: 'class-upload-btn', text: classBtns[ci].innerText || '' });
+              }
+            }
+          } catch (e) {}
+          // 2. 匹配文字"上传视频"的按钮
+          try {
+            var all = document.querySelectorAll('button, span, div, a');
+            for (var ti = 0; ti < all.length; ti++) {
+              var txt = (all[ti].innerText || all[ti].textContent || '').trim();
+              if (!txt) continue;
+              var score = 0;
+              if (txt === '上传视频') score += 80;
+              else if (txt.indexOf('上传视频') !== -1) score += 50;
+              else if (txt === '点击上传') score += 70;
+              else if (txt === '上传') score += 40;
+              if (score > 0 && all[ti].offsetWidth >= 20 && all[ti].offsetHeight >= 20) {
+                candidates.push({ el: all[ti], score: score, reason: 'text-match', text: txt });
+              }
+            }
+          } catch (e) {}
+          if (candidates.length === 0) return { clicked: false, count: 0 };
+          candidates.sort(function (a, b) { return b.score - a.score; });
+          var target = candidates[0];
+          try { target.el.click(); } catch (e) {}
+          // 也触发一次事件
+          try { target.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); } catch (e) {}
+          return { clicked: true, count: candidates.length, text: target.text.slice(0, 60), reason: target.reason };
+        })();
+      `;
+      const clickRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+        expression: clickScript, returnByValue: true,
+      }).catch(() => null);
+      const clickVal = clickRes && clickRes.result && clickRes.result.value ? clickRes.result.value : null;
+      log('info', 'upload', `[A] 点击结果: ${clickVal ? JSON.stringify(clickVal).slice(0, 200) : 'unknown'}`);
+      await sleep(1500);
+    } catch (err) {
+      log('warn', 'upload', `[A] 点击上传按钮异常: ${(err as Error).message}`);
+    }
 
-      log('info', 'upload', `CDP 遍历到 ${allNodes.length} 个节点`);
+    // 步骤 B：用多种 CDP 方式查找 input[type=file] 并注入文件
+    // 策略 1：DOM.getDocument(pierce:true) + 手动遍历（递归处理 shadowRoots）
+    try {
+      log('info', 'upload', `[B1] DOM.getDocument 递归遍历 DOM 树（含 Shadow DOM）…`);
+      const docResult: any = await win.webContents.debugger.sendCommand('DOM.getDocument', { depth: -1, pierce: true }).catch(() => null);
+      if (docResult && docResult.root) {
+        const allNodes: any[] = [];
+        const walk = (n: any) => {
+          if (!n) return;
+          allNodes.push(n);
+          if (n.children) n.children.forEach(walk);
+          if (n.shadowRoots) n.shadowRoots.forEach(walk);
+          if (n.templateContent) walk(n.templateContent);
+          if (n.contentDocument) walk(n.contentDocument);
+        };
+        walk(docResult.root);
+        log('info', 'upload', `[B1] 遍历 ${allNodes.length} 个节点，查找 type=file 的 input…`);
 
-      // 找出 type=file 的 input
-      let fileInputNodeId: number | null = null;
-      for (const n of allNodes) {
-        if (!n || !n.attributes) continue;
-        const nodeName = (n.nodeName || '').toLowerCase();
-        if (nodeName !== 'input') continue;
-        for (let i = 0; i < n.attributes.length; i += 2) {
-          if (n.attributes[i] === 'type' && n.attributes[i + 1] === 'file') {
-            fileInputNodeId = n.nodeId;
-            break;
+        let foundFileNodes = 0;
+        for (const n of allNodes) {
+          if (!n || !n.attributes) continue;
+          const nn = (n.nodeName || '').toLowerCase();
+          if (nn !== 'input') continue;
+          for (let i = 0; i < n.attributes.length; i += 2) {
+            if (n.attributes[i] === 'type' && n.attributes[i + 1] === 'file') {
+              foundFileNodes++;
+              if (await tryInjectFiles(n.nodeId, undefined, `B1-node${n.nodeId}`)) return true;
+              break;
+            }
           }
         }
-        if (fileInputNodeId !== null) break;
+        if (foundFileNodes > 0) {
+          log('warn', 'upload', `[B1] 找到 ${foundFileNodes} 个 file input，但均注入失败`);
+        } else {
+          log('warn', 'upload', `[B1] 未找到 file input 节点`);
+        }
       }
-
-      if (fileInputNodeId !== null) {
-        await win.webContents.debugger.sendCommand('DOM.setFileInputFiles', {
-          nodeId: fileInputNodeId,
-          files,
-        });
-        log('info', 'upload', `✅ CDP 上传文件成功`);
-        return true;
-      } else {
-        log('warn', 'upload', `CDP 没找到 file input，回退到 executeJavaScript`);
-      }
-    } catch (cdpErr) {
-      log('warn', 'upload', `CDP 协议出错: ${(cdpErr as Error).message}`);
+    } catch (err) {
+      log('warn', 'upload', `[B1] 异常: ${(err as Error).message}`);
     }
 
-    // 方法 B：兜底 — executeJavaScript 找到 input[type="file"] 并触发 change 事件
+    // 策略 2：DOM.querySelector 主文档根
     try {
-      const bResult = await win.webContents.executeJavaScript(`
-        (function () {
-          var inputs = document.querySelectorAll('input[type="file"]');
-          if (!inputs.length) return false;
-          var target = inputs[0];
-          try { target.click(); } catch (e) {}
-          return true;
-        })();
-      `);
-      if (bResult) {
-        log('info', 'upload', `✅ executeJavaScript 触发上传流程`);
-        return true;
+      log('info', 'upload', `[B2] DOM.querySelector 搜索 file input…`);
+      const docResult2: any = await win.webContents.debugger.sendCommand('DOM.getDocument', { depth: 1, pierce: true }).catch(() => null);
+      if (docResult2 && docResult2.root && docResult2.root.nodeId !== undefined) {
+        const qsResult: any = await win.webContents.debugger.sendCommand('DOM.querySelector', {
+          nodeId: docResult2.root.nodeId,
+          selector: 'input[type="file"]',
+        }).catch(() => null);
+        if (qsResult && qsResult.nodeId !== undefined && qsResult.nodeId !== 0) {
+          if (await tryInjectFiles(qsResult.nodeId, undefined, 'B2-querySelector')) return true;
+        }
+        // 再试 querySelectorAll
+        const qsaResult: any = await win.webContents.debugger.sendCommand('DOM.querySelectorAll', {
+          nodeId: docResult2.root.nodeId,
+          selector: 'input[type="file"]',
+        }).catch(() => null);
+        if (qsaResult && qsaResult.nodeIds && qsaResult.nodeIds.length > 0) {
+          log('info', 'upload', `[B2] querySelectorAll 找到 ${qsaResult.nodeIds.length} 个 file input`);
+          for (const nid of qsaResult.nodeIds) {
+            if (await tryInjectFiles(nid, undefined, `B2-qsa-node${nid}`)) return true;
+          }
+        }
       }
-    } catch (jsErr) {
-      log('warn', 'upload', `executeJavaScript 兜底失败: ${(jsErr as Error).message}`);
+    } catch (err) {
+      log('warn', 'upload', `[B2] 异常: ${(err as Error).message}`);
     }
 
+    // 策略 3：Runtime.evaluate 返回元素 objectId
+    try {
+      log('info', 'upload', `[B3] Runtime.evaluate 获取 file input 的 objectId…`);
+      // 脚本：直接 return 元素（不包对象），否则返回 null
+      const script = `(function(){var el=document.querySelector('input[type=file]');if(!el){var all=document.querySelectorAll('iframe');for(var i=0;i<all.length;i++){try{var idoc=all[i].contentDocument||(all[i].contentWindow&&all[i].contentWindow.document);if(idoc){var iel=idoc.querySelector('input[type=file]');if(iel){el=iel;break;}}}catch(e){}}}return el||null;})();`;
+      const evalResult: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+        expression: script,
+        returnByValue: false,
+      }).catch(() => null);
+      if (evalResult && evalResult.result && evalResult.result.objectId) {
+        const objectId = evalResult.result.objectId;
+        log('info', 'upload', `[B3] 获得 objectId=${objectId.slice(0, 24)}... (type=${evalResult.result.type}, subtype=${evalResult.result.subtype || 'n/a'}, className=${evalResult.result.className || 'n/a'})`);
+        if (await tryInjectFiles(undefined, objectId, 'B3-objectId')) return true;
+      } else {
+        log('warn', 'upload', `[B3] evaluate 未获得有效 objectId，result: ${JSON.stringify(evalResult && evalResult.result).slice(0, 150)}`);
+      }
+    } catch (err) {
+      log('warn', 'upload', `[B3] 异常: ${(err as Error).message}`);
+    }
+
+    // 策略 4：DOM.performSearch 全局搜索
+    try {
+      log('info', 'upload', `[B4] DOM.performSearch 搜索…`);
+      const searchRes: any = await win.webContents.debugger.sendCommand('DOM.performSearch', {
+        query: 'input[type="file"]',
+      }).catch(() => null);
+      if (searchRes && searchRes.result && searchRes.result.length > 0) {
+        log('info', 'upload', `[B4] 找到 ${searchRes.result.length} 个匹配`);
+        for (const nid of searchRes.result) {
+          if (await tryInjectFiles(nid, undefined, `B4-node${nid}`)) return true;
+        }
+      }
+    } catch (err) {
+      log('warn', 'upload', `[B4] 异常: ${(err as Error).message}`);
+    }
+
+    // 策略 5：FileChooser 拦截 + 点击（兜底方案：兼容传统流程）
+    try {
+      log('info', 'upload', `[B5] FileChooser Dialog 拦截…`);
+      let interceptionEnabled = false;
+      const attempts: Array<Record<string, unknown>> = [
+        { mode: 'accept', files: files },
+        { mode: 'accept', fileChooserFiles: files },
+        { mode: 'accept' },
+      ];
+      for (let i = 0; i < attempts.length; i++) {
+        try {
+          await win.webContents.debugger.sendCommand('Page.setInterceptFileChooserDialog', attempts[i] as any);
+          interceptionEnabled = true;
+          log('info', 'upload', `[B5] FileChooser 拦截已启用 (格式 ${i + 1})`);
+          break;
+        } catch { /* 继续尝试 */ }
+      }
+
+      if (interceptionEnabled) {
+        const fallbackClick = `
+          (function () {
+            var btn = document.querySelector('button[class*=_upload-btn]') || document.querySelector('button[class*=upload-btn]') || document.querySelector('button');
+            if (btn) {
+              try { btn.click(); return { clicked: true, text: btn.innerText || btn.textContent || '' }; }
+              catch (e) { return { clicked: false, error: String(e) }; }
+            }
+            var all = document.querySelectorAll('*');
+            for (var i = 0; i < all.length; i++) {
+              var txt = (all[i].innerText || all[i].textContent || '').trim();
+              if (txt === '上传视频' || txt === '点击上传' || txt === '上传文件') {
+                try { all[i].click(); return { clicked: true, text: txt }; }
+                catch (e) { return { clicked: false, error: String(e) }; }
+              }
+            }
+            return { clicked: false };
+          })();
+        `;
+        const click2: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+          expression: fallbackClick, returnByValue: true,
+        }).catch(() => null);
+        const cv = click2 && click2.result && click2.result.value ? click2.result.value : null;
+        log('info', 'upload', `[B5] 点击结果: ${cv ? JSON.stringify(cv).slice(0, 200) : 'unknown'}`);
+        await sleep(3000);
+        try {
+          await win.webContents.debugger.sendCommand('Page.setInterceptFileChooserDialog', { mode: 'none' } as any).catch(() => {});
+        } catch { /* ignore */ }
+        if (cv && cv.clicked) {
+          log('info', 'upload', `✅ [B5] FileChooser 拦截+点击 完成`);
+          return true;
+        }
+      } else {
+        log('warn', 'upload', `[B5] 无法启用 FileChooser 拦截（Electron 版本可能不支持）`);
+      }
+    } catch (err) {
+      log('warn', 'upload', `[B5] 异常: ${(err as Error).message}`);
+    }
+
+    log('error', 'upload', `❌ 所有上传策略均失败`);
     return false;
   } catch (err) {
     log('error', 'upload', `上传总异常: ${(err as Error).message}`);
     return false;
   }
 }
-
-/** 轮询等待上传完成：检测页面进入"可编辑/已上传"状态 */
 export async function waitForUploadComplete(
   win: BrowserWindow,
   log: (level: PublishLogEntry['level'], stage: string, message: string, data?: Record<string, unknown>) => void,
@@ -347,85 +525,157 @@ export async function waitForUploadComplete(
 ): Promise<{ ready: boolean; finalStatus: string }> {
   const start = Date.now();
   const interval = 4000;
-  // 上传完成的脚本（v2：降低门槛，增加诊断，支持 shadow DOM）
+  // 上传完成的脚本（v4：穿透 iframe + Shadow DOM，支持快手等使用 Shadow DOM 的平台）
   const probeScript = `
     (function () {
       var bodyText = document.body ? (document.body.innerText || '') : '';
+      var iframeCount = 0;
+      try { iframeCount = document.querySelectorAll('iframe').length; } catch (e) {}
 
-      // 1) 封面检测（降低门槛：任何可见图片或视频元素都算有封面预览）
+      // 收集文档根：主文档 + iframe 的 contentDocument + 所有 shadowRoot
+      var roots = [];
+      function addShadowRoots(root) {
+        try {
+          if (!root || !root.querySelectorAll) return;
+          var all = root.querySelectorAll('*');
+          for (var i = 0; i < all.length; i++) {
+            try {
+              if (all[i].shadowRoot) {
+                roots.push({ doc: all[i].shadowRoot, isShadow: true });
+                addShadowRoots(all[i].shadowRoot); // 递归（shadow root 嵌套）
+              }
+            } catch (e) {}
+          }
+        } catch (e) {}
+      }
+      try { roots.push({ doc: document, isMain: true }); } catch (e) {}
+      try { addShadowRoots(document); } catch (e) {}
+      try {
+        var ifs = document.querySelectorAll('iframe');
+        for (var fi = 0; fi < ifs.length; fi++) {
+          try {
+            var idoc = ifs[fi].contentDocument || (ifs[fi].contentWindow && ifs[fi].contentWindow.document);
+            if (idoc) {
+              roots.push({ doc: idoc, isMain: false });
+              try { addShadowRoots(idoc); } catch (e) {}
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
+
+      // 在某个 root 下查询元素（兼容 shadow root 没有 body 的情况）
+      function findAll(root, selector) {
+        try { return root.querySelectorAll ? root.querySelectorAll(selector) : []; }
+        catch (e) { return []; }
+      }
+      function getRootText(root) {
+        try {
+          if (root.body && root.body.innerText) return root.body.innerText;
+          // Shadow root 没有 body，用 host 的 innerText 或遍历获取
+          var txt = '';
+          var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+          for (var ti = 0; ti < Math.min(all.length, 20); ti++) {
+            try {
+              var sub = (all[ti].innerText || all[ti].textContent || '').trim();
+              if (sub && sub.length > 0 && sub.length < 200) txt += ' ' + sub;
+            } catch (e) {}
+          }
+          return txt;
+        } catch (e) { return ''; }
+      }
+
+      // 1) 封面检测（所有 root 累计）
       var thumbCount = 0;
-      try {
-        var imgs = document.querySelectorAll('img');
-        for (var i = 0; i < imgs.length; i++) {
-          var w = imgs[i].offsetWidth || 0;
-          var h = imgs[i].offsetHeight || 0;
-          if (w > 10 && h > 10) thumbCount++;
-        }
-        var vids = document.querySelectorAll('video');
-        for (var j = 0; j < vids.length; j++) {
-          if ((vids[j].offsetWidth || 0) > 10 && (vids[j].offsetHeight || 0) > 10) thumbCount++;
-        }
-      } catch (e) {}
+      for (var di = 0; di < roots.length; di++) {
+        try {
+          var d = roots[di].doc;
+          // 收集 body 文本（用于判断上传/处理中状态）
+          var rt = getRootText(d);
+          if (rt && rt.length > 0 && !roots[di].isMain) bodyText += ' | ' + rt.slice(0, 200);
+          else if (rt && rt.length > 0 && roots[di].isShadow) bodyText += ' | ' + rt.slice(0, 200);
 
-      // 2) 可编辑区域检测：textarea / contenteditable / text input
+          var imgs = findAll(d, 'img');
+          for (var i = 0; i < imgs.length; i++) {
+            var w = imgs[i].offsetWidth || 0;
+            var h = imgs[i].offsetHeight || 0;
+            if (w > 10 && h > 10) thumbCount++;
+          }
+          var vids = findAll(d, 'video');
+          for (var j = 0; j < vids.length; j++) {
+            if ((vids[j].offsetWidth || 0) > 10 && (vids[j].offsetHeight || 0) > 10) thumbCount++;
+          }
+        } catch (e) {}
+      }
+
+      // 2) 可编辑区域检测（所有 root 累计）
       var textareaList = [];
-      try {
-        var tareas = document.querySelectorAll('textarea');
-        for (var k = 0; k < Math.min(tareas.length, 5); k++) {
-          var t = tareas[k];
-          if (t.offsetWidth > 0 || t.offsetHeight > 0) {
-            textareaList.push({
-              ph: (t.getAttribute('placeholder') || '').slice(0, 50),
-              aria: (t.getAttribute('aria-label') || '').slice(0, 50),
-              w: t.offsetWidth, h: t.offsetHeight,
-            });
-          }
-        }
-      } catch (e) {}
-
       var ceList = [];
-      try {
-        var ces = document.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"]');
-        for (var m = 0; m < Math.min(ces.length, 5); m++) {
-          var c = ces[m];
-          if (c.offsetWidth > 0 || c.offsetHeight > 0) {
-            ceList.push({
-              aria: (c.getAttribute('aria-label') || '').slice(0, 50),
-              ph: (c.getAttribute('placeholder') || '').slice(0, 50),
-              text: (c.innerText || '').slice(0, 60),
-              w: c.offsetWidth, h: c.offsetHeight,
+      var textInputList = [];
+      for (var di2 = 0; di2 < roots.length; di2++) {
+        try {
+          var d2 = roots[di2].doc;
+          // textarea
+          var tareas = findAll(d2, 'textarea');
+          for (var k = 0; k < Math.min(tareas.length, 10); k++) {
+            var t = tareas[k];
+            if ((t.offsetWidth || 0) > 0 || (t.offsetHeight || 0) > 0) {
+              textareaList.push({
+                ph: (t.getAttribute('placeholder') || '').slice(0, 50),
+                aria: (t.getAttribute('aria-label') || '').slice(0, 50),
+                w: t.offsetWidth || 0, h: t.offsetHeight || 0,
+                inShadow: !!roots[di2].isShadow,
+              });
+            }
+          }
+          // contenteditable
+          var cef = findAll(d2, '[contenteditable="true"], [contenteditable="plaintext-only"]');
+          for (var m2 = 0; m2 < Math.min(cef.length, 10); m2++) {
+            var c = cef[m2];
+            if ((c.offsetWidth || 0) > 0 || (c.offsetHeight || 0) > 0) {
+              ceList.push({
+                aria: (c.getAttribute('aria-label') || '').slice(0, 50),
+                ph: (c.getAttribute('placeholder') || '').slice(0, 50),
+                text: (c.innerText || '').slice(0, 60),
+                w: c.offsetWidth || 0, h: c.offsetHeight || 0,
+                inShadow: !!roots[di2].isShadow,
+              });
+            }
+          }
+          // text input
+          var allInps = findAll(d2, 'input');
+          for (var n2 = 0; n2 < Math.min(allInps.length, 15); n2++) {
+            var inp = allInps[n2];
+            var itype = (inp.getAttribute('type') || 'text').toLowerCase();
+            if (itype === 'file' || itype === 'hidden' || itype === 'checkbox' || itype === 'radio') continue;
+            if ((inp.offsetWidth || 0) === 0 && (inp.offsetHeight || 0) === 0) continue;
+            textInputList.push({
+              type: itype,
+              ph: (inp.getAttribute('placeholder') || '').slice(0, 50),
+              aria: (inp.getAttribute('aria-label') || '').slice(0, 50),
+              w: inp.offsetWidth || 0, h: inp.offsetHeight || 0,
+              inShadow: !!roots[di2].isShadow,
             });
           }
-        }
-      } catch (e) {}
+        } catch (e) {}
+      }
 
-      var textInputList = [];
-      try {
-        var allInps = document.querySelectorAll('input');
-        for (var n = 0; n < Math.min(allInps.length, 10); n++) {
-          var inp = allInps[n];
-          var itype = (inp.getAttribute('type') || 'text').toLowerCase();
-          if (itype === 'file' || itype === 'hidden' || itype === 'checkbox' || itype === 'radio') continue;
-          if ((inp.offsetWidth || 0) === 0 && (inp.offsetHeight || 0) === 0) continue;
-          textInputList.push({
-            type: itype,
-            ph: (inp.getAttribute('placeholder') || '').slice(0, 50),
-            aria: (inp.getAttribute('aria-label') || '').slice(0, 50),
-            w: inp.offsetWidth, h: inp.offsetHeight,
-          });
-        }
-      } catch (e) {}
-
-      // 3) 状态判断
+      // 3) 状态判断（v6：修复 hasThumb/processingMatch 未定义导致的 ReferenceError；ready 必须有可编辑字段或正文含标题/描述关键词）
       var hasEditField = (textareaList.length + ceList.length + textInputList.length) > 0;
+      var hasContenteditable = ceList.length > 0;
       var hasThumb = thumbCount > 0;
-      var uploadingMatch = /上传中|正在上传|上传文件|处理中|转码|解析|processing|uploading|transcoding/i.test(bodyText);
-      var processingMatch = /转码|解析|处理中|正在处理|encoding|compressing/i.test(bodyText);
+      var bodyHasTitleRe = /标题|作品描述|描述|简介|作品标题|视频标题/i;
+      var uploadingMatch = /上传中|正在上传|处理中|转码|解析|processing|uploading|请稍|等待|正在/i.test(bodyText);
+      var processingMatch = /处理中|转码中|解析中|processing/i.test(bodyText);
 
-      // ready 条件：页面有可编辑区域 且 没有明显的"上传中"字样
       var readyStatus = 'waiting';
-      if (uploadingMatch || processingMatch) {
+      if (uploadingMatch) {
         readyStatus = 'uploading';
+      } else if (hasContenteditable) {
+        // 有 contenteditable 元素（快手标题/描述通常是 contenteditable）→ 视为就绪
+        readyStatus = 'ready';
+      } else if (bodyHasTitleRe.test(bodyText)) {
+        // 正文含有"标题/作品描述/描述/简介"等关键词 → 进入编辑页面
+        readyStatus = 'ready';
       } else if (hasEditField) {
         readyStatus = 'ready';
       }
@@ -443,7 +693,9 @@ export async function waitForUploadComplete(
         sampleTextarea: textareaList.slice(0, 2),
         sampleCE: ceList.slice(0, 2),
         sampleTextInput: textInputList.slice(0, 2),
-        body: bodyText.slice(0, 300)
+        body: bodyText.slice(0, 400),
+        iframeCount: iframeCount,
+        rootCount: roots.length,
       };
     })();
   `;
@@ -496,7 +748,7 @@ export async function waitForUploadComplete(
 
       if (info.status === 'ready') {
         onProgress(60, '上传完成，准备填写内容…');
-        return { ready: true, finalStatus: 'ready' };
+        return { ready: true, finalStatus: info.status };
       }
       if (info.status === 'uploading') {
         onProgress(30 + Math.min(30, (Date.now() - start) / 10000 * 10), '上传/处理中…');
@@ -511,7 +763,7 @@ export async function waitForUploadComplete(
   return { ready: false, finalStatus: 'timeout' };
 }
 
-/** 页面结构探测（用于日志排查） */
+/** 页面结构探测（v2：穿透 Shadow DOM + iframe，用于日志排查） */
 export function buildPageStructureProbe(): string {
   return `
     (function () {
@@ -521,71 +773,144 @@ export function buildPageStructureProbe(): string {
         buttons: [],
         uploadDivs: [],
         hasFileInput: false,
+        shadowRootCount: 0,
+        iframeCount: 0,
       };
+      // 收集：主文档 + Shadow DOM + iframe
+      var roots = [];
+      function collectShadow(root) {
+        try {
+          if (!root || !root.querySelectorAll) return;
+          var all = root.querySelectorAll('*');
+          for (var si = 0; si < all.length; si++) {
+            try {
+              if (all[si].shadowRoot) {
+                roots.push({ doc: all[si].shadowRoot });
+                result.shadowRootCount++;
+                collectShadow(all[si].shadowRoot);
+              }
+            } catch (e) {}
+          }
+        } catch (e) {}
+      }
+      try { roots.push({ doc: document }); } catch (e) {}
+      try { collectShadow(document); } catch (e) {}
       try {
-        var inputs = document.querySelectorAll('input');
-        for (var i=0; i<Math.min(inputs.length, 10); i++) {
-          var el = inputs[i];
-          result.inputs.push({
-            type: el.getAttribute('type'),
-            placeholder: el.getAttribute('placeholder'),
-            ariaLabel: el.getAttribute('aria-label'),
-          });
-          if (el.getAttribute('type') === 'file') result.hasFileInput = true;
+        var ifs = document.querySelectorAll('iframe');
+        result.iframeCount = ifs.length;
+        for (var fi = 0; fi < ifs.length; fi++) {
+          try {
+            var idoc = ifs[fi].contentDocument || (ifs[fi].contentWindow && ifs[fi].contentWindow.document);
+            if (idoc) {
+              roots.push({ doc: idoc });
+              collectShadow(idoc);
+            }
+          } catch (e) {}
         }
       } catch (e) {}
-      try {
-        var ce = document.querySelectorAll('[contenteditable="true"]');
-        for (var j=0; j<Math.min(ce.length, 5); j++) {
-          result.contenteditable.push({ text: (ce[j].innerText || '').slice(0, 50) });
-        }
-      } catch (e) {}
-      try {
-        var btns = document.querySelectorAll('button, [role="button"], a, div');
-        for (var k=0; k<btns.length; k++) {
-          var txt = (btns[k].innerText || '').trim();
-          if (txt && txt.length <= 30) result.buttons.push({ text: txt });
-          if (result.buttons.length >= 20) break;
-        }
-      } catch (e) {}
-      try {
-        var upKeywords = ['上传', 'upload', '选择文件', '选择视频', '选择图片'];
-        var divs = document.querySelectorAll('div, button, a');
-        for (var m=0; m<divs.length; m++) {
-          var txt2 = (divs[m].innerText || '').trim();
-          if (!txt2 || txt2.length > 30) continue;
-          var matched = false;
-          for (var n=0; n<upKeywords.length; n++) { if (txt2.indexOf(upKeywords[n]) !== -1) { matched = true; break; } }
-          if (matched) result.uploadDivs.push({ text: txt2 });
-          if (result.uploadDivs.length >= 10) break;
-        }
-      } catch (e) {}
+
+      for (var ri = 0; ri < roots.length; ri++) {
+        var d = roots[ri].doc;
+        if (!d || !d.querySelectorAll) continue;
+        try {
+          var inputs = d.querySelectorAll('input');
+          for (var i=0; i<inputs.length; i++) {
+            var el = inputs[i];
+            if (result.inputs.length >= 20) break;
+            result.inputs.push({
+              type: el.getAttribute('type'),
+              placeholder: el.getAttribute('placeholder'),
+              ariaLabel: el.getAttribute('aria-label'),
+              w: el.offsetWidth, h: el.offsetHeight,
+            });
+            if (el.getAttribute('type') === 'file') result.hasFileInput = true;
+          }
+        } catch (e) {}
+        try {
+          var ce = d.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"]');
+          for (var j=0; j<Math.min(ce.length, 10); j++) {
+            result.contenteditable.push({ text: (ce[j].innerText || ce[j].textContent || '').slice(0, 50) });
+          }
+        } catch (e) {}
+        try {
+          var btns = d.querySelectorAll('button, [role="button"], a, div');
+          for (var k=0; k<btns.length; k++) {
+            var txt = (btns[k].innerText || btns[k].textContent || '').trim();
+            if (txt && txt.length <= 30) result.buttons.push({ text: txt });
+            if (result.buttons.length >= 40) break;
+          }
+        } catch (e) {}
+        try {
+          var upKeywords = ['上传', 'upload', '选择文件', '选择视频', '选择图片', '拖拽'];
+          var divs = d.querySelectorAll('div, button, a, span');
+          for (var m=0; m<divs.length; m++) {
+            var txt2 = (divs[m].innerText || divs[m].textContent || '').trim();
+            if (!txt2 || txt2.length > 30) continue;
+            var matched = false;
+            for (var n=0; n<upKeywords.length; n++) { if (txt2.indexOf(upKeywords[n]) !== -1) { matched = true; break; } }
+            if (matched) result.uploadDivs.push({ text: txt2 });
+            if (result.uploadDivs.length >= 15) break;
+          }
+        } catch (e) {}
+      }
       return result;
     })();
   `;
 }
 
-/** 填写标题脚本（v2：更灵活的元素匹配 + React 兼容的事件派发） */
+/** 填写标题脚本（v4：iframe 穿透 + Shadow DOM 穿透 + 优先 contenteditable + 排除选择类下拉） */
 export function buildFillTitle(title: string): string {
   const jt = JSON.stringify(title);
   return `
     (function () {
       var candidates = [];
+      // 收集：主文档 + iframe + Shadow DOM
+      var roots = [];
+      function collectShadowRoots(root) {
+        try {
+          if (!root || !root.querySelectorAll) return;
+          var all = root.querySelectorAll('*');
+          for (var si = 0; si < all.length; si++) {
+            try {
+              if (all[si].shadowRoot) {
+                roots.push({ doc: all[si].shadowRoot, isShadow: true });
+                collectShadowRoots(all[si].shadowRoot);
+              }
+            } catch (e) {}
+          }
+        } catch (e) {}
+      }
+      try { roots.push({ doc: document, isMain: true }); } catch (e) {}
+      try { collectShadowRoots(document); } catch (e) {}
+      try {
+        var ifs = document.querySelectorAll('iframe');
+        for (var fi = 0; fi < ifs.length; fi++) {
+          try {
+            var idoc = ifs[fi].contentDocument || (ifs[fi].contentWindow && ifs[fi].contentWindow.document);
+            if (idoc) {
+              roots.push({ doc: idoc, isMain: false });
+              try { collectShadowRoots(idoc); } catch (e) {}
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
 
-      function tryGetLabel(el) {
+      function tryGetLabel(el, doc) {
         try {
           var id = el.getAttribute('id');
-          if (id) {
-            var lbl = document.querySelector('label[for="' + id + '"]');
+          if (id && doc) {
+            var lbl = doc.querySelector('label[for="' + id + '"]');
             if (lbl) return (lbl.innerText || '').trim().toLowerCase().slice(0, 50);
           }
           var parent = el.parentElement;
           for (var t = 0; t < 3 && parent; t++) {
-            var ph = parent.querySelector('span, label, :scope > div:first-child');
-            if (ph && ph !== el) {
-              var txt = (ph.innerText || '').trim().toLowerCase().slice(0, 50);
-              if (txt.length > 0) return txt;
-            }
+            try {
+              var ph = parent.querySelector('span, label, :scope > div:first-child');
+              if (ph && ph !== el) {
+                var txt = (ph.innerText || '').trim().toLowerCase().slice(0, 50);
+                if (txt.length > 0) return txt;
+              }
+            } catch (e) {}
             parent = parent.parentElement;
           }
         } catch (e) {}
@@ -595,75 +920,85 @@ export function buildFillTitle(title: string): string {
       function scoreElement(el, type, text, isTitle) {
         var s = 0;
         if (!text) return s;
-        var kw = isTitle ? ['标题', 'title', '作品标题', '作品名称'] : ['描述', '正文', '内容', '简介', 'description'];
-        for (var i = 0; i < kw.length; i++) {
-          if (text.indexOf(kw[i]) !== -1) { s += 200; break; }
+        // 标题关键词（平台全覆盖，shadow DOM 穿透后仍可命中）
+        var titleKw = ['标题', 'title', '作品标题', '作品名称', '视频标题', '标题栏', '标题内容', '填写标题', '添加标题', '作品名'];
+        for (var i = 0; i < titleKw.length; i++) {
+          if (text.indexOf(titleKw[i]) !== -1) { s += 500; break; }
         }
-        // 标题输入框通常比较短（一行），正文通常比较大
+        // 标题输入框通常较短（1 行），给 contenteditable 更高的基础分（快手标题是 contenteditable）
         if (isTitle) {
-          if (type === 'input') s += 20;
-          if ((el.offsetHeight || 0) < 80) s += 10;
-        } else {
-          if (type === 'textarea') s += 30;
-          if (type === 'contenteditable') s += 20;
-          if ((el.offsetHeight || 0) > 80) s += 20;
+          if (type === 'contenteditable') s += 80; // 快手标题框是 contenteditable，优先
+          if (type === 'input') s += 30;
+          if ((el.offsetHeight || 0) < 80) s += 20; // 矮框优先（通常是标题）
+          if ((el.offsetWidth || 0) > 200) s += 10; // 较宽的输入框更可能是标题
         }
         return s;
       }
 
-      // 1) textarea
-      try {
-        var tareas = document.querySelectorAll('textarea');
-        for (var i = 0; i < tareas.length; i++) {
-          var el = tareas[i];
-          if ((el.offsetWidth || 0) === 0 && (el.offsetHeight || 0) === 0) continue;
-          var ph = (el.getAttribute('placeholder') || '').toLowerCase();
-          var aria = (el.getAttribute('aria-label') || '').toLowerCase();
-          var lbl = tryGetLabel(el);
-          var combinedText = [ph, aria, lbl].join(' ');
-          candidates.push({
-            el: el, tag: 'textarea', score: scoreElement(el, 'textarea', combinedText, true),
-            text: combinedText.slice(0, 80)
-          });
-        }
-      } catch (e) {}
+      // 对每个 root 收集候选元素（主文档 + iframe + Shadow DOM，完全穿透）
+      for (var di = 0; di < roots.length; di++) {
+        var d = roots[di].doc;
+        if (!d || !d.querySelectorAll) continue;
 
-      // 2) input (非 file/hidden/checkbox/radio)
-      try {
-        var allInps = document.querySelectorAll('input');
-        for (var j = 0; j < allInps.length; j++) {
-          var el2 = allInps[j];
-          var itype = (el2.getAttribute('type') || 'text').toLowerCase();
-          if (itype === 'file' || itype === 'hidden' || itype === 'checkbox' || itype === 'radio') continue;
-          if ((el2.offsetWidth || 0) === 0 && (el2.offsetHeight || 0) === 0) continue;
-          var ph2 = (el2.getAttribute('placeholder') || '').toLowerCase();
-          var aria2 = (el2.getAttribute('aria-label') || '').toLowerCase();
-          var lbl2 = tryGetLabel(el2);
-          var combined2 = [ph2, aria2, lbl2].join(' ');
-          if (/话题|tag|标签/i.test(combined2)) continue; // 跳过话题输入框
-          candidates.push({
-            el: el2, tag: 'input', score: scoreElement(el2, 'input', combined2, true),
-            text: combined2.slice(0, 80)
-          });
-        }
-      } catch (e) {}
+        // 1) textarea
+        try {
+          var tareas = d.querySelectorAll('textarea');
+          for (var i = 0; i < tareas.length; i++) {
+            var el = tareas[i];
+            if ((el.offsetWidth || 0) === 0 && (el.offsetHeight || 0) === 0) continue;
+            var ph = (el.getAttribute('placeholder') || '').toLowerCase();
+            var aria = (el.getAttribute('aria-label') || '').toLowerCase();
+            var lbl = tryGetLabel(el, d);
+            var combinedText = [ph, aria, lbl].join(' ');
+            if (/选择|类型|下拉|选项|search|搜索|话题|tag|标签|分类/i.test(combinedText)) continue;
+            candidates.push({
+              el: el, tag: 'textarea', score: scoreElement(el, 'textarea', combinedText, true),
+              text: combinedText.slice(0, 80),
+              inShadow: !!roots[di].isShadow
+            });
+          }
+        } catch (e) {}
 
-      // 3) contenteditable
-      try {
-        var ces = document.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"]');
-        for (var k = 0; k < ces.length; k++) {
-          var el3 = ces[k];
-          if ((el3.offsetWidth || 0) === 0 && (el3.offsetHeight || 0) === 0) continue;
-          var aria3 = (el3.getAttribute('aria-label') || '').toLowerCase();
-          var ph3 = (el3.getAttribute('placeholder') || '').toLowerCase();
-          var lbl3 = tryGetLabel(el3);
-          var combined3 = [aria3, ph3, lbl3].join(' ');
-          candidates.push({
-            el: el3, tag: 'contenteditable', score: scoreElement(el3, 'contenteditable', combined3, true),
-            text: combined3.slice(0, 80)
-          });
-        }
-      } catch (e) {}
+        // 2) input (排除 file/hidden/checkbox/radio/search/下拉类)
+        try {
+          var allInps = d.querySelectorAll('input');
+          for (var j = 0; j < allInps.length; j++) {
+            var el2 = allInps[j];
+            var itype = (el2.getAttribute('type') || 'text').toLowerCase();
+            if (itype === 'file' || itype === 'hidden' || itype === 'checkbox' || itype === 'radio' || itype === 'search' || itype === 'submit' || itype === 'button') continue;
+            if ((el2.offsetWidth || 0) === 0 && (el2.offsetHeight || 0) === 0) continue;
+            var ph2 = (el2.getAttribute('placeholder') || '').toLowerCase();
+            var aria2 = (el2.getAttribute('aria-label') || '').toLowerCase();
+            var lbl2 = tryGetLabel(el2, d);
+            var combined2 = [ph2, aria2, lbl2].join(' ');
+            if (/选择|类型|下拉|选项|search|搜索|话题|tag|标签|分类/i.test(combined2)) continue;
+            candidates.push({
+              el: el2, tag: 'input', score: scoreElement(el2, 'input', combined2, true),
+              text: combined2.slice(0, 80),
+              inShadow: !!roots[di].isShadow
+            });
+          }
+        } catch (e) {}
+
+        // 3) contenteditable（快手标题通常是这个 — 优先；shadow DOM 内也可命中）
+        try {
+          var ces = d.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"]');
+          for (var k = 0; k < ces.length; k++) {
+            var el3 = ces[k];
+            if ((el3.offsetWidth || 0) === 0 && (el3.offsetHeight || 0) === 0) continue;
+            var aria3 = (el3.getAttribute('aria-label') || '').toLowerCase();
+            var ph3 = (el3.getAttribute('placeholder') || '').toLowerCase();
+            var lbl3 = tryGetLabel(el3, d);
+            var combined3 = [aria3, ph3, lbl3].join(' ');
+            if (/选择|类型|下拉|选项|search|搜索|话题|tag|标签|分类/i.test(combined3)) continue;
+            candidates.push({
+              el: el3, tag: 'contenteditable', score: scoreElement(el3, 'contenteditable', combined3, true),
+              text: combined3.slice(0, 80),
+              inShadow: !!roots[di].isShadow
+            });
+          }
+        } catch (e) {}
+      }
 
       if (candidates.length === 0) {
         return { success: false, reason: 'no-candidates', count: 0 };
@@ -679,14 +1014,12 @@ export function buildFillTitle(title: string): string {
           method = 'innerText';
         } else {
           try {
-            // 方法 A：原生 setter（最稳定）
             var proto = target.tag === 'textarea' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
             var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
             setter.call(target.el, ${jt});
             method = 'native-setter';
           } catch (e1) {
             try {
-              // 方法 B：直接赋值
               target.el.value = ${jt};
               method = 'direct-value';
             } catch (e2) {
@@ -695,7 +1028,6 @@ export function buildFillTitle(title: string): string {
             }
           }
         }
-        // 派发多个事件以确保 React/Vue 等框架能感知变化
         try { target.el.dispatchEvent(new Event('input', { bubbles: true })); } catch (ev) {}
         try { target.el.dispatchEvent(new Event('change', { bubbles: true })); } catch (ev) {}
         try { target.el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (ev) {}
@@ -716,28 +1048,59 @@ export function buildFillTitle(title: string): string {
   `;
 }
 
-/** 填写正文/描述脚本（v2：更灵活的元素匹配 + 跳过已经填了标题的元素） */
+/** 填写正文/描述脚本（v4：iframe 穿透 + Shadow DOM 穿透 + 更精准的内容区域匹配 + 跳过选择下拉） */
 export function buildFillContent(content: string): string {
   const jc = JSON.stringify(content);
   return `
     (function () {
       var candidates = [];
-      var used = []; // 记录已经填过标题的元素（通过 DOM 状态判断）
+      // 收集：主文档 + iframe + Shadow DOM
+      var roots = [];
+      function collectShadowRoots(root) {
+        try {
+          if (!root || !root.querySelectorAll) return;
+          var all = root.querySelectorAll('*');
+          for (var si = 0; si < all.length; si++) {
+            try {
+              if (all[si].shadowRoot) {
+                roots.push({ doc: all[si].shadowRoot, isShadow: true });
+                collectShadowRoots(all[si].shadowRoot);
+              }
+            } catch (e) {}
+          }
+        } catch (e) {}
+      }
+      try { roots.push({ doc: document, isMain: true }); } catch (e) {}
+      try { collectShadowRoots(document); } catch (e) {}
+      try {
+        var ifs = document.querySelectorAll('iframe');
+        for (var fi = 0; fi < ifs.length; fi++) {
+          try {
+            var idoc = ifs[fi].contentDocument || (ifs[fi].contentWindow && ifs[fi].contentWindow.document);
+            if (idoc) {
+              roots.push({ doc: idoc, isMain: false });
+              try { collectShadowRoots(idoc); } catch (e) {}
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
 
-      function tryGetLabel(el) {
+      function tryGetLabel(el, doc) {
         try {
           var id = el.getAttribute('id');
-          if (id) {
-            var lbl = document.querySelector('label[for="' + id + '"]');
+          if (id && doc) {
+            var lbl = doc.querySelector('label[for="' + id + '"]');
             if (lbl) return (lbl.innerText || '').trim().toLowerCase().slice(0, 50);
           }
           var parent = el.parentElement;
           for (var t = 0; t < 3 && parent; t++) {
-            var ph = parent.querySelector('span, label, :scope > div:first-child');
-            if (ph && ph !== el) {
-              var txt = (ph.innerText || '').trim().toLowerCase().slice(0, 50);
-              if (txt.length > 0) return txt;
-            }
+            try {
+              var ph = parent.querySelector('span, label, :scope > div:first-child');
+              if (ph && ph !== el) {
+                var txt = (ph.innerText || '').trim().toLowerCase().slice(0, 50);
+                if (txt.length > 0) return txt;
+              }
+            } catch (e) {}
             parent = parent.parentElement;
           }
         } catch (e) {}
@@ -747,60 +1110,69 @@ export function buildFillContent(content: string): string {
       function scoreElement(el, type, text) {
         var s = 0;
         if (!text) return s;
-        var kw = ['描述', '正文', '内容', '简介', 'description', '介绍'];
+        var kw = ['描述', '正文', '内容', '简介', 'description', '介绍', '作品描述', '视频简介', '作品简介', '描述栏', '填写描述', '作品介绍', '作品正文', '作品文案'];
         for (var i = 0; i < kw.length; i++) {
-          if (text.indexOf(kw[i]) !== -1) { s += 200; break; }
+          if (text.indexOf(kw[i]) !== -1) { s += 500; break; }
         }
-        if (type === 'textarea') s += 30;
-        if (type === 'contenteditable') s += 20;
-        if ((el.offsetHeight || 0) > 80) s += 20;
+        if (type === 'textarea') s += 40;
+        if (type === 'contenteditable') s += 60; // 快手正文通常是 contenteditable
+        if ((el.offsetHeight || 0) > 80) s += 30; // 较高的框更像正文
+        if ((el.offsetWidth || 0) > 300) s += 10;
         return s;
       }
 
-      // 收集所有可编辑元素
-      var allEls = [];
-      try {
-        var tareas = document.querySelectorAll('textarea');
-        for (var i = 0; i < tareas.length; i++) {
-          if ((tareas[i].offsetWidth || 0) === 0 && (tareas[i].offsetHeight || 0) === 0) continue;
-          allEls.push({ el: tareas[i], tag: 'textarea' });
-        }
-      } catch (e) {}
-      try {
-        var allInps = document.querySelectorAll('input');
-        for (var j = 0; j < allInps.length; j++) {
-          var itype = (allInps[j].getAttribute('type') || 'text').toLowerCase();
-          if (itype === 'file' || itype === 'hidden' || itype === 'checkbox' || itype === 'radio') continue;
-          if ((allInps[j].offsetWidth || 0) === 0 && (allInps[j].offsetHeight || 0) === 0) continue;
-          allEls.push({ el: allInps[j], tag: 'input' });
-        }
-      } catch (e) {}
-      try {
-        var ces = document.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"]');
-        for (var k = 0; k < ces.length; k++) {
-          if ((ces[k].offsetWidth || 0) === 0 && (ces[k].offsetHeight || 0) === 0) continue;
-          allEls.push({ el: ces[k], tag: 'contenteditable' });
-        }
-      } catch (e) {}
+      // 遍历所有 root（主文档 + iframe + Shadow DOM）收集可编辑元素
+      for (var di = 0; di < roots.length; di++) {
+        var d = roots[di].doc;
+        if (!d || !d.querySelectorAll) continue;
 
-      // 对每个元素评分 + 检测是否已有内容（可能是标题刚填的）
-      for (var m = 0; m < allEls.length; m++) {
-        var elx = allEls[m].el;
-        var val = (elx.value !== undefined ? elx.value : elx.innerText) || '';
-        var ph = (elx.getAttribute('placeholder') || '').toLowerCase();
-        var aria = (elx.getAttribute('aria-label') || '').toLowerCase();
-        var lbl = tryGetLabel(elx);
-        var combined = [ph, aria, lbl].join(' ');
-        // 跳过明确是"标题"相关的元素（标题脚本应该已经填它了）
-        if (/标题|作品标题|作品名称|title/i.test(combined)) continue;
-        // 跳过已经有内容的元素（可能是话题输入框已经被填过了）
-        if (val.length > 0 && /话题|tags|tag/i.test(combined)) continue;
-        candidates.push({
-          el: elx, tag: allEls[m].tag,
-          score: scoreElement(elx, allEls[m].tag, combined),
-          text: combined.slice(0, 80),
-          hasContent: val.length > 0
-        });
+        var allEls = [];
+        try {
+          var tareas = d.querySelectorAll('textarea');
+          for (var i = 0; i < tareas.length; i++) {
+            if ((tareas[i].offsetWidth || 0) === 0 && (tareas[i].offsetHeight || 0) === 0) continue;
+            allEls.push({ el: tareas[i], tag: 'textarea' });
+          }
+        } catch (e) {}
+        try {
+          var allInps = d.querySelectorAll('input');
+          for (var j = 0; j < allInps.length; j++) {
+            var itype = (allInps[j].getAttribute('type') || 'text').toLowerCase();
+            if (itype === 'file' || itype === 'hidden' || itype === 'checkbox' || itype === 'radio' || itype === 'search' || itype === 'submit' || itype === 'button') continue;
+            if ((allInps[j].offsetWidth || 0) === 0 && (allInps[j].offsetHeight || 0) === 0) continue;
+            allEls.push({ el: allInps[j], tag: 'input' });
+          }
+        } catch (e) {}
+        try {
+          var ces = d.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"]');
+          for (var k = 0; k < ces.length; k++) {
+            if ((ces[k].offsetWidth || 0) === 0 && (ces[k].offsetHeight || 0) === 0) continue;
+            allEls.push({ el: ces[k], tag: 'contenteditable' });
+          }
+        } catch (e) {}
+
+        // 对每个元素评分
+        for (var m = 0; m < allEls.length; m++) {
+          var elx = allEls[m].el;
+          var val = (elx.value !== undefined ? elx.value : elx.innerText) || '';
+          var ph = (elx.getAttribute('placeholder') || '').toLowerCase();
+          var aria = (elx.getAttribute('aria-label') || '').toLowerCase();
+          var lbl = tryGetLabel(elx, d);
+          var combined = [ph, aria, lbl].join(' ');
+          // 跳过：标题相关元素（标题脚本应该已经填它了）
+          if (/标题|作品标题|作品名称|视频标题|title|标题栏|标题内容|填写标题|添加标题|作品名/i.test(combined)) continue;
+          // 跳过：选择类/下拉/分类/话题
+          if (/选择|类型|下拉|选项|search|搜索|话题|tag|标签|分类/i.test(combined)) continue;
+          // 跳过已经有内容且是话题输入框
+          if (val.length > 0 && /话题|tags|tag/i.test(combined)) continue;
+          candidates.push({
+            el: elx, tag: allEls[m].tag,
+            score: scoreElement(elx, allEls[m].tag, combined),
+            text: combined.slice(0, 80),
+            hasContent: val.length > 0,
+            inShadow: !!roots[di].isShadow
+          });
+        }
       }
 
       if (candidates.length === 0) {
@@ -854,7 +1226,7 @@ export function buildFillContent(content: string): string {
   `;
 }
 
-/** 发布按钮点击脚本（关键词匹配 + shadow DOM 穿透 + 祖先层级触发） */
+/** 发布按钮点击脚本（v3：iframe 穿透 + shadow DOM + 多平台 class 匹配 + 关键词） */
 export function buildPublishButtonClicker(keyword: string): string {
   const jk = JSON.stringify(keyword);
   return `
@@ -864,120 +1236,231 @@ export function buildPublishButtonClicker(keyword: string): string {
       var viewportH = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 600;
       var viewportW = window.innerWidth || (document.documentElement && document.documentElement.clientWidth) || 800;
 
-      // 策略 1：Shadow DOM 自定义组件（如 <xhs-publish-btn>）
-      try {
-        var shadowTags = ['xhs-publish-btn', 'xhs-button', 'publish-button', 'xhs-publish', 'xhs-upload-btn'];
-        for (var si = 0; si < shadowTags.length; si++) {
-          var host = document.querySelector(shadowTags[si]);
-          if (!host) continue;
-          var sr = host.shadowRoot;
-          if (!sr) continue;
-          var inner = sr.querySelectorAll('button, a, [role="button"], [class*="btn"], [class*="submit"], [class*="publish"], [class*="primary"], [class*="red"]');
-          for (var ii = 0; ii < inner.length; ii++) {
+      // 收集所有 root：主文档 + iframe + Shadow DOM（快手等平台将发布按钮放在 Shadow DOM 中）
+      var roots = [];
+      function collectShadowRoots2(root) {
+        try {
+          if (!root || !root.querySelectorAll) return;
+          var all = root.querySelectorAll('*');
+          for (var si = 0; si < all.length; si++) {
             try {
-              var selEl = inner[ii];
-              if (selEl.offsetWidth <= 5 || selEl.offsetHeight <= 5) continue;
-              var st = getComputedStyle(selEl);
-              if (st.visibility === 'hidden' || st.display === 'none') continue;
-              if ((selEl.hasAttribute && selEl.hasAttribute('disabled')) || selEl.getAttribute('aria-disabled') === 'true') continue;
-              var selText = (selEl.innerText || selEl.textContent || '').trim();
-              if (!selText) continue;
-              var selClass = ((selEl.className && typeof selEl.className === 'string') ? selEl.className : '').toLowerCase();
-              var selRect = selEl.getBoundingClientRect ? selEl.getBoundingClientRect() : { top: 0, bottom: 0, left: 0, right: 0 };
-              var selScore = 0;
-              if (/red|primary|danger|submit|publish|bg-red/i.test(selClass)) selScore += 3000;
-              if (selText === ${jk}) selScore += 3000;
-              else if (selText.indexOf(${jk}) === 0) selScore += 1500;
-              else if (selText.indexOf(${jk}) !== -1) selScore += 500;
-              if (selEl.tagName && selEl.tagName.toLowerCase() === 'button') selScore += 2000;
-              var selFromBottom = viewportH - selRect.bottom;
-              if (selFromBottom >= -300 && selFromBottom < viewportH) selScore += 500;
-              candidates.push({ el: selEl, score: selScore, text: selText, tag: selEl.tagName ? selEl.tagName.toLowerCase() : 'element', classStr: selClass.slice(0, 60), fromBottom: Math.round(selFromBottom), w: selEl.offsetWidth, h: selEl.offsetHeight, source: 'shadow-dom:' + shadowTags[si] });
+              if (all[si].shadowRoot) {
+                roots.push({ doc: all[si].shadowRoot, isShadow: true, hostTagName: all[si].tagName ? all[si].tagName.toLowerCase() : '' });
+                collectShadowRoots2(all[si].shadowRoot);
+              }
             } catch (e) {}
           }
-        }
-      } catch (e) {}
-
-      // 策略 2：class 精确选择器
+        } catch (e) {}
+      }
+      try { roots.push({ doc: document, isMain: true }); } catch (e) {}
+      try { collectShadowRoots2(document); } catch (e) {}
       try {
-        var classSels = ['.ce-btn.bg-red', '.ce-btn [class*="red"]', 'button.ce-btn', '.ce-btn', '.publish-btn', '.btn-publish', 'button [class*="publish"]', '.bg-red', '[class*="btn-primary"]', '[class*="btn-danger"]'];
-        for (var ci = 0; ci < classSels.length; ci++) {
-          var selList = document.querySelectorAll(classSels[ci]);
-          for (var ei = 0; ei < selList.length; ei++) {
-            var sEl = selList[ei];
-            try {
-              if (sEl.offsetWidth <= 5 || sEl.offsetHeight <= 5) continue;
-              var sSty = getComputedStyle(sEl);
-              if (sSty.visibility === 'hidden' || sSty.display === 'none') continue;
-              if ((sEl.hasAttribute && sEl.hasAttribute('disabled')) || sEl.getAttribute('aria-disabled') === 'true') continue;
-              var sText = (sEl.innerText || sEl.textContent || '').trim();
-              if (!sText) continue;
-              var sClass = ((sEl.className && typeof sEl.className === 'string') ? sEl.className : '').toLowerCase();
-              if (/nav|menu|header|sidebar|breadcrumb|tabs/.test(sClass)) continue;
-              var sRect = sEl.getBoundingClientRect ? sEl.getBoundingClientRect() : { top: 0, bottom: 0, left: 0, right: 0 };
-              var sScore = 0;
-              if (/bg-red|primary|danger|submit|publish/i.test(sClass)) sScore += 2000;
-              if (sText === ${jk}) sScore += 3000;
-              else if (sText.indexOf(${jk}) === 0) sScore += 1500;
-              else if (sText.indexOf(${jk}) !== -1) sScore += 500;
-              if (sEl.tagName.toLowerCase() === 'button') sScore += 1500;
-              var sFromBottom = viewportH - sRect.bottom;
-              if (sFromBottom >= -200 && sFromBottom < viewportH * 0.5) sScore += 800;
-              var sFromRight = viewportW - sRect.right;
-              if (sFromRight >= -100 && sFromRight < viewportW * 0.5) sScore += 300;
-              candidates.push({ el: sEl, score: sScore, text: sText, tag: sEl.tagName.toLowerCase(), classStr: sClass.slice(0, 60), fromBottom: Math.round(sFromBottom), fromRight: Math.round(sFromRight), w: sEl.offsetWidth, h: sEl.offsetHeight, source: 'class:' + classSels[ci] });
-            } catch (e) {}
-          }
-        }
-      } catch (e) {}
-
-      // 策略 3：底部区域扫描
-      try {
-        var clickable = document.querySelectorAll('button, a, [role="button"], div');
-        for (var di = 0; di < clickable.length; di++) {
-          var de = clickable[di];
+        var ifs = document.querySelectorAll('iframe');
+        for (var fi = 0; fi < ifs.length; fi++) {
           try {
-            if (de.offsetWidth < 40 || de.offsetHeight < 28) continue;
-            var dSty = getComputedStyle(de);
-            if (dSty.visibility === 'hidden' || dSty.display === 'none') continue;
-            var dRect = de.getBoundingClientRect ? de.getBoundingClientRect() : { top: 0, bottom: 0, left: 0, right: 0 };
-            var dFromBottom = viewportH - dRect.bottom;
-            if (dFromBottom < -300 || dFromBottom >= viewportH * 0.6) continue;
-            var dText = (de.innerText || de.textContent || '').trim();
-            if (!dText || dText.length > 30) continue;
-            var dClass = ((de.className && typeof de.className === 'string') ? de.className : '').toLowerCase();
-            if (/nav|menu|header|sidebar|breadcrumb|tabs|tab-bar|setting|option|select|dropdown|filter|sort|config/.test(dClass)) continue;
-            var dScore = 0;
-            if (dText === ${jk}) dScore += 3000;
-            else if (dText.indexOf(${jk}) === 0) dScore += 1000;
-            else if (dText.indexOf(${jk}) !== -1) dScore += 200;
-            if (de.tagName.toLowerCase() === 'button') dScore += 1200;
-            if (/bg-red|primary|danger|submit|publish|ce-btn/i.test(dClass)) dScore += 2000;
-            if (dFromBottom >= 0 && dFromBottom < viewportH * 0.3) dScore += 600;
-            candidates.push({ el: de, score: dScore, text: dText, tag: de.tagName.toLowerCase(), classStr: dClass.slice(0, 60), fromBottom: Math.round(dFromBottom), w: de.offsetWidth, h: de.offsetHeight, source: 'bottom-scan' });
+            var idoc = ifs[fi].contentDocument || (ifs[fi].contentWindow && ifs[fi].contentWindow.document);
+            if (idoc) {
+              roots.push({ doc: idoc, isMain: false });
+              try { collectShadowRoots2(idoc); } catch (e) {}
+            }
           } catch (e) {}
         }
       } catch (e) {}
 
-      // 策略 4：最后一个可见按钮兜底
-      try {
-        var lastBtns = document.querySelectorAll('button, [role="button"]');
-        for (var li = lastBtns.length - 1; li >= Math.max(0, lastBtns.length - 5); li--) {
-          var le = lastBtns[li];
-          try {
-            if (le.offsetWidth < 40 || le.offsetHeight < 28) continue;
-            var lSty = getComputedStyle(le);
-            if (lSty.visibility === 'hidden' || lSty.display === 'none') continue;
-            var lText = (le.innerText || le.textContent || '').trim();
-            if (!lText || lText.length > 30) continue;
-            var lClass = ((le.className && typeof le.className === 'string') ? le.className : '').toLowerCase();
-            var lScore = 500 + (lastBtns.length - li) * 100;
-            if (/bg-red|primary|danger|submit|publish|ce-btn/i.test(lClass)) lScore += 2000;
-            if (lText === ${jk}) lScore += 3000;
-            candidates.push({ el: le, score: lScore, text: lText, tag: le.tagName.toLowerCase(), classStr: lClass.slice(0, 60), fromBottom: 0, w: le.offsetWidth, h: le.offsetHeight, source: 'last-button' });
-          } catch (e) {}
-        }
-      } catch (e) {}
+      // 遍历每个 root 执行所有策略
+      for (var dIdx = 0; dIdx < roots.length; dIdx++) {
+        var d = roots[dIdx].doc;
+        if (!d || !d.querySelectorAll) continue;
+        var sourcePrefix = roots[dIdx].isMain ? '' : (roots[dIdx].isShadow ? 'shadow:' + (roots[dIdx].hostTagName || '') : 'iframe:');
+
+        // 策略 1：Shadow DOM 自定义组件
+        try {
+          var shadowTags = ['xhs-publish-btn', 'xhs-button', 'publish-button', 'xhs-publish', 'xhs-upload-btn'];
+          for (var si = 0; si < shadowTags.length; si++) {
+            var host = d.querySelector(shadowTags[si]);
+            if (!host) continue;
+            var sr = host.shadowRoot;
+            if (!sr) continue;
+            var inner = sr.querySelectorAll('button, a, [role="button"], [class*="btn"], [class*="submit"], [class*="publish"], [class*="primary"], [class*="red"]');
+            for (var ii = 0; ii < inner.length; ii++) {
+              try {
+                var selEl = inner[ii];
+                var selW = selEl.offsetWidth || 0;
+                var selH = selEl.offsetHeight || 0;
+                if (selW <= 5 || selH <= 5) continue;
+                var st = getComputedStyle(selEl);
+                if (st.visibility === 'hidden' || st.display === 'none') continue;
+                if ((selEl.hasAttribute && selEl.hasAttribute('disabled')) || selEl.getAttribute('aria-disabled') === 'true') continue;
+                var selText = (selEl.innerText || selEl.textContent || '').trim();
+                if (!selText) continue;
+                // 排除侧边栏：导航类文本 + 窄/矮元素
+                if (/首页|内容管理|互动管理|数据中心|成长中心|创作服务|粉丝|关注|作品管理/i.test(selText) && (selW < 250 || selH < 80)) continue;
+                // 必须含发布相关关键词
+                if (!/(发布作品|立即发布|发布|确认发布)/i.test(selText)) continue;
+                var selClass = ((selEl.className && typeof selEl.className === 'string') ? selEl.className : '').toLowerCase();
+                var selRect = selEl.getBoundingClientRect ? selEl.getBoundingClientRect() : { top: 0, bottom: 0, left: 0, right: 0 };
+                var selFromBottom = viewportH - selRect.bottom;
+                var selFromRight = viewportW - selRect.right;
+                var selScore = 0;
+                if (/red|primary|danger|submit|publish|bg-red/i.test(selClass)) selScore += 3000;
+                if (selText === ${jk}) selScore += 3000;
+                else if (selText.indexOf(${jk}) === 0) selScore += 1500;
+                else if (selText.indexOf(${jk}) !== -1) selScore += 500;
+                if (selEl.tagName && selEl.tagName.toLowerCase() === 'button') selScore += 2000;
+                // 靠近底部加分（fromBottom 越小越高分）
+                if (selFromBottom >= -300 && selFromBottom < viewportH) {
+                  selScore += 500;
+                  var bottomRatio = 1 - Math.min(1, Math.abs(selFromBottom) / viewportH);
+                  selScore += Math.round(bottomRatio * 1500);
+                }
+                // 靠近右侧加分
+                if (selFromRight >= -100 && selFromRight < viewportW * 0.5) {
+                  var rightRatio = 1 - Math.min(1, selFromRight / (viewportW * 0.5));
+                  selScore += Math.round(rightRatio * 800);
+                }
+                candidates.push({ el: selEl, score: selScore, text: selText, tag: selEl.tagName ? selEl.tagName.toLowerCase() : 'element', classStr: selClass.slice(0, 60), fromBottom: Math.round(selFromBottom), fromRight: Math.round(selFromRight), w: selW, h: selH, source: sourcePrefix + 'shadow-dom:' + shadowTags[si] });
+              } catch (e) {}
+            }
+          }
+        } catch (e) {}
+
+        // 策略 2：class 精确选择器（抖音 ce-btn、快手 _button-primary_、小红书通用命名）
+        try {
+          var classSels = [
+            '[class*="_button-primary_"]', '[class*="_button-primary"]', '[class*="_button_3a3lq"]',
+            '.ce-btn.bg-red', '.ce-btn [class*="red"]', 'button.ce-btn', '.ce-btn', '.publish-btn', '.btn-publish', 'button [class*="publish"]', '.bg-red', '[class*="btn-primary"]', '[class*="btn-danger"]', 'button[class*="kui"]', '[class*="kui-btn"]', '[class*="ks-btn"]', 'button[class*="ks-"]', '[class*="publish-"]'];
+          for (var ci = 0; ci < classSels.length; ci++) {
+            var selList = d.querySelectorAll(classSels[ci]);
+            for (var ei = 0; ei < selList.length; ei++) {
+              var sEl = selList[ei];
+              try {
+                var sW = sEl.offsetWidth || 0;
+                var sH = sEl.offsetHeight || 0;
+                if (sW <= 5 || sH <= 5) continue;
+                var sSty = getComputedStyle(sEl);
+                if (sSty.visibility === 'hidden' || sSty.display === 'none') continue;
+                if ((sEl.hasAttribute && sEl.hasAttribute('disabled')) || sEl.getAttribute('aria-disabled') === 'true') continue;
+                var sText = (sEl.innerText || sEl.textContent || '').trim();
+                if (!sText) continue;
+                // 排除侧边栏：导航类文本 + 窄/矮元素
+                if (/首页|内容管理|互动管理|数据中心|成长中心|创作服务|粉丝|关注|作品管理/i.test(sText) && (sW < 250 || sH < 80)) continue;
+                // 必须含发布相关关键词
+                if (!/(发布作品|立即发布|发布|确认发布)/i.test(sText)) continue;
+                var sClass = ((sEl.className && typeof sEl.className === 'string') ? sEl.className : '').toLowerCase();
+                if (/nav|menu|header|sidebar|breadcrumb|tabs/.test(sClass)) continue;
+                var sRect = sEl.getBoundingClientRect ? sEl.getBoundingClientRect() : { top: 0, bottom: 0, left: 0, right: 0 };
+                var sFromBottom = viewportH - sRect.bottom;
+                var sFromRight = viewportW - sRect.right;
+                var sScore = 0;
+                // 快手专属：_button-primary_ 类是最高优先级的发布按钮样式
+                if (/_button-primary|_button.*primary|primary.*button/i.test(sClass)) sScore += 5000;
+                else if (/bg-red|primary|danger|submit|publish|kui|ks-btn|publish-btn/i.test(sClass)) sScore += 2000;
+                if (sText === ${jk}) sScore += 3000;
+                else if (sText.indexOf(${jk}) === 0) sScore += 1500;
+                else if (sText.indexOf(${jk}) !== -1) sScore += 500;
+                if (sEl.tagName.toLowerCase() === 'button') sScore += 1500;
+                // 排除左侧导航：在视口左 1/5 区域内的"发布作品"文本减分（防止点到侧边导航）
+                if (sRect.left >= 0 && sRect.left < viewportW * 0.2 && /发布作品/.test(sText)) sScore -= 3000;
+                if (sFromRight < 0 || sRect.left > viewportW * 0.85) sScore -= 500;
+                // 靠近底部 + 右侧加分
+                if (sFromBottom >= -200 && sFromBottom < viewportH * 0.5) {
+                  sScore += 800;
+                  var sbRatio = 1 - Math.min(1, Math.abs(sFromBottom) / (viewportH * 0.5));
+                  sScore += Math.round(sbRatio * 1500);
+                }
+                if (sFromRight >= -100 && sFromRight < viewportW * 0.5) {
+                  sScore += 300;
+                  var srRatio = 1 - Math.min(1, sFromRight / (viewportW * 0.5));
+                  sScore += Math.round(srRatio * 800);
+                }
+                candidates.push({ el: sEl, score: sScore, text: sText, tag: sEl.tagName.toLowerCase(), classStr: sClass.slice(0, 60), fromBottom: Math.round(sFromBottom), fromRight: Math.round(sFromRight), w: sW, h: sH, source: sourcePrefix + 'class:' + classSels[ci] });
+              } catch (e) {}
+            }
+          }
+        } catch (e) {}
+
+        // 策略 3：底部区域扫描
+        try {
+          var clickable = d.querySelectorAll('button, a, [role="button"], div');
+          for (var di = 0; di < clickable.length; di++) {
+            var de2 = clickable[di];
+            try {
+              var dW = de2.offsetWidth || 0;
+              var dH = de2.offsetHeight || 0;
+              if (dW < 40 || dH < 28) continue;
+              var dSty = getComputedStyle(de2);
+              if (dSty.visibility === 'hidden' || dSty.display === 'none') continue;
+              var dRect = de2.getBoundingClientRect ? de2.getBoundingClientRect() : { top: 0, bottom: 0, left: 0, right: 0 };
+              var dFromBottom = viewportH - dRect.bottom;
+              if (dFromBottom < -300 || dFromBottom >= viewportH * 0.6) continue;
+              var dText = (de2.innerText || de2.textContent || '').trim();
+              if (!dText || dText.length > 30) continue;
+              // 排除侧边栏：导航类文本 + 窄/矮元素
+              if (/首页|内容管理|互动管理|数据中心|成长中心|创作服务|粉丝|关注|作品管理/i.test(dText) && (dW < 250 || dH < 80)) continue;
+              // 必须含发布相关关键词
+              if (!/(发布作品|立即发布|发布|确认发布)/i.test(dText)) continue;
+              var dClass = ((de2.className && typeof de2.className === 'string') ? de2.className : '').toLowerCase();
+              if (/nav|menu|header|sidebar|breadcrumb|tabs|tab-bar|setting|option|select|dropdown|filter|sort|config/.test(dClass)) continue;
+              var dFromRight = viewportW - dRect.right;
+              var dScore = 0;
+              if (dText === ${jk}) dScore += 3000;
+              else if (dText.indexOf(${jk}) === 0) dScore += 1000;
+              else if (dText.indexOf(${jk}) !== -1) dScore += 200;
+              if (de2.tagName.toLowerCase() === 'button') dScore += 1200;
+              if (/bg-red|primary|danger|submit|publish|ce-btn|kui|ks-btn|publish-btn/i.test(dClass)) dScore += 2000;
+              // 靠近底部 + 右侧加分
+              if (dFromBottom >= 0 && dFromBottom < viewportH * 0.3) {
+                dScore += 600;
+                var dbRatio = 1 - Math.min(1, dFromBottom / (viewportH * 0.3));
+                dScore += Math.round(dbRatio * 2000);
+              }
+              if (dFromRight >= -100 && dFromRight < viewportW * 0.5) {
+                var drRatio = 1 - Math.min(1, dFromRight / (viewportW * 0.5));
+                dScore += Math.round(drRatio * 1000);
+              }
+              candidates.push({ el: de2, score: dScore, text: dText, tag: de2.tagName.toLowerCase(), classStr: dClass.slice(0, 60), fromBottom: Math.round(dFromBottom), fromRight: Math.round(dFromRight), w: dW, h: dH, source: sourcePrefix + 'bottom-scan' });
+            } catch (e) {}
+          }
+        } catch (e) {}
+
+        // 策略 4：最后一个可见按钮兜底
+        try {
+          var lastBtns = d.querySelectorAll('button, [role="button"]');
+          for (var li = lastBtns.length - 1; li >= Math.max(0, lastBtns.length - 5); li--) {
+            var le = lastBtns[li];
+            try {
+              var lW = le.offsetWidth || 0;
+              var lH = le.offsetHeight || 0;
+              if (lW < 40 || lH < 28) continue;
+              var lSty = getComputedStyle(le);
+              if (lSty.visibility === 'hidden' || lSty.display === 'none') continue;
+              var lText = (le.innerText || le.textContent || '').trim();
+              if (!lText || lText.length > 30) continue;
+              // 排除侧边栏：导航类文本 + 窄/矮元素
+              if (/首页|内容管理|互动管理|数据中心|成长中心|创作服务|粉丝|关注|作品管理/i.test(lText) && (lW < 250 || lH < 80)) continue;
+              // 必须含发布相关关键词
+              if (!/(发布作品|立即发布|发布|确认发布)/i.test(lText)) continue;
+              var lRect = le.getBoundingClientRect ? le.getBoundingClientRect() : { top: 0, bottom: 0, left: 0, right: 0 };
+              var lFromBottom = viewportH - lRect.bottom;
+              var lFromRight = viewportW - lRect.right;
+              var lClass = ((le.className && typeof le.className === 'string') ? le.className : '').toLowerCase();
+              var lScore = 500 + (lastBtns.length - li) * 100;
+              if (/bg-red|primary|danger|submit|publish|ce-btn|kui|ks-btn|publish-btn/i.test(lClass)) lScore += 2000;
+              if (lText === ${jk}) lScore += 3000;
+              // 靠近底部 + 右侧加分
+              if (lFromBottom >= 0 && lFromBottom < viewportH * 0.4) {
+                var lbRatio = 1 - Math.min(1, lFromBottom / (viewportH * 0.4));
+                lScore += Math.round(lbRatio * 1500);
+              }
+              if (lFromRight >= -100 && lFromRight < viewportW * 0.5) {
+                var lrRatio = 1 - Math.min(1, lFromRight / (viewportW * 0.5));
+                lScore += Math.round(lrRatio * 800);
+              }
+              candidates.push({ el: le, score: lScore, text: lText, tag: le.tagName.toLowerCase(), classStr: lClass.slice(0, 60), fromBottom: Math.round(lFromBottom), fromRight: Math.round(lFromRight), w: lW, h: lH, source: sourcePrefix + 'last-button' });
+            } catch (e) {}
+          }
+        } catch (e) {}
+      }
 
       if (candidates.length === 0) return { found: false, clicked: false, reason: 'no-candidate' };
       // 去重 + 排序
@@ -993,33 +1476,22 @@ export function buildPublishButtonClicker(keyword: string): string {
       unique.sort(function (a, b) { return b.score - a.score; });
       var target = unique[0];
 
-      // 对目标及其祖先触发事件序列
-      var ancestors = [];
-      var cur = target.el;
-      for (var ai = 0; ai < 6 && cur && cur !== document.body; ai++) {
-        ancestors.push(cur);
-        cur = cur.parentElement;
-      }
+      // 只对目标元素本身触发点击（防止对祖先元素重复触发导致平台检测到重复点击）
       var initialUrl = location.href;
-      for (var ri = 0; ri < ancestors.length; ri++) {
-        try {
-          ancestors[ri].scrollIntoView({ block: 'center', behavior: 'instant' in window ? 'instant' : 'auto' });
-          try { ancestors[ri].click(); } catch (e) {}
-          var r = ancestors[ri].getBoundingClientRect ? ancestors[ri].getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
-          var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-          var mi = { bubbles: true, cancelable: true, view: window, detail: 1, clientX: cx, clientY: cy, button: 0, buttons: 1 };
-          try {
-            ancestors[ri].dispatchEvent(new MouseEvent('mousedown', mi));
-            ancestors[ri].dispatchEvent(new MouseEvent('focus', mi));
-            ancestors[ri].dispatchEvent(new MouseEvent('mouseup', mi));
-            ancestors[ri].dispatchEvent(new MouseEvent('click', mi));
-          } catch (e) {}
-          try {
-            ancestors[ri].dispatchEvent(new PointerEvent('pointerdown', mi));
-            ancestors[ri].dispatchEvent(new PointerEvent('pointerup', mi));
-          } catch (e) {}
-        } catch (e) {}
-      }
+      try {
+        target.el.scrollIntoView({ block: 'center', behavior: 'instant' in window ? 'instant' : 'auto' });
+      } catch (e) {}
+      try {
+        target.el.click();
+      } catch (e) {}
+      try {
+        var r2 = target.el.getBoundingClientRect ? target.el.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+        var cx2 = r2.left + r2.width / 2, cy2 = r2.top + r2.height / 2;
+        var mi2 = { bubbles: true, cancelable: true, view: window, detail: 1, clientX: cx2, clientY: cy2, button: 0, buttons: 1 };
+        target.el.dispatchEvent(new MouseEvent('mousedown', mi2));
+        target.el.dispatchEvent(new MouseEvent('mouseup', mi2));
+        target.el.dispatchEvent(new MouseEvent('click', mi2));
+      } catch (e) {}
       var afterUrl = location.href;
       return { found: true, clicked: true, text: target.text, tag: target.tag, classStr: target.classStr, score: target.score, source: target.source, totalCandidates: unique.length, urlChanged: initialUrl !== afterUrl, top5: unique.slice(0, 5).map(function (c) { return { text: c.text, tag: c.tag, score: c.score, source: c.source }; }) };
     })();
@@ -1134,38 +1606,67 @@ export async function runStandardPublish(
       ? config.publishKeywords
       : ['立即发布', '发布作品', '确认发布', '发布'];
     let clicked = false;
+    let actuallyPublished = false;
+
     for (let i = 0; i < keywords.length; i++) {
       try {
         const res: any = await evalJS(win, buildPublishButtonClicker(keywords[i]), `click-${keywords[i]}`, log);
-        if (res && res.clicked) { clicked = true; log('info', 'submit', `点击成功: ${keywords[i]}`); break; }
+        if (!res || !res.clicked) { log('warn', 'submit', `关键词 "${keywords[i]}" 未点击到元素，继续尝试`); continue; }
+        clicked = true;
+        log('info', 'submit', `点击成功: ${keywords[i]}`);
+
+        // 等待页面稳定
+        await tracker.waitForStable(800, 8000);
+        await sleep(1500);
+
+        if (config.enablePostClickVerify) {
+          try {
+            const v1: any = await evalJS(win, buildPublishVerifier(), `verify-${i}`, log);
+            log('info', 'verify', `验证: ${v1.verdict} (url=${v1.url ? (v1.url as string).slice(-50) : 'n/a'})`);
+            if (v1.verdict === 'success' || v1.verdict === 'maybe_success_url_changed') {
+              actuallyPublished = true;
+              break;
+            }
+            if (v1.verdict === 'need_confirm') {
+              try { await evalJS(win, buildPublishButtonClicker('确认发布'), 'click-confirm', log); } catch { /* ignore */ }
+              await sleep(2500);
+              actuallyPublished = true;
+              break;
+            }
+            if (v1.verdict === 'saved_as_draft') {
+              const tryKeys = ['发布笔记', '立即发布', '发布视频'];
+              for (const kw of tryKeys) {
+                try {
+                  const r: any = await evalJS(win, buildPublishButtonClicker(kw), `click-${kw}`, log);
+                  if (r && r.clicked) { await sleep(2500); actuallyPublished = true; break; }
+                } catch { /* ignore */ }
+              }
+              if (actuallyPublished) break;
+            }
+            // has_error 或 unclear：不 break，继续试下一个关键词
+            log('warn', 'submit', `点击 "${keywords[i]}" 后页面未验证成功（${v1.verdict}），继续尝试其他按钮…`);
+          } catch (verifyErr) {
+            log('warn', 'submit', `验证异常，继续尝试: ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`);
+          }
+        } else {
+          break; // 无验证时，点到即止
+        }
       } catch (e) { log('warn', 'submit', `关键词 "${keywords[i]}" 点击异常`); }
     }
 
-    if (clicked) {
-      // 点击后可能触发导航 / 弹窗，先等稳定
-      await tracker.waitForStable(800, 8000);
-      await sleep(1500);
-
-      if (config.enablePostClickVerify) {
-        try {
-          const v1: any = await evalJS(win, buildPublishVerifier(), 'verify-1', log);
-          log('info', 'verify', `验证1: ${v1.verdict}`);
-          if (v1.verdict === 'need_confirm') {
-            await evalJS(win, buildPublishButtonClicker('确认发布'), 'click-confirm', log).catch(() => {});
-            await sleep(2500);
-          } else if (v1.verdict === 'saved_as_draft') {
-            const tryKeys = ['发布笔记', '立即发布', '发布视频'];
-            for (const kw of tryKeys) {
-              try {
-                const r: any = await evalJS(win, buildPublishButtonClicker(kw), `click-${kw}`, log);
-                if (r && r.clicked) { await sleep(2500); break; }
-              } catch { /* ignore */ }
-            }
-          }
-        } catch { /* ignore */ }
-      } else if (config.enableConfirmStep) {
-        try { await evalJS(win, buildPublishButtonClicker('确认'), 'click-confirm', log); } catch { /* ignore */ }
-      }
+    if (clicked && config.enablePostClickVerify && !actuallyPublished) {
+      // 兜底：所有关键词都试过但仍未验证成功，尝试直接点击页面上带 _button-primary_ 类的元素
+      try {
+        log('warn', 'submit', `兜底尝试：点击页面主按钮…`);
+        const fallback: any = await evalJS(win,
+          `(function(){ var els = document.querySelectorAll('[class*="_button-primary_"][class*="_button_3a3lq"], [class*="_button-primary_"]'); for(var i=0;i<els.length;i++){ try { els[i].click(); return {clicked:true, text:els[i].innerText || ''}; } catch(e){} } return {clicked:false}; })();`,
+          'click-fallback', log);
+        if (fallback && fallback.clicked) {
+          await tracker.waitForStable(800, 5000);
+          await sleep(2000);
+          actuallyPublished = true;
+        }
+      } catch { /* ignore */ }
     }
 
     // ✅ 发布成功后自动关闭窗口（给 3 秒展示时间）
@@ -1217,24 +1718,28 @@ export function buildPublishVerifier(): string {
         verdict: 'unknown'
       };
       try {
-        var hasPublishInUrl = url.indexOf('publish') !== -1;
-        if (!hasPublishInUrl && (url.indexOf('creator') !== -1 || url.indexOf('home') !== -1)) result.leftPublishPage = true;
+        // 严格判断是否离开发布页：URL 中没有 /publish/video/article 等路径，但包含 manage/center/creator/home 等管理页路径
+        var isPublishPage = /\/publish\b|\/article\/publish|\/post\b|\/upload\b/.test(url);
+        var isManagePage = /\/manage|\/center|\/creator|\/articles\?|\/works\?|\/media|status=\d|from=publish/.test(url);
+        if (!isPublishPage && isManagePage) result.leftPublishPage = true;
       } catch (e1) {}
       try {
-        if (bodyText.indexOf('发布成功') !== -1 || bodyText.indexOf('发布完成') !== -1 || bodyText.indexOf('已发布成功') !== -1) result.hasSuccessText = true;
+        // 严格的成功文本：避免把"已发布成功，请勿重复点击"等提示误判
+        if (/\b发布成功\b|\b发布完成\b|\b已发布\b|\b已成功发布\b|\b内容已发布/.test(bodyText)) result.hasSuccessText = true;
       } catch (e2) {}
       try {
-        if (bodyText.indexOf('草稿') !== -1 || bodyText.indexOf('已保存') !== -1) result.hasDraftText = true;
+        if (/\b草稿\b|\b已保存\b|\b存为草稿/.test(bodyText)) result.hasDraftText = true;
       } catch (e3) {}
       try {
-        if (bodyText.indexOf('确认发布') !== -1 || bodyText.indexOf('确定发布') !== -1 || bodyText.indexOf('是否发布') !== -1) result.hasConfirmText = true;
+        if (/\b确认发布\b|\b确定发布\b|\b是否发布\b/.test(bodyText)) result.hasConfirmText = true;
       } catch (e4) {}
       try {
-        var errWords = ['发布失败', '失败', '格式错误', '不能为空', '缺少必要', '无法发布'];
-        for (var i = 0; i < errWords.length; i++) {
-          if (bodyText.indexOf(errWords[i]) !== -1) {
+        // 严格错误关键词：避免把"请填写标题"、"请勿重复点击"等提示误判为发布失败
+        var errWords = ['发布失败', '提交失败', '无法发布', '上传失败', '格式不支持', '内容违规', '审核不通过', '网络异常，请重试'];
+        for (var ei = 0; ei < errWords.length; ei++) {
+          if (bodyText.indexOf(errWords[ei]) !== -1) {
             result.hasErrorText = true;
-            result.errorMessage = errWords[i];
+            result.errorMessage = errWords[ei];
             break;
           }
         }
