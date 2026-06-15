@@ -298,33 +298,52 @@ export async function uploadViaCDP(
 
     // 步骤 A：点击上传按钮，让页面创建 input[type=file]
     // （快手等平台是懒创建的：需要先点击"上传视频"按钮才会创建 file input）
+    // 关键点：只点击真正的交互元素（<button>/<a>），不要误点页面标题、侧边栏等纯文本容器
     try {
       log('info', 'upload', `[A] 点击上传按钮，让页面创建 file input…`);
       const clickScript = `
         (function () {
           var candidates = [];
-          // 1. 优先点击 class 含 _upload-btn 的按钮（快手专用）
+          // 判断元素是否真的可交互：是 <button>/<a> 或有 role=button；排除明显是导航/标题的容器
+          function isInteractive(el) {
+            try {
+              var tag = (el.tagName || '').toLowerCase();
+              if (tag === 'button' || tag === 'a' || tag === 'input') return true;
+              var role = el.getAttribute && el.getAttribute('role');
+              if (role === 'button' || role === 'link') return true;
+              var cls = el.getAttribute && el.getAttribute('class') || '';
+              if (cls.indexOf('_upload-btn') !== -1 || cls.indexOf('upload-btn') !== -1) return true;
+              // 排除明显是导航/标题的文字容器
+              if (cls.indexOf('header') !== -1 || cls.indexOf('nav') !== -1 || cls.indexOf('sidebar') !== -1) return false;
+              // 排除特别宽/高的元素（通常是容器不是按钮）
+              if (el.offsetWidth > 500 || el.offsetHeight > 100) return false;
+              return false;
+            } catch (e) { return false; }
+          }
+          // 1. 优先点击 class 含 _upload-btn 的元素（快手专用 class）
           try {
-            var classBtns = document.querySelectorAll('button[class*=_upload-btn], [class*=_upload-btn] button, [class*=_upload-btn_]');
+            var classBtns = document.querySelectorAll('[class*="_upload-btn"]');
             for (var ci = 0; ci < classBtns.length; ci++) {
-              if (classBtns[ci] && classBtns[ci].offsetWidth > 0) {
-                candidates.push({ el: classBtns[ci], score: 100, reason: 'class-upload-btn', text: classBtns[ci].innerText || '' });
+              var cb = classBtns[ci];
+              if (cb && cb.offsetWidth >= 20 && cb.offsetHeight >= 20) {
+                candidates.push({ el: cb, score: 1000, reason: 'class-upload-btn', text: (cb.innerText || cb.textContent || '').trim() });
               }
             }
           } catch (e) {}
-          // 2. 匹配文字"上传视频"的按钮
+          // 2. 匹配"上传视频/点击上传/上传文件"等文字的 <button> 或 <a>
           try {
-            var all = document.querySelectorAll('button, span, div, a');
-            for (var ti = 0; ti < all.length; ti++) {
-              var txt = (all[ti].innerText || all[ti].textContent || '').trim();
-              if (!txt) continue;
+            var buttons = document.querySelectorAll('button, a, [role="button"]');
+            for (var ti = 0; ti < buttons.length; ti++) {
+              var txt = (buttons[ti].innerText || buttons[ti].textContent || '').trim();
+              if (!txt || txt.length > 30) continue;
               var score = 0;
-              if (txt === '上传视频') score += 80;
-              else if (txt.indexOf('上传视频') !== -1) score += 50;
-              else if (txt === '点击上传') score += 70;
-              else if (txt === '上传') score += 40;
-              if (score > 0 && all[ti].offsetWidth >= 20 && all[ti].offsetHeight >= 20) {
-                candidates.push({ el: all[ti], score: score, reason: 'text-match', text: txt });
+              if (txt === '上传视频') score += 800;
+              else if (txt.indexOf('上传视频') !== -1) score += 600;
+              else if (txt === '点击上传') score += 700;
+              else if (txt === '上传文件') score += 500;
+              else if (txt === '上传') score += 300;
+              if (score > 0 && buttons[ti].offsetWidth >= 20 && buttons[ti].offsetHeight >= 20) {
+                candidates.push({ el: buttons[ti], score: score, reason: 'interactive-text-match', text: txt });
               }
             }
           } catch (e) {}
@@ -332,7 +351,6 @@ export async function uploadViaCDP(
           candidates.sort(function (a, b) { return b.score - a.score; });
           var target = candidates[0];
           try { target.el.click(); } catch (e) {}
-          // 也触发一次事件
           try { target.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); } catch (e) {}
           return { clicked: true, count: candidates.length, text: target.text.slice(0, 60), reason: target.reason };
         })();
@@ -1523,6 +1541,8 @@ export interface StandardPublishConfig {
   enablePostClickVerify?: boolean;
   /** 标题/正文填写后等待的毫秒，让 React 状态更新 */
   fillWaitMs?: number;
+  /** 发布成功后多少毫秒再自动关闭窗口（默认 8000ms），留给平台完成异步上传/处理 */
+  autoCloseWaitMs?: number;
 }
 
 export async function runStandardPublish(
@@ -1607,6 +1627,9 @@ export async function runStandardPublish(
       : ['立即发布', '发布作品', '确认发布', '发布'];
     let clicked = false;
     let actuallyPublished = false;
+    // 记录点击前的 URL — 用于判断点击是否真正生效（URL 变化即视为成功）
+    let initialUrl = '';
+    try { initialUrl = await win.webContents.getURL(); } catch { initialUrl = ''; }
 
     for (let i = 0; i < keywords.length; i++) {
       try {
@@ -1615,15 +1638,26 @@ export async function runStandardPublish(
         clicked = true;
         log('info', 'submit', `点击成功: ${keywords[i]}`);
 
-        // 等待页面稳定
-        await tracker.waitForStable(800, 8000);
-        await sleep(1500);
+        // 关键改动 1：延长等待（上传/发布后可能需要几秒才导航）
+        await tracker.waitForStable(800, 15000);
+        await sleep(2000);
+
+        // 关键改动 2：点击后检查 URL 是否变化（导航到管理/内容页 = 发布成功）
+        let currentUrl = '';
+        try { currentUrl = await win.webContents.getURL(); } catch { currentUrl = ''; }
+        if (currentUrl && initialUrl && currentUrl !== initialUrl) {
+          // URL 变化 → 发布按钮生效，直接 break
+          log('info', 'submit', `✅ URL 已变化（${(initialUrl as string).slice(-40)} → ${(currentUrl as string).slice(-40)}），视为发布成功`);
+          actuallyPublished = true;
+          break;
+        }
 
         if (config.enablePostClickVerify) {
           try {
             const v1: any = await evalJS(win, buildPublishVerifier(), `verify-${i}`, log);
             log('info', 'verify', `验证: ${v1.verdict} (url=${v1.url ? (v1.url as string).slice(-50) : 'n/a'})`);
-            if (v1.verdict === 'success' || v1.verdict === 'maybe_success_url_changed') {
+            // 关键改动 3：离开发布页（leftPublishPage=true）也视为成功
+            if (v1.verdict === 'success' || v1.verdict === 'maybe_success_url_changed' || v1.leftPublishPage) {
               actuallyPublished = true;
               break;
             }
@@ -1643,10 +1677,17 @@ export async function runStandardPublish(
               }
               if (actuallyPublished) break;
             }
-            // has_error 或 unclear：不 break，继续试下一个关键词
-            log('warn', 'submit', `点击 "${keywords[i]}" 后页面未验证成功（${v1.verdict}），继续尝试其他按钮…`);
+            log('warn', 'submit', `点击 "${keywords[i]}" 后页面未验证成功（${v1.verdict}），继续尝试…`);
           } catch (verifyErr) {
-            log('warn', 'submit', `验证异常，继续尝试: ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`);
+            // 关键改动 4：verify 抛异常时再次检查 URL，已导航即视为成功
+            try { currentUrl = await win.webContents.getURL(); } catch { currentUrl = ''; }
+            if (currentUrl && initialUrl && currentUrl !== initialUrl) {
+              log('info', 'submit', `✅ verify 抛异常但 URL 已变化，视为发布成功`);
+              actuallyPublished = true;
+              break;
+            } else {
+                log('warn', 'submit', `验证异常，继续尝试: ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`);
+            }
           }
         } else {
           break; // 无验证时，点到即止
@@ -1669,11 +1710,12 @@ export async function runStandardPublish(
       } catch { /* ignore */ }
     }
 
-    // ✅ 发布成功后自动关闭窗口（给 3 秒展示时间）
+    // ✅ 发布成功后自动关闭窗口（给 8 秒让平台完成异步上传/处理）
     if (win && !win.isDestroyed()) {
-      log('info', 'auto-close', `🎯 发布成功！3 秒后自动关闭发布窗口…`);
+      const waitMs = config.autoCloseWaitMs || 8000;
+      log('info', 'auto-close', `🎯 发布成功！${(waitMs / 1000).toFixed(0)} 秒后自动关闭发布窗口…`);
       try {
-        await sleep(3000);
+        await sleep(waitMs);
         if (!win.isDestroyed()) {
           win.destroy();
           log('info', 'auto-close', `✅ 发布窗口已关闭`);
