@@ -31,12 +31,12 @@
         stripe
         style="margin-top: 12px"
       >
-        <el-table-column label="平台" width="100">
+        <el-table-column label="平台" width="90">
           <template #default="{ row }">
             <span>{{ platformIcon(row.platform) }} {{ platformName(row.platform) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="账号" min-width="220">
+        <el-table-column label="账号" min-width="200">
           <template #default="{ row }">
             <div style="display:flex; align-items:center; gap:10px">
               <el-avatar
@@ -61,7 +61,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="平台账号" width="140">
+        <el-table-column label="平台账号" width="110">
           <template #default="{ row }">
             <div v-if="row.platformAccountId" style="font-size:13px; color:#303133">
               <span style="color:#909399; font-size:12px">{{ accountStore.platforms.find((x) => x.key === row.platform)?.platformAccountLabel || '账号' }}</span>
@@ -71,19 +71,19 @@
             <span v-else style="color:#c0c4cc; font-size:12px">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="状态" width="80">
           <template #default="{ row }">
             <el-tag v-if="row.status === 'active'" type="success" size="small">正常</el-tag>
             <el-tag v-else-if="row.status === 'expired'" type="warning" size="small">已过期</el-tag>
             <el-tag v-else type="info" size="small">未激活</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="授权时间" width="170">
+        <el-table-column label="授权时间" width="150">
           <template #default="{ row }">
             {{ fmt(row.authorizedAt) }}
           </template>
         </el-table-column>
-        <el-table-column label="最近检测" width="160">
+        <el-table-column label="最近检测" width="140">
           <template #default="{ row }">
             <span v-if="row.lastChecked" style="font-size:12px; color:#606266">
               {{ fmt(row.lastChecked) }}
@@ -91,17 +91,11 @@
             <span v-else style="font-size:12px; color:#c0c4cc">—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="remark" label="备注" min-width="140">
-          <template #default="{ row }">
-            <span style="color:#606266">{{ row.remark || '—' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="380" fixed="right">
+        <el-table-column label="操作" width="250" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="success" @click="openCreator(row)" :loading="openingId === row.id">
               <el-icon><Link /></el-icon>&nbsp;创作中心
             </el-button>
-            <el-button size="small" @click="editRemark(row)">编辑</el-button>
             <el-button size="small" type="warning" @click="refreshToken(row)" :loading="refreshingId === row.id" title="打开平台页面，刷新账号信息/粉丝数/关注数/获赞数">刷新</el-button>
             <el-button size="small" type="danger" @click="remove(row)">删除</el-button>
           </template>

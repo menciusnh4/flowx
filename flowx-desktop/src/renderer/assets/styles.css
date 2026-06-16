@@ -9,8 +9,10 @@ html,
 body,
 #app {
   height: 100%;
+  width: 100%;
   margin: 0;
   padding: 0;
+  overflow: hidden;
 }
 
 body {
@@ -20,6 +22,10 @@ body {
 /* 整体 layout 工具类 */
 .app-container {
   height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .app-header {
@@ -30,6 +36,7 @@ body {
   padding: 0 16px;
   border-bottom: 1px solid #ebeef5;
   height: 56px;
+  flex-shrink: 0;
 }
 
 .app-logo {
@@ -47,9 +54,11 @@ body {
 }
 
 .app-main {
+  flex: 1;
   padding: 16px;
   overflow-y: auto;
-  height: calc(100vh - 56px);
+  overflow-x: hidden;
+  min-height: 0;
   background: #f5f7fa;
 }
 
