@@ -33,4 +33,29 @@ export function registerAccountIpc(): void {
 
   // 用已保存登录态打开平台创作中心窗口（验证登录态）
   safeInvoke('account:openCreator', (id: string) => AccountService.openCreatorPlatform(id));
+
+  // 单个账号健康检测（静默检测，不弹用户可编辑的窗口）
+  safeInvoke('account:healthCheck', (id: string) => AccountService.checkAccountHealth(id));
+
+  // 批量检测所有账号的登录态/统计信息
+  safeInvoke('account:healthCheckAll', () => AccountService.checkAllAccountsHealth());
+
+  // 启动/配置定时健康检测（intervalMs = 0 停止）
+  safeInvoke(
+    'account:setHealthCheckInterval',
+    (intervalMs: number, initialDelayMs = 0) => {
+      AccountService.startHealthCheckTimer(intervalMs, initialDelayMs);
+      return true;
+    },
+  );
+
+  // 获取当前健康检测配置（供 UI 展示）
+  safeInvoke('account:getHealthCheckConfig', () => AccountService.getHealthCheckConfig());
+
+  // 更新健康检测配置（同时持久化保存 + 重启定时器）
+  safeInvoke(
+    'account:setHealthCheckConfig',
+    (cfg: { intervalMs: number; initialDelayMs?: number; enabled?: boolean }) =>
+      AccountService.setHealthCheckConfig(cfg),
+  );
 }

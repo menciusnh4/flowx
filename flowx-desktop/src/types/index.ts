@@ -41,6 +41,16 @@ export interface AccountCapabilities {
   publishArticle: boolean;
 }
 
+/** 账号健康检测配置（主进程与渲染进程共享） */
+export interface HealthCheckConfig {
+  /** 检测间隔（毫秒） */
+  intervalMs: number;
+  /** 首次启动延迟（毫秒） */
+  initialDelayMs: number;
+  /** 是否启用自动检测 */
+  enabled: boolean;
+}
+
 /** 账号信息（渲染层可见的脱敏版本） */
 export interface AccountInfo {
   id: string;
@@ -63,6 +73,8 @@ export interface AccountInfo {
   expiresAt?: number;
   /** 账号状态 */
   status: 'active' | 'expired' | 'disabled';
+  /** 最近一次健康检测的时间戳（毫秒），由 checkAccountHealth 维护 */
+  lastChecked?: number;
   /** 备注（可选） */
   remark?: string;
   /** 账号支持的发布能力（根据 platform 推断） */
@@ -104,6 +116,8 @@ export interface AccountCredential {
   authorizedAt: number;
   /** 大致过期时间（heuristic） */
   expiresAt?: number;
+  /** 最近一次健康检测的时间戳（毫秒），由 checkAccountHealth 维护 */
+  lastChecked?: number;
 }
 
 /** 发布内容请求 */

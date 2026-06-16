@@ -2,13 +2,24 @@
   <div>
     <div class="panel">
       <div style="display:flex; align-items:center; justify-content:space-between">
-        <h2 class="section-title" style="margin:0">账号管理</h2>
+        <div style="display:flex; align-items:center; gap:12px">
+          <h2 class="section-title" style="margin:0">账号管理</h2>
+          <el-tag v-if="accountStore.healthCheckConfig" size="small" :type="accountStore.healthCheckConfig.enabled ? 'success' : 'info'">
+            {{ accountStore.healthCheckConfig.enabled ? `定时检测：${Math.round(accountStore.healthCheckConfig.intervalMs / 60000)} 分钟` : '定时检测：已关闭' }}
+          </el-tag>
+        </div>
         <el-space>
           <el-button type="primary" @click="openAuthDialog">
             <el-icon><Plus /></el-icon>&nbsp; 授权新账号
           </el-button>
           <el-button @click="refresh">
             <el-icon><Refresh /></el-icon>&nbsp; 刷新
+          </el-button>
+          <el-button @click="openHealthCheckConfigDialog">
+            <el-icon><Setting /></el-icon>&nbsp; 检测设置
+          </el-button>
+          <el-button type="success" @click="checkAllHealth" :loading="checkAllLoading">
+            <el-icon><Monitor /></el-icon>&nbsp; 批量检测
           </el-button>
         </el-space>
       </div>
@@ -72,18 +83,26 @@
             {{ fmt(row.authorizedAt) }}
           </template>
         </el-table-column>
+        <el-table-column label="最近检测" width="160">
+          <template #default="{ row }">
+            <span v-if="row.lastChecked" style="font-size:12px; color:#606266">
+              {{ fmt(row.lastChecked) }}
+            </span>
+            <span v-else style="font-size:12px; color:#c0c4cc">—</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="remark" label="备注" min-width="140">
           <template #default="{ row }">
             <span style="color:#606266">{{ row.remark || '—' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="340" fixed="right">
+        <el-table-column label="操作" width="380" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="success" @click="openCreator(row)" :loading="openingId === row.id">
               <el-icon><Link /></el-icon>&nbsp;创作中心
             </el-button>
             <el-button size="small" @click="editRemark(row)">编辑</el-button>
-            <el-button size="small" type="warning" @click="refreshToken(row)" :loading="refreshingId === row.id">刷新</el-button>
+            <el-button size="small" type="warning" @click="refreshToken(row)" :loading="refreshingId === row.id" title="打开平台页面，刷新账号信息/粉丝数/关注数/获赞数">刷新</el-button>
             <el-button size="small" type="danger" @click="remove(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -96,6 +115,28 @@
         </div>
       </div>
     </div>
+
+    <!-- 健康检测配置对话框 -->
+    <el-dialog v-model="healthCheckDialogVisible" title="定时检测设置" width="440px">
+      <el-form :model="healthCheckForm" label-width="110px">
+        <el-form-item label="启用定时检测">
+          <el-switch v-model="healthCheckForm.enabled" />
+        </el-form-item>
+        <el-form-item label="检测间隔">
+          <el-select v-model="healthCheckForm.intervalMinutes" :disabled="!healthCheckForm.enabled" style="width:100%">
+            <el-option v-for="opt in healthCheckIntervalOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="首次延迟">
+          <el-input-number v-model="healthCheckForm.initialDelayMinutes" :min="1" :max="60" :disabled="!healthCheckForm.enabled" style="width:100%" />
+          <span style="font-size:12px; color:#909399; margin-left:110px; display:block; margin-top:-10px">应用启动后多少分钟开始第一次检测（默认为 5 分钟）</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="healthCheckDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveHealthCheckConfig" :loading="savingConfig">保存</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 选择平台授权对话框 -->
     <el-dialog v-model="authVisible" title="选择平台授权" width="460px">
@@ -137,7 +178,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Refresh, Link } from '@element-plus/icons-vue';
+import { Plus, Refresh, Link, Monitor, Setting } from '@element-plus/icons-vue';
 import { useAccountStore } from '../stores/account';
 import { electronApi } from '../utils/electron';
 import type { AccountInfo } from '../../types';
@@ -151,6 +192,23 @@ const openingId = ref<string>('');
 const editVisible = ref(false);
 const editRow = reactive<{ id: string; nickname: string; remark: string }>({ id: '', nickname: '', remark: '' });
 const saving = ref(false);
+const checkAllLoading = ref(false);
+const healthCheckDialogVisible = ref(false);
+const savingConfig = ref(false);
+const healthCheckIntervalOptions = [
+  { label: '15 分钟', value: 15 },
+  { label: '30 分钟', value: 30 },
+  { label: '1 小时', value: 60 },
+  { label: '2 小时', value: 120 },
+  { label: '6 小时', value: 360 },
+  { label: '12 小时', value: 720 },
+  { label: '24 小时', value: 1440 },
+];
+const healthCheckForm = reactive({
+  enabled: true,
+  intervalMinutes: 60,
+  initialDelayMinutes: 5,
+});
 
 function fmt(t: number) {
   if (!t) return '—';
@@ -262,9 +320,64 @@ async function refreshToken(row: AccountInfo) {
   }
 }
 
+/** 批量检测所有账号 */
+async function checkAllHealth() {
+  if (accountStore.accounts.length === 0) {
+    ElMessage.warning('暂无账号，无需检测');
+    return;
+  }
+  checkAllLoading.value = true;
+  try {
+    ElMessage.info(`开始检测 ${accountStore.accounts.length} 个账号，这可能需要几分钟...`);
+    await accountStore.checkAllAccountsHealth();
+    ElMessage.success('所有账号检测完成');
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    checkAllLoading.value = false;
+  }
+}
+
+/** 打开健康检测设置对话框 */
+async function openHealthCheckConfigDialog() {
+  try {
+    const cfg = await accountStore.loadHealthCheckConfig();
+    healthCheckForm.enabled = cfg.enabled;
+    healthCheckForm.intervalMinutes = Math.round(cfg.intervalMs / 60000);
+    healthCheckForm.initialDelayMinutes = Math.max(1, Math.round(cfg.initialDelayMs / 60000));
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e));
+  }
+  healthCheckDialogVisible.value = true;
+}
+
+/** 保存健康检测配置 */
+async function saveHealthCheckConfig() {
+  savingConfig.value = true;
+  try {
+    await accountStore.setHealthCheckConfig({
+      intervalMs: healthCheckForm.intervalMinutes * 60000,
+      initialDelayMs: healthCheckForm.initialDelayMinutes * 60000,
+      enabled: healthCheckForm.enabled,
+    });
+    ElMessage.success(
+      healthCheckForm.enabled
+        ? `已保存：定时检测间隔 ${healthCheckForm.intervalMinutes} 分钟`
+        : '已关闭定时检测',
+    );
+    healthCheckDialogVisible.value = false;
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    savingConfig.value = false;
+  }
+}
+
 onMounted(async () => {
   await accountStore.loadPlatforms();
   await accountStore.refreshAccounts();
+  // 异步加载健康检测配置（不阻塞 UI）
+  accountStore.loadHealthCheckConfig().catch(() => {});
 });
 </script>
 

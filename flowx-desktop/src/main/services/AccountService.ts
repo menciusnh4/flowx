@@ -8,6 +8,7 @@ import type {
   AccountCredential,
   AccountInfo,
   PlatformType,
+  HealthCheckConfig,
 } from '../../types';
 
 // =======================================================================
@@ -19,6 +20,13 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
 // 账号服务
 // =======================================================================
 const STORAGE_KEY = 'accounts';
+const HEALTH_CHECK_CONFIG_KEY = 'healthCheckConfig';
+
+const DEFAULT_HEALTH_CHECK_CONFIG: HealthCheckConfig = {
+  intervalMs: 60 * 60 * 1000, // 1 小时
+  initialDelayMs: 5 * 60 * 1000, // 5 分钟
+  enabled: true,
+};
 
 function genId(prefix: string): string {
   return prefix + '_' + crypto.randomBytes(8).toString('hex');
@@ -26,12 +34,240 @@ function genId(prefix: string): string {
 
 export class AccountService {
   private static ready = false;
+  /** 定时健康检测的 interval 对象（避免重复启动） */
+  private static healthCheckTimer: NodeJS.Timeout | null = null;
+  /** 当前健康检测配置（从存储中读取） */
+  private static healthCheckConfig: HealthCheckConfig = { ...DEFAULT_HEALTH_CHECK_CONFIG };
+  /** 是否正在进行健康检测（避免重复调度） */
+  private static healthCheckInProgress = false;
+
+  /** 从存储中读取健康检测配置（若不存在则返回默认值） */
+  private static loadHealthCheckConfig(): HealthCheckConfig {
+    try {
+      const store = getStore();
+      const raw = store.get(HEALTH_CHECK_CONFIG_KEY as any) as HealthCheckConfig | undefined;
+      if (raw && typeof raw.intervalMs === 'number') {
+        return { ...DEFAULT_HEALTH_CHECK_CONFIG, ...raw };
+      }
+    } catch (e) {
+      logger.warn('[Account-Health] 读取配置失败，使用默认值:', (e as Error).message);
+    }
+    return { ...DEFAULT_HEALTH_CHECK_CONFIG };
+  }
+
+  /** 保存健康检测配置到存储 */
+  private static saveHealthCheckConfig(cfg: HealthCheckConfig): void {
+    try {
+      const store = getStore();
+      store.set(HEALTH_CHECK_CONFIG_KEY as any, cfg);
+    } catch (e) {
+      logger.warn('[Account-Health] 保存配置失败:', (e as Error).message);
+    }
+  }
+
+  /** 获取当前健康检测配置（供 UI 展示） */
+  static getHealthCheckConfig(): HealthCheckConfig {
+    return { ...AccountService.healthCheckConfig };
+  }
+
+  /** 更新并保存健康检测配置。同时重启定时器（若启用）。 */
+  static setHealthCheckConfig(cfg: Partial<HealthCheckConfig> & { intervalMs: number }): HealthCheckConfig {
+    AccountService.healthCheckConfig = {
+      ...AccountService.healthCheckConfig,
+      ...cfg,
+    };
+    AccountService.saveHealthCheckConfig(AccountService.healthCheckConfig);
+
+    if (AccountService.ready) {
+      // 应用启动后才重启定时器（init 时会另行调用一次）
+      AccountService.applyTimerFromConfig();
+    }
+    return { ...AccountService.healthCheckConfig };
+  }
+
+  /** 根据当前配置启动 / 停止定时器 */
+  private static applyTimerFromConfig(): void {
+    const cfg = AccountService.healthCheckConfig;
+    if (AccountService.healthCheckTimer) {
+      clearTimeout(AccountService.healthCheckTimer as unknown as NodeJS.Timeout);
+      AccountService.healthCheckTimer = null;
+    }
+    if (!cfg.enabled || cfg.intervalMs <= 0) {
+      logger.info('[Account-Health] 定时健康检测已禁用');
+      return;
+    }
+    const runOnce = () => {
+      AccountService.checkAllAccountsHealth().catch((err) => {
+        logger.warn('[Account-Health] ❌ 健康检测异常:', (err as Error).message);
+      });
+      AccountService.healthCheckTimer = setTimeout(runOnce, AccountService.healthCheckConfig.intervalMs) as unknown as NodeJS.Timeout;
+    };
+    AccountService.healthCheckTimer = setTimeout(
+      runOnce,
+      cfg.initialDelayMs > 0 ? cfg.initialDelayMs : cfg.intervalMs,
+    ) as unknown as NodeJS.Timeout;
+    logger.info(
+      `[Account-Health] 定时健康检测已启用，间隔 ${Math.round(cfg.intervalMs / 60000)} 分钟，首次延迟 ${Math.round(cfg.initialDelayMs / 60000)} 分钟`,
+    );
+  }
 
   static init() {
     if (AccountService.ready) return;
     AccountService.ready = true;
     AccountService.checkAllExpiration();
+
+    // 读取持久化配置并启动定时器
+    AccountService.healthCheckConfig = AccountService.loadHealthCheckConfig();
+    AccountService.applyTimerFromConfig();
+
     logger.info('[Account] 账号服务初始化完成，支持平台:', getAllPlatforms().map((p) => p.key).join(', '));
+  }
+
+  /** 开启/更新定时健康检测定时器（兼容旧签名：intervalMs <= 0 表示停止） */
+  static startHealthCheckTimer(intervalMs: number, initialDelayMs = 0): void {
+    AccountService.setHealthCheckConfig({
+      intervalMs,
+      initialDelayMs,
+      enabled: intervalMs > 0,
+    });
+  }
+
+  static stopHealthCheckTimer(): void {
+    if (AccountService.healthCheckTimer) {
+      clearTimeout(AccountService.healthCheckTimer);
+      AccountService.healthCheckTimer = null;
+    }
+  }
+
+  /**
+   * 单个账号的健康检测：
+   *   打开一个隐藏窗口，使用账号的 partition（已保存的 cookies 会自动生效），
+   *   调用对应平台的 detectLoggedIn 验证登录态；
+   *   若登录仍有效，尝试刷新粉丝/关注/获赞数，并更新 lastChecked。
+   *
+   * 返回：更新后的 AccountInfo（若失败则返回更新了 status='expired'）
+   */
+  static async checkAccountHealth(id: string): Promise<AccountInfo | null> {
+    const cred = AccountService.loadCredentials().find((c) => c.id === id);
+    if (!cred) {
+      logger.warn(`[Account-Health] 账号不存在: ${id}`);
+      return null;
+    }
+    const platform = getPlatform(cred.platform);
+    if (!platform) {
+      logger.warn(`[Account-Health] 未知平台: ${cred.platform}`);
+      return null;
+    }
+
+    logger.info(`[Account-Health] 🔍 开始检测 (${cred.platform} / ${cred.nickname})`);
+
+    const partition = `persist:account_${id}`;
+    const win = new BrowserWindow({
+      width: 1280, height: 880,
+      title: `检测登录态 - ${cred.nickname || id}`,
+      show: false,  // 隐藏窗口，静默检测
+      autoHideMenuBar: true,
+      webPreferences: {
+        partition,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        spellcheck: false,
+      },
+    });
+    win.setMenuBarVisibility(false);
+
+    // 抖音：应用反崩溃配置（跳过抖音签名 cookie、移除反调试参数等）
+    try {
+      if (cred.platform === 'douyin') {
+        applyDouyinAntiCrash(win, cred.id, (level, stage, message, data) => {
+          logger[level](`[Account-Health][${stage}] ${message}`, data || '');
+        });
+      }
+    } catch { /* ignore */ }
+
+    try {
+      await win.loadURL(platform.meta.homeUrl);
+    } catch (e) {
+      logger.warn(`[Account-Health] 加载页面失败: ${(e as Error).message}`);
+    }
+
+    // 等待 5 秒，让 cookies / 页面初始化
+    await new Promise((r) => setTimeout(r, 5000));
+
+    const check = await platform.detectLoggedIn(win);
+    logger.info(`[Account-Health]   → 登录态: loggedIn=${check.loggedIn}`);
+
+    // 更新账号信息（即使未登录也更新 lastChecked，便于 UI 展示）
+    const list = AccountService.loadCredentials();
+    const idx = list.findIndex((c) => c.id === id);
+    if (idx < 0) {
+      try { win.destroy(); } catch { /* noop */ }
+      return null;
+    }
+
+    list[idx].lastChecked = Date.now();
+
+    if (check.loggedIn) {
+      // 登录有效：尝试刷新统计信息（粉丝/关注/获赞）
+      try {
+        const extracted = await platform.extractPageInfo(win);
+        if (extracted.nickname) list[idx].nickname = extracted.nickname;
+        if (extracted.avatar) list[idx].avatar = extracted.avatar;
+        if (extracted.platformAccountId) list[idx].platformAccountId = extracted.platformAccountId;
+        if (typeof extracted.fansCount === 'number') list[idx].fansCount = extracted.fansCount;
+        if (typeof extracted.followCount === 'number') list[idx].followCount = extracted.followCount;
+        if (typeof extracted.likeCount === 'number') list[idx].likeCount = extracted.likeCount;
+        if (!list[idx].expiresAt || list[idx].expiresAt < Date.now()) {
+          // 登录有效时，将过期时间向后顺延 14 天
+          list[idx].expiresAt = Date.now() + 14 * 24 * 3600 * 1000;
+        }
+        logger.info(`[Account-Health] ✅ ${cred.platform}/${cred.nickname}: 粉丝=${list[idx].fansCount ?? '-'}, 关注=${list[idx].followCount ?? '-'}, 获赞=${list[idx].likeCount ?? '-'}`);
+      } catch (e) {
+        logger.warn(`[Account-Health]   → 提取统计信息失败: ${(e as Error).message}`);
+      }
+    } else {
+      // 登录已失效，将 expiresAt 设为过去时间，toInfo() 会据此推断 status='expired'
+      list[idx].expiresAt = Date.now() - 1;
+      logger.info(`[Account-Health] ⚠️ ${cred.platform}/${cred.nickname}: 登录态失效，标记为 expired`);
+    }
+
+    AccountService.saveCredentials(list);
+
+    try { if (!win.isDestroyed()) win.destroy(); } catch { /* noop */ }
+
+    return AccountService.toInfo(list[idx]);
+  }
+
+  /**
+   * 批量检测所有账号健康状态（串行执行，避免同时打开过多浏览器窗口导致 CPU 占用太高）。
+   * 返回：更新后的账号列表。
+   */
+  static async checkAllAccountsHealth(): Promise<AccountInfo[]> {
+    if (AccountService.healthCheckInProgress) {
+      logger.info('[Account-Health] ⏳ 已有健康检测在进行中，本次跳过');
+      return AccountService.listAccounts();
+    }
+    AccountService.healthCheckInProgress = true;
+
+    try {
+      const accounts = AccountService.loadCredentials();
+      logger.info(`[Account-Health] ============ 开始批量健康检测，共 ${accounts.length} 个账号 ============`);
+
+      for (const cred of accounts) {
+        try {
+          await AccountService.checkAccountHealth(cred.id);
+          await new Promise((r) => setTimeout(r, 1500)); // 账号间留间隔，降低 CPU 占用
+        } catch (e) {
+          logger.warn(`[Account-Health] ${cred.id} 检测失败: ${(e as Error).message}`);
+        }
+      }
+
+      logger.info('[Account-Health] ============ 批量健康检测完成 ============');
+      return AccountService.listAccounts();
+    } finally {
+      AccountService.healthCheckInProgress = false;
+    }
   }
 
   static listAccounts(): AccountInfo[] {
@@ -714,6 +950,7 @@ export class AccountService {
       authorizedAt: c.authorizedAt,
       expiresAt: c.expiresAt,
       status,
+      lastChecked: c.lastChecked,
       remark,
       capabilities,
     };

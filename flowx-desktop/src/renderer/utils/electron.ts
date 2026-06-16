@@ -12,6 +12,7 @@ import type {
   UpdateInfo,
   PublishLogEntry,
   PublishLogQuery,
+  HealthCheckConfig,
 } from '../../types';
 
 type StatusCb = (evt: unknown) => void;
@@ -52,6 +53,31 @@ export const electronApi = {
     error?: string;
   }> {
     return invokeElectron('account.openCreator', 'account:openCreator', accountId);
+  },
+
+  /** 静默检测单个账号的登录态（不弹用户可编辑的窗口） */
+  async checkAccountHealth(id: string): Promise<AccountInfo | null> {
+    return invokeElectron('account.checkAccountHealth', 'account:healthCheck', id);
+  },
+
+  /** 批量检测所有账号登录态 */
+  async checkAllAccountsHealth(): Promise<AccountInfo[]> {
+    return invokeElectron('account.checkAllAccountsHealth', 'account:healthCheckAll');
+  },
+
+  /** 设置定时检测的间隔（毫秒），intervalMs <= 0 表示停止定时检测 */
+  async setHealthCheckInterval(intervalMs: number, initialDelayMs = 0): Promise<boolean> {
+    return invokeElectron('account.setHealthCheckInterval', 'account:setHealthCheckInterval', intervalMs, initialDelayMs);
+  },
+
+  /** 获取当前健康检测配置 */
+  async getHealthCheckConfig(): Promise<HealthCheckConfig> {
+    return invokeElectron('account.getHealthCheckConfig', 'account:getHealthCheckConfig');
+  },
+
+  /** 更新健康检测配置（同时持久化保存 + 重启定时器） */
+  async setHealthCheckConfig(cfg: { intervalMs: number; initialDelayMs?: number; enabled?: boolean }): Promise<HealthCheckConfig> {
+    return invokeElectron('account.setHealthCheckConfig', 'account:setHealthCheckConfig', cfg);
   },
 
   // 发布

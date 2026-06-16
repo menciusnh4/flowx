@@ -11,6 +11,7 @@ import type {
   PublishStatus,
   PublishLogEntry,
   PublishLogQuery,
+  HealthCheckConfig,
 } from '../types';
 
 // Preload 脚本：通过 contextBridge 暴露安全 API
@@ -61,6 +62,18 @@ contextBridge.exposeInMainWorld('electron', {
       failed: number;
       error?: string;
     }> => invoke('account:openCreator', id),
+    /** 静默检测单个账号的登录态 */
+    healthCheck: (id: string): Promise<AccountInfo | null> => invoke('account:healthCheck', id),
+    /** 静默检测所有账号 */
+    healthCheckAll: (): Promise<AccountInfo[]> => invoke('account:healthCheckAll'),
+    /** 配置定时检测：intervalMs 为毫秒间隔 */
+    setHealthCheckInterval: (intervalMs: number, initialDelayMs = 0): Promise<boolean> =>
+      invoke('account:setHealthCheckInterval', intervalMs, initialDelayMs),
+    /** 获取当前健康检测配置 */
+    getHealthCheckConfig: (): Promise<HealthCheckConfig> => invoke('account:getHealthCheckConfig'),
+    /** 更新健康检测配置（同时持久化保存 + 重启定时器） */
+    setHealthCheckConfig: (cfg: { intervalMs: number; initialDelayMs?: number; enabled?: boolean }): Promise<HealthCheckConfig> =>
+      invoke('account:setHealthCheckConfig', cfg),
   },
 
   // ========== 发布相关 ==========
@@ -135,6 +148,11 @@ declare global {
           failed: number;
           error?: string;
         }>;
+        healthCheck: (id: string) => Promise<AccountInfo | null>;
+        healthCheckAll: () => Promise<AccountInfo[]>;
+        setHealthCheckInterval: (intervalMs: number, initialDelayMs?: number) => Promise<boolean>;
+        getHealthCheckConfig: () => Promise<HealthCheckConfig>;
+        setHealthCheckConfig: (cfg: { intervalMs: number; initialDelayMs?: number; enabled?: boolean }) => Promise<HealthCheckConfig>;
       };
       publish: {
         submit: (req: PublishRequest) => Promise<string>;
