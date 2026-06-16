@@ -119,10 +119,13 @@ flowx/
 
 | 文档 | 路径 | 说明 |
 |:---|:---|:---|
-| **设计文档** | [`设计文档.md`](./设计文档.md) | 完整架构设计、模块说明、扩展指南 |
+| **设计文档** | [`设计文档.md`](./设计文档.md) | 完整架构设计、模块说明、扩展指南（含 PlatformDispatcher 工厂方法模式） |
+| **小红书自动发布技术文档** | [`flowx-desktop/docs/小红书自动发布技术文档.md`](./flowx-desktop/docs/小红书自动发布技术文档.md) | Closed Shadow DOM / xhs-publish-btn / CDP 穿透点击 |
+| **快手自动发布技术文档** | [`flowx-desktop/docs/快手自动发布技术文档.md`](./flowx-desktop/docs/快手自动发布技术文档.md) | Element UI / contenteditable / user-cnt__item 粉丝数解析 |
 | **抖音发布稳定性修复方案** | [`flowx-desktop/docs/抖音发布稳定性修复方案.md`](./flowx-desktop/docs/抖音发布稳定性修复方案.md) | Electron 28→31 升级完整记录，含问题分析、测试用例、经验总结 |
-| **平台适配器实现** | `flowx-desktop/src/main/services/PlatformAdapter.ts` | 各平台 publish() 实现（代码即文档） |
-| **发布引擎实现** | `flowx-desktop/src/main/services/PublishEngine.ts` | 并发控制 / IPC 推送 / 重启恢复 |
+| **平台适配器目录** | `flowx-desktop/src/main/services/platforms/` | xiaohongshu.ts / douyin.ts / kuaishou.ts（三个独立实现 + 共享 shared.ts） |
+| **平台分发器** | `flowx-desktop/src/main/services/platforms/PlatformDispatcher.ts` | createExecutor(platform, contentType) — 工厂方法模式的核心 |
+| **发布引擎实现** | `flowx-desktop/src/main/services/PublishEngine.ts` | 并发控制 / IPC 推送 / 重启恢复 / 任务状态管理 |
 
 ---
 

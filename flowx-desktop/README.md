@@ -192,8 +192,11 @@ Vue 响应式更新 → 进度面板刷新
 ## 相关文档
 
 - **项目总览 README**：[上层目录 README](../README.md)
-- **完整设计文档**：[../设计文档.md](../设计文档.md)
+- **完整设计文档**：[../设计文档.md](../设计文档.md)（包含 PlatformDispatcher 工厂方法模式）
+- **小红书自动发布技术文档**：[`docs/小红书自动发布技术文档.md`](./docs/小红书自动发布技术文档.md)（Closed Shadow DOM / CDP 穿透）
+- **快手自动发布技术文档**：[`docs/快手自动发布技术文档.md`](./docs/快手自动发布技术文档.md)（Element UI / contenteditable / user-cnt__item 提取）
 - **抖音发布稳定性修复方案**：[`docs/抖音发布稳定性修复方案.md`](./docs/抖音发布稳定性修复方案.md)
-- **PlatformAdapter.ts**：[`src/main/services/PlatformAdapter.ts`](./src/main/services/PlatformAdapter.ts)
+- **platforms/ 目录**：[`src/main/services/platforms/`](./src/main/services/platforms/)（三个平台独立实现 + shared.ts 共享工具）
+- **PlatformDispatcher.ts**：[`src/main/services/platforms/PlatformDispatcher.ts`](./src/main/services/platforms/PlatformDispatcher.ts)（工厂方法分发器）
 - **PublishEngine.ts**：[`src/main/services/PublishEngine.ts`](./src/main/services/PublishEngine.ts)
 - **AccountService.ts**：[`src/main/services/AccountService.ts`](./src/main/services/AccountService.ts)
