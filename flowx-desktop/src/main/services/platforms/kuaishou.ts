@@ -1,17 +1,34 @@
 import type { BrowserWindow } from 'electron';
-import type { PlatformAdapter, ExtractedAccountInfo, LoginCheckResult, ProgressCallback } from './types';
+import type {
+  PlatformAdapter,
+  ExtractedAccountInfo,
+  LoginCheckResult,
+  ProgressCallback,
+} from './types';
 import { runStandardPublish } from './shared';
 import { registerPlatform } from './registry';
-import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities } from '../../../types';
+import type {
+  PlatformMeta,
+  PublishRequest,
+  PublishItemProgress,
+  AccountCapabilities,
+} from '../../../types';
 
 /**
  * 快手平台适配器
  *
- * 发布流程：通过 runStandardPublish 复用标准框架（导航 → 登录检测 → 上传 → 填写 → 点击发布）
- * 差异化点：
- *   1. 账号 / 粉丝数 / 关注数 / 获赞 的 DOM 结构与抖音不同，使用快手专属选择器
- *   2. 发布按钮关键词与抖音略有差异（快手常用"发布作品"而非"立即发布"）
- *   3. 登录检测基于创作中心特有元素（"发布作品"、"粉丝"、"数据"等关键词）
+ * 架构：
+ *   - detectLoggedIn：检查 URL + body 关键词
+ *   - extractPageInfo：直接 DOM 查询 + 统计
+ *   - publishVideo/publishImage：委托给 runStandardPublish
+ *
+ * 页面结构（已知：
+ *   - 账号信息区：div.header-info-card
+ *     - img.user-image (头像
+ *     - .user-name (昵称
+ *     - .user-kwai-id (快手号
+ *     - .user-cnt > .user-cnt__item (粉丝/关注/获赞)
+ *   - 统计项文本格式：" 2<span>粉丝</span>" → textContent.trim() = "2粉丝"
  */
 
 const meta: PlatformMeta = {
@@ -23,8 +40,11 @@ const meta: PlatformMeta = {
   publishUrl: 'https://cp.kuaishou.com/article/publish/video',
   homeUrl: 'https://cp.kuaishou.com/',
   contentTypes: ['video', 'image'],
-  capabilities: { publishVideo: true, publishImage: true, publishArticle: false } as AccountCapabilities,
-  // 快手创作中心：<div class="user-name">xxx</div> 或带 hash 的 class 如 name-xxxx
+  capabilities: {
+    publishVideo: true,
+    publishImage: true,
+    publishArticle: false,
+  } as AccountCapabilities,
   nicknameSelectors: [
     '[class*="user-name"]',
     '[class*="nickname"]',
@@ -34,7 +54,6 @@ const meta: PlatformMeta = {
     '.header-info-card .user-name',
     '[class*="username"]',
   ],
-  // 快手头像：<img class="user-image" src="..."> 或 <div class="avatar-xxx"><img></div>
   avatarSelectors: [
     '[class*="avatar"] img',
     '[class*="user-image"]',
@@ -47,204 +66,123 @@ const meta: PlatformMeta = {
   loginKeywords: ['创作中心', '发布作品', '作品管理', '粉丝', '数据分析', '个人中心', '发布视频'],
 };
 
+/**
+ * 登录检测：
+ */
+async function detectLoggedIn(win: BrowserWindow): Promise<LoginCheckResult> {
+  try {
+    const info: any = await win.webContents.executeJavaScript(
+      `\n      (function () {\n        var bodyText = document.body ? (document.body.innerText || '') : '';\n        var curUrl = location.href;\n        var keywords = ${JSON.stringify(meta.loginKeywords)};\n        var matched = [];\n        var isLoginPage = /login|passport|redirectReason|signin|401|signup|sso|captcha/i.test(curUrl);\n        var nickSels = ${JSON.stringify(meta.nicknameSelectors)};\n        var hasAccountEl = false;\n        var rawNick = '';\n        for (var i = 0; i < nickSels.length; i++) {\n          var el = document.querySelector(nickSels[i]);\n          if (el && el.textContent && el.textContent.trim() && el.textContent.trim().length > 0) {\n            hasAccountEl = true;\n            rawNick = el.textContent.trim();\n            break;\n          }\n        }\n        for (var j = 0; j < keywords.length; j++) {\n          if (bodyText.indexOf(keywords[j]) !== -1) matched.push(keywords[j]);\n        }\n        var loggedIn = !isLoginPage && (hasAccountEl || matched.length >= 3);\n        return { loggedIn: loggedIn, matched: matched, title: document.title, url: curUrl, isLoginPage: isLoginPage, hasAccountEl: hasAccountEl, rawNick: rawNick };\n      })();\n    `,
+    );
+    return {
+      loggedIn: info.loggedIn,
+      url: info.url || '',
+      title: info.title || '',
+      matchedKeywords: info.matched,
+    };
+  } catch {
+    return { loggedIn: false, url: '', title: '' };
+  }
+}
+
+/**
+ * 从页面中提取账号信息
+ *
+ * 策略（完全同步的脚本，不使用 Promise 等异步结构
+ * 关键点：不使用 setTimeout 或 async 的元素：
+ *   - 第一步：在 document.body 里查询
+ *   - 扫 .el-popover / .user-info-popper / .header-info-card
+ *   - 每个 user-cnt__item 文本解析
+ *   - 从 cookie 中解析 user_id
+ *   - 最后把结果带回
+ */
+async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo> {
+  const result: any = await win.webContents.executeJavaScript(
+    `(function () {\n      var r = { nickname: '', avatar: '', platformAccountId: '', fansCount: null, followCount: null, likeCount: null };\n      var debug = { samples: [], hit: 0, errors: [], cookieUserId: null };\n\n      function parseCount(text) {\n        try {\n          var clean = (text || '').trim().replace(/[,\\s]/g, '');\n          var pm = clean.match(/^(\\d+(?:\\.\\d+)?)([万wWkK千])?$/);\n          if (!pm) return null;\n          var n = parseFloat(pm[1]);\n          if (pm[2]) {\n            if (/[万wW]/.test(pm[2])) n *= 10000;\n            else if (/[千kK]/.test(pm[2])) n *= 1000;\n          }\n          return Math.round(n);\n        } catch (e) { return null; }\n      }\n\n      // 处理单个元素：从文本中解析统计信息\n      function tryExtractItem(el) {\n        if (!el || !el.textContent) return;\n        var txt = el.textContent.trim();\n        if (!txt || txt.length > 40) return;\n        if (debug.samples.length < 10) debug.samples.push(txt.replace(/\\s+/g, ' '));\n        var lab = txt.match(/(粉丝|关注|获赞|点赞)/);\n        var num = txt.match(/(\\d+(?:\\.\\d+)?[万wWkK千]?)/);\n        if (!lab || !num) return;\n        var nv = parseCount(num[1]);\n        if (nv === null || nv < 0) return;\n        if (lab[1] === '粉丝' && r.fansCount === null) r.fansCount = nv;\n        else if (lab[1] === '关注' && r.followCount === null) r.followCount = nv;\n        else if ((lab[1] === '获赞' || lab[1] === '点赞') && r.likeCount === null) r.likeCount = nv;\n      }\n\n      // 第一步：在整个 document 中查询\n      try {\n        // 最直接的方式：直接查 user-cnt__item\n        var directItems = document.querySelectorAll('[class*=\"user-cnt__item\"], [class*=\"user_cnt__item\"]');\n        for (var di = 0; di < directItems.length; di++) {\n          tryExtractItem(directItems[di]);\n        }\n        // 兜底：再查 header-info-card / user-cnt / el-popover\n        var containers = document.querySelectorAll('.header-info-card, [class*=\"user-cnt\"], [class*=\"el-popover\"], .user-info-popper, [class*=\"user-info-popper\"]');\n        for (var ci = 0; ci < containers.length; ci++) {\n          var containerItems = containers[ci].querySelectorAll('div, span, p');\n          for (var ci2 = 0; ci2 < containerItems.length; ci2++) {\n            tryExtractItem(containerItems[ci2]);\n          }\n        }\n        // 最后兜底：全页所有 div/span\n        if (r.fansCount === null || r.followCount === null || r.likeCount === null) {\n          var fallback = document.querySelectorAll('div, span');\n          for (var fi = 0; fi < fallback.length; fi++) {\n            tryExtractItem(fallback[fi]);\n            if (r.fansCount !== null && r.followCount !== null && r.likeCount !== null) break;\n          }\n        }\n      } catch (e) { debug.errors.push('extract:' + (e && e.message)); }\n\n      debug.hit = (r.fansCount !== null ? 1 : 0) + (r.followCount !== null ? 1 : 0) + (r.likeCount !== null ? 1 : 0);\n\n      // 第二步：昵称 / 头像 / 快手号\n      try {\n        var nickEl = document.querySelector('.user-name, [class*=\"user-name\"], [class*=\"nickname\"]');\n        if (nickEl && nickEl.textContent) r.nickname = nickEl.textContent.trim();\n      } catch (e) { debug.errors.push('nick:' + e.message); }\n\n      try {\n        var avEl = document.querySelector('img.user-image, [class*=\"user-image\"] img, [class*=\"avatar\"] img, img[class*=\"img-\"]');\n        if (avEl && avEl.getAttribute) {\n          var src = avEl.getAttribute('src') || '';\n          if (/^https?:\\/\\//.test(src)) r.avatar = src;\n        }\n      } catch (e) { debug.errors.push('avatar:' + e.message); }\n\n      // 快手号：尝试 cookie 解析\n      try {\n        var pairs = (document.cookie || '').split(';');\n        for (var ci = 0; ci < pairs.length; ci++) {\n          var kv = (pairs[ci] || '').trim();\n          var eq = kv.indexOf('=');\n          if (eq < 1) continue;\n          var cname = decodeURIComponent(kv.substring(0, eq)).trim().toLowerCase();\n          var cval = kv.substring(eq + 1);\n          try { cval = decodeURIComponent(cval); } catch (_) { }\n          if ((cname === 'user_id' || cname === 'kuaishou_id' || cname === 'kwai_id' || cname === 'uid' || cname === 'uid_key')\n              && cval && /^[A-Za-z0-9_\\-]+$/.test(cval.trim())) {\n            r.platformAccountId = cval.trim();\n            debug.cookieUserId = cname;\n            break;\n          }\n        }\n      } catch (e) { debug.errors.push('cookie:' + e.message); }\n\n      r._debug = debug;\n      return r;\n    })();`,
+  ).catch((e: Error) => {
+    console.warn('[kuaishou] extractPageInfo failed', e.message);
+    return {} as any;
+  });
+
+  return {
+    nickname: result.nickname || '',
+    avatar: result.avatar || undefined,
+    platformAccountId: result.platformAccountId || undefined,
+    fansCount: typeof result.fansCount === 'number' ? result.fansCount : undefined,
+    followCount: typeof result.followCount === 'number' ? result.followCount : undefined,
+    likeCount: typeof result.likeCount === 'number' ? result.likeCount : undefined,
+    _debug: result._debug,
+  } as ExtractedAccountInfo & { _debug?: Record<string, unknown> };
+}
+
+/**
+ * 发布视频 — contentType === 'video'
+ */
+async function publishVideo(
+  accountId: string,
+  request: PublishRequest,
+  onProgress: ProgressCallback,
+): Promise<PublishItemProgress> {
+  return runStandardPublish(accountId, request, onProgress, {
+    platform: 'kuaishou',
+    meta: { publishUrl: meta.publishUrl, homeUrl: meta.homeUrl },
+    detectLoggedIn: (win) => detectLoggedIn(win),
+    publishKeywords: ['发布作品', '立即发布', '发布', '确认发布'],
+    enableConfirmStep: false,
+    enablePostClickVerify: true,
+    fillWaitMs: 1500,
+  });
+}
+
+/**
+ * 发布图文 — contentType === 'image'
+ */
+async function publishImage(
+  accountId: string,
+  request: PublishRequest,
+  onProgress: ProgressCallback,
+): Promise<PublishItemProgress> {
+  return runStandardPublish(accountId, request, onProgress, {
+    platform: 'kuaishou',
+    meta: { publishUrl: meta.publishUrl, homeUrl: meta.homeUrl },
+    detectLoggedIn: (win) => detectLoggedIn(win),
+    publishKeywords: ['发布作品', '发布', '立即发布', '确认发布'],
+    enableConfirmStep: false,
+    enablePostClickVerify: true,
+    fillWaitMs: 1500,
+  });
+}
+
+/**
+ * 兼容接口（不区分内容类型，默认视频
+ * @deprecated 请使用 publishVideo 或 publishImage
+ */
+async function publish(
+  accountId: string,
+  request: PublishRequest,
+  onProgress: ProgressCallback,
+): Promise<PublishItemProgress> {
+  const hasImageOnly = (request.mediaFiles || []).every((f) =>
+    /\.(jpg|jpeg|png|gif|webp|bmp|svg)$/i.test(f),
+  );
+  if (hasImageOnly || request.contentType === 'image') {
+    return publishImage(accountId, request, onProgress);
+  }
+  return publishVideo(accountId, request, onProgress);
+}
+
 const adapter: PlatformAdapter = {
   key: 'kuaishou',
   meta,
   capabilities: meta.capabilities,
-
-  async detectLoggedIn(win): Promise<LoginCheckResult> {
-    try {
-      const info: any = await win.webContents.executeJavaScript(`
-        (function () {
-          var bodyText = document.body ? (document.body.innerText || '') : '';
-          var curUrl = location.href;
-          var keywords = ${JSON.stringify(meta.loginKeywords)};
-          var matched = [];
-          var isLoginPage = /login|passport|redirectReason|signin|401|signup|sso|captcha/i.test(curUrl);
-          var nickSels = ${JSON.stringify(meta.nicknameSelectors)};
-          var hasAccountEl = false;
-          var rawNick = '';
-          for (var i = 0; i < nickSels.length; i++) {
-            var el = document.querySelector(nickSels[i]);
-            if (el && el.textContent && el.textContent.trim() && el.textContent.trim().length > 0) {
-              hasAccountEl = true;
-              rawNick = el.textContent.trim();
-              break;
-            }
-          }
-          for (var j = 0; j < keywords.length; j++) {
-            if (bodyText.indexOf(keywords[j]) !== -1) matched.push(keywords[j]);
-          }
-          var loggedIn = !isLoginPage && (hasAccountEl || matched.length >= 3);
-          return { loggedIn: loggedIn, matched: matched, title: document.title, url: curUrl, isLoginPage: isLoginPage, hasAccountEl: hasAccountEl, rawNick: rawNick };
-        })();
-      `);
-      return { loggedIn: info.loggedIn, url: info.url || '', title: info.title || '', matchedKeywords: info.matched };
-    } catch {
-      return { loggedIn: false, url: '', title: '' };
-    }
-  },
-
-  async extractPageInfo(win): Promise<ExtractedAccountInfo> {
-    const result: any = await win.webContents.executeJavaScript(`
-      (function () {
-        var r = { nickname: '', avatar: '', platformAccountId: '', fansCount: null, followCount: null, likeCount: null };
-        var nickSels = ${JSON.stringify(meta.nicknameSelectors)};
-        for (var si = 0; si < nickSels.length; si++) {
-          var el = document.querySelector(nickSels[si]);
-          if (el && el.textContent && el.textContent.trim()) { r.nickname = el.textContent.trim(); break; }
-        }
-        var avSels = ${JSON.stringify(meta.avatarSelectors)};
-        for (var ai = 0; ai < avSels.length; ai++) {
-          var el2 = document.querySelector(avSels[ai]);
-          if (el2 && el2.getAttribute) {
-            var src = el2.getAttribute('src') || '';
-            if (src && /^https?:\\/\\//.test(src)) { r.avatar = src; break; }
-          }
-        }
-        // 快手号：<div>快手号：12345678</div> 或 <span>快手号 12345678</span>
-        try {
-          var all = document.querySelectorAll('div, span, p');
-          for (var i = 0; i < all.length; i++) {
-            var txt = (all[i].textContent || '').trim();
-            var m = txt.match(/快手(号)?[\\s:：]*([0-9A-Za-z_\\-]+)/);
-            if (m && m[2]) { r.platformAccountId = m[2]; break; }
-          }
-        } catch (e) {}
-        // 兜底：从 cookie 解析 userId
-        if (!r.platformAccountId) {
-          try {
-            var ck = document.cookie || '';
-            var pairs = ck.split(';');
-            for (var ci = 0; ci < pairs.length; ci++) {
-              var kv = (pairs[ci] || '').trim();
-              var eq = kv.indexOf('=');
-              if (eq < 1) continue;
-              var cname = decodeURIComponent(kv.substring(0, eq)).trim().toLowerCase();
-              var cval = kv.substring(eq + 1);
-              try { cval = decodeURIComponent(cval); } catch (_) {}
-              var isUidName = (function (n) {
-                return n === 'user_id' || n === 'userid' || n === 'userId' || n === 'kuaishou_id' ||
-                       n === 'kwai_id' || n === 'kwaiuserid' ||
-                       n === 'uid' || n === 'uid_key' || n === 'kwai_uid';
-              })(cname);
-              if (isUidName && cval) {
-                cval = cval.trim();
-                if (cval.length >= 4 && cval.length <= 40 && /^[0-9A-Za-z_\\-]+$/.test(cval)) {
-                  r.platformAccountId = cval;
-                  break;
-                }
-              }
-            }
-          } catch (e) {}
-        }
-        // 粉丝/关注/获赞 — 快手创作者中心多种格式：
-        //   格式 A（同元素 label+数字）：<div class="xxx">粉丝 123</div> / <div class="xxx">关注 45</div>
-        //   格式 B（相邻元素）：<span>粉丝</span><span>123</span>
-        //   格式 C（统计卡片）：<div class="stat-card"><span>粉丝数</span><span>123</span></div>
-        //   格式 D（数字在前）：<div>123 粉丝</div>
-        try {
-          function parseCount(text) {
-            var clean = (text || '').trim().replace(/[,\\s]/g, '');
-            var pm = clean.match(/^(\\d+(?:\\.\\d+)?)([万千wWkK千])?$/);
-            if (!pm) return null;
-            var n = parseFloat(pm[1]);
-            if (pm[2]) {
-              if (/[万千wW]/.test(pm[2])) n *= 10000;
-              else if (/[千kK]/.test(pm[2])) n *= 1000;
-            }
-            return Math.round(n);
-          }
-          // 策略 A：优先匹配带统计关键词的元素（label+数字 或 数字+label）
-          var statItems = document.querySelectorAll('[class*="stat"], [class*="count"], [class*="cnt"], [class*="num"], [class*="number"], [class*="item-"], div > span');
-          for (var a = 0; a < statItems.length; a++) {
-            var t = (statItems[a].textContent || '').trim();
-            if (!t || t.length > 40) continue;
-            // A.1 "粉丝 123" / "关注 45" / "获赞 678"
-            var tm1 = t.match(/^(粉丝|关注|获赞|点赞)[\\s:：]*([\\d,]+(?:\\.\\d+)?(?:[万千wWkK])?)\\s*$/);
-            if (tm1) {
-              var n1 = parseCount(tm1[2]);
-              if (n1 !== null) {
-                if (tm1[1] === '粉丝' && r.fansCount === null) r.fansCount = n1;
-                else if (tm1[1] === '关注' && r.followCount === null) r.followCount = n1;
-                else if ((tm1[1] === '获赞' || tm1[1] === '点赞') && r.likeCount === null) r.likeCount = n1;
-              }
-              continue;
-            }
-            // A.2 "123 粉丝" / "45 关注" / "678 获赞"（数字在前）
-            var tm2 = t.match(/^([\\d,]+(?:\\.\\d+)?(?:[万千wWkK])?)[\\s:：]*(粉丝|关注|获赞|点赞)\\s*$/);
-            if (tm2) {
-              var n2 = parseCount(tm2[1]);
-              if (n2 !== null) {
-                if (tm2[2] === '粉丝' && r.fansCount === null) r.fansCount = n2;
-                else if (tm2[2] === '关注' && r.followCount === null) r.followCount = n2;
-                else if ((tm2[2] === '获赞' || tm2[2] === '点赞') && r.likeCount === null) r.likeCount = n2;
-              }
-              continue;
-            }
-            // A.3 "粉丝数：123" / "关注数 45"
-            var tm3 = t.match(/^(粉丝数|关注数|获赞数|点赞数)[\\s:：]*([\\d,]+(?:\\.\\d+)?(?:[万千wWkK])?)\\s*$/);
-            if (tm3) {
-              var n3 = parseCount(tm3[2]);
-              if (n3 !== null) {
-                if (/^粉丝/.test(tm3[1]) && r.fansCount === null) r.fansCount = n3;
-                else if (/^关注/.test(tm3[1]) && r.followCount === null) r.followCount = n3;
-                else if (/^获赞|^点赞/.test(tm3[1]) && r.likeCount === null) r.likeCount = n3;
-              }
-              continue;
-            }
-          }
-          // 策略 B：兜底相邻元素（label 与数字在不同子元素内）
-          if (r.fansCount === null || r.followCount === null || r.likeCount === null) {
-            var allNodes = document.querySelectorAll('div, span, p');
-            var currentLabel = null;
-            for (var j = 0; j < allNodes.length; j++) {
-              var t2 = (allNodes[j].textContent || '').trim();
-              if (!t2 || t2.length > 30) continue;
-              // B.1 标签元素："粉丝" / "关注" / "获赞"
-              if (/^(粉丝数?|关注数?|获赞数?|点赞数?)$/.test(t2)) { currentLabel = t2; continue; }
-              // B.2 后续的纯数字元素
-              if (currentLabel && /^[\\d,]+[.]?\\d*[万wWkK千]?$/.test(t2)) {
-                var nB = parseCount(t2);
-                if (nB !== null) {
-                  if (/^粉丝/.test(currentLabel) && r.fansCount === null) r.fansCount = nB;
-                  else if (/^关注/.test(currentLabel) && r.followCount === null) r.followCount = nB;
-                  else if (/^获赞|^点赞/.test(currentLabel) && r.likeCount === null) r.likeCount = nB;
-                }
-                currentLabel = null;
-              } else if (!/^(粉丝|关注|获赞|点赞)/.test(t2)) {
-                currentLabel = null;
-              }
-            }
-          }
-        } catch (e) {}
-        return r;
-      })();
-    `).catch(() => ({}));
-    return {
-      nickname: result.nickname || '',
-      avatar: result.avatar || undefined,
-      platformAccountId: result.platformAccountId || undefined,
-      fansCount: typeof result.fansCount === 'number' ? result.fansCount : undefined,
-      followCount: typeof result.followCount === 'number' ? result.followCount : undefined,
-      likeCount: typeof result.likeCount === 'number' ? result.likeCount : undefined,
-    };
-  },
-
-  async publish(accountId: string, request: PublishRequest, onProgress: ProgressCallback): Promise<PublishItemProgress> {
-    return runStandardPublish(accountId, request, onProgress, {
-      platform: 'kuaishou',
-      meta: { publishUrl: meta.publishUrl, homeUrl: meta.homeUrl },
-      detectLoggedIn: (win: BrowserWindow) => adapter.detectLoggedIn(win),
-      // 快手发布按钮关键词优先级：发布作品 > 立即发布 > 发布 > 确认发布
-      publishKeywords: ['发布作品', '立即发布', '发布', '确认发布'],
-      enableConfirmStep: false,
-      enablePostClickVerify: true,
-      fillWaitMs: 1500,
-    });
-  },
+  detectLoggedIn,
+  extractPageInfo,
+  publishVideo,
+  publishImage,
+  publish,
 };
 
 registerPlatform(adapter);
+
 export default adapter;
 export { meta as kuaishouMeta };

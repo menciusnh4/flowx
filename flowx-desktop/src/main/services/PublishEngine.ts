@@ -2,7 +2,6 @@ import { app, shell } from 'electron';
 import { getStore } from '../store/SecureStore';
 import { logger, writePublishLog, getPublishLogPath, getMainLogPath, queryPublishLogs, clearPublishLogs } from '../utils/logger';
 import { AccountService, injectAccountCookies } from './AccountService';
-import { getAdapter } from './PlatformAdapter';
 import type {
   PublishItemProgress,
   PublishRequest,
@@ -352,8 +351,9 @@ class PublishEngineClass {
       this.persist();
       this.notifyStatus(task);
 
-      // 调用平台适配器执行真实发布
-      const adapter = getAdapter(item.platform);
+      // 两级分发（工厂方法 + 适配器模式）：
+      //   Level 1: contentType → publishVideo / publishImage / publishArticle
+      //   Level 2: platform   → 对应平台的实现（xiaohongshu / douyin / kuaishou）
       const onProgress = (p: number, message?: string) => {
         const np = Math.min(100, Math.max(0, p));
         item.progress = np;
@@ -362,6 +362,10 @@ class PublishEngineClass {
         this.notifyStatus(task);
       };
 
+      const contentType = (task.request.contentType || 'video') as 'video' | 'image' | 'article';
+      const { createPublishExecutor } = await import('./platforms/PlatformDispatcher');
+      const executor = createPublishExecutor(item.platform, contentType);
+
       writePublishLog({
         ts: Date.now(),
         level: 'info',
@@ -369,11 +373,11 @@ class PublishEngineClass {
         accountId,
         platform: item.platform,
         stage: 'adapter',
-        message: `调用 ${item.platform} 适配器执行发布`,
-        data: { platform: item.platform },
+        message: `调用 ${item.platform} 适配器执行 ${executor.method}`,
+        data: { platform: item.platform, method: executor.method, contentType },
       });
 
-      const result = await adapter.publish(accountId, task.request, onProgress);
+      const result = await executor.execute(accountId, task.request, onProgress);
       item.status = result.status;
       item.progress = 100;
       item.resultUrl = result.resultUrl;

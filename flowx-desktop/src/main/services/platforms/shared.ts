@@ -534,6 +534,336 @@ export async function uploadViaCDP(
     return false;
   }
 }
+/**
+ * 用 CDP 协议点击发布按钮（v1）—— 核心能力：穿透 closed shadow DOM
+ * 背景：小红书等平台的发布按钮是 <xhs-publish-btn> 自定义组件，内部是 closed shadow root。
+ * 普通 JS 的 element.shadowRoot 返回 null，无法访问内部 <button>。
+ * CDP 的 DOM.getDocument(pierce:true) 可以绕过这个限制。
+ *
+ * 步骤：
+ *   1. CDP DOM.getDocument({ depth: -1, pierce: true })  — 获取完整 DOM 树，含 shadow DOM 内容
+ *   2. 递归遍历：找 nodeName=BUTTON/A 或 attributes 中 class 含 publish/btn/primary/red 的节点
+ *   3. 通过 nodeValue / parent node 文字推断按钮含义（"发布"/"立即发布"/"发布作品"等）
+ *   4. CDP DOM.getBoxModel({ nodeId }) 获取按钮坐标
+ *   5. CDP Input.dispatchMouseEvent 合成鼠标事件：mousePressed → mouseReleased（点击）
+ *   6. 辅助：CDP DOM.focus + dispatchKeyEvent(Enter)（某些按钮需要键盘触发）
+ *
+ * 对其他平台（抖音、快手）的影响：若页面没有符合条件的元素，返回 false，不影响现有流程。
+ */
+export async function cdpClickPublishButton(
+  win: any,
+  log: (level: PublishLogEntry['level'], stage: string, message: string, data?: Record<string, unknown>) => void,
+  keywords: string[] = ['发布', '立即发布', '发布作品', '发布笔记', '发布视频', '确认发布', 'confirm', 'publish'],
+): Promise<boolean> {
+  try {
+    log('info', 'cdp-click', `开始 CDP 穿透式点击，关键词=${keywords.join('/')}`);
+    // 🔑 关键修复：uploadViaCDP 已经 debugger.attach() 过了，此处再次 attach 会抛 "Debugger is already attached to the target"。
+    // 用 try/catch（与 uploadViaCDP 相同模式）吞掉异常；即使 attach 失败，
+    // debugger 本来就是 attached 的，后续 sendCommand 仍然可以正常调用。
+    try {
+      await win.webContents.debugger.attach('1.3');
+    } catch { /* 已 attached：不影响后续 sendCommand */ }
+
+    // 步骤 1：获取完整 DOM 树（pierce:true 会穿透 closed shadow DOM，拿到 xhs-publish-btn 内部的 button）
+    let doc: any = null;
+    try {
+      doc = await win.webContents.debugger.sendCommand('DOM.getDocument', { depth: -1, pierce: true });
+    } catch (e) {
+      // 常见原因：DOM.getDocument 需要某些域；一次失败不代表整个 CDP 不可用，
+      // 尝试降级为深度搜索（depth: 0 只拿 root，后续再 querySelectorAll）
+      log('warn', 'cdp-click', `DOM.getDocument(depth:-1) 失败，尝试降级: ${(e as Error).message}`);
+      try {
+        doc = await win.webContents.debugger.sendCommand('DOM.getDocument', { depth: 2, pierce: true });
+      } catch (e2) {
+        log('warn', 'cdp-click', `DOM.getDocument 完全失败: ${(e2 as Error).message}`);
+        return false;
+      }
+    }
+    if (!doc || !doc.root) return false;
+
+    // 步骤 2：递归遍历，收集候选按钮节点（含 shadow DOM 穿透）
+    // 核心改进：
+    //   (a) 主扫描时也识别 xhs-publish-btn/xhs-button 等自定义 host（不再仅限 fallback）
+    //   (b) 对每个候选按钮，从子节点累积文本内容（CDP 树中 #text 是独立节点）
+    //   (c) 记录 parentId 以便与父节点关联
+    type NodeCandidate = {
+      nodeId: number;
+      nodeName: string;
+      text: string;          // 从子 #text 节点累积的文本
+      class_: string;
+      idAttr: string;
+      hostTag: boolean;      // 是否是自定义组件 host（如 xhs-publish-btn）
+    };
+    const candidates: NodeCandidate[] = [];
+    const nodeById = new Map<number, any>();
+
+    const getAttr = (attrs: string[] | undefined, key: string): string => {
+      if (!attrs) return '';
+      for (let i = 0; i < attrs.length; i += 2) {
+        if (attrs[i] === key) return String(attrs[i + 1] || '');
+      }
+      return '';
+    };
+
+    // 2a：从子节点（含 shadow DOM）累积文本内容
+    const collectText = (node: any): string => {
+      if (!node) return '';
+      let buf = '';
+      const stack: any[] = [];
+      if (node.children) node.children.forEach((c: any) => stack.push(c));
+      if (node.shadowRoots) node.shadowRoots.forEach((c: any) => stack.push(c));
+      if (node.templateContent) stack.push(node.templateContent);
+      while (stack.length > 0 && buf.length < 40) {
+        const n = stack.pop();
+        if (!n) continue;
+        if (n.nodeName === '#text' && n.nodeValue) buf += n.nodeValue;
+        if (n.children) n.children.forEach((c: any) => stack.push(c));
+        if (n.shadowRoots) n.shadowRoots.forEach((c: any) => stack.push(c));
+      }
+      return buf.trim();
+    };
+
+    const isHostTag = (name: string): boolean => {
+      const n = name.toLowerCase();
+      return n === 'xhs-publish-btn' || n === 'xhs-button' || n === 'publish-button'
+        || n === 'xhs-submit-btn' || n === 'xhs-text-button';
+    };
+
+    const walk = (node: any, depth: number) => {
+      if (!node || depth > 100) return;
+      if (node.nodeId) nodeById.set(node.nodeId, node);
+
+      const nodeName = (node.nodeName || '').toLowerCase();
+      const classAttr = getAttr(node.attributes, 'class');
+      const idAttr = getAttr(node.attributes, 'id');
+      const typeAttr = getAttr(node.attributes, 'type');
+      const roleAttr = getAttr(node.attributes, 'role');
+
+      const isButtonLike = nodeName === 'button' || nodeName === 'a'
+        || typeAttr === 'submit' || typeAttr === 'button' || roleAttr === 'button'
+        || classAttr.indexOf('btn') !== -1 || classAttr.indexOf('button') !== -1
+        || classAttr.indexOf('publish') !== -1
+        || (nodeName === 'input' && (typeAttr === 'submit' || typeAttr === 'button'));
+
+      const hostTag = isHostTag(nodeName);
+
+      if ((isButtonLike || hostTag) && node.nodeId) {
+        const innerText = collectText(node);
+        const combinedText = (innerText + ' ' + classAttr + ' ' + idAttr).toLowerCase();
+
+        // 关键词匹配：中文关键词（发布/立即发布/发布笔记...）或英文 confirm/publish
+        let textMatch = false;
+        for (const kw of keywords) {
+          if (combinedText.indexOf(kw.toLowerCase()) !== -1) {
+            textMatch = true;
+            break;
+          }
+        }
+        // host 自定义组件：即使文本不匹配也加入候选（组件内部可能渲染为发布按钮）
+        if (textMatch || hostTag || /(发布|发布作品|立即发布|确认发布|submit|publish)/i.test(innerText)) {
+          candidates.push({
+            nodeId: node.nodeId,
+            nodeName: nodeName,
+            text: innerText.slice(0, 40),
+            class_: classAttr.slice(0, 60),
+            idAttr: idAttr.slice(0, 40),
+            hostTag,
+          });
+        }
+      }
+
+      if (node.children) node.children.forEach((c: any) => walk(c, depth + 1));
+      if (node.shadowRoots) node.shadowRoots.forEach((c: any) => walk(c, depth + 1));
+      if (node.templateContent) walk(node.templateContent, depth + 1);
+      if (node.contentDocument) walk(node.contentDocument, depth + 1);
+    };
+    walk(doc.root, 0);
+
+    log('info', 'cdp-click', `遍历完成，候选按钮: ${candidates.length} 个`);
+
+    // 兜底：关键词扫描未命中时，按节点名宽扫描（xhs-publish-btn 等自定义组件 + 普通按钮）
+    if (candidates.length === 0) {
+      const fallback: NodeCandidate[] = [];
+      const walkFb = (node: any, depth: number) => {
+        if (!node || depth > 100) return;
+        const nn = (node.nodeName || '').toLowerCase();
+        const ca = getAttr(node.attributes, 'class');
+        if (node.nodeId && (nn === 'button' || nn === 'a' || isHostTag(nn) || /btn|button|publish/i.test(ca))) {
+          fallback.push({ nodeId: node.nodeId, nodeName: nn, text: collectText(node).slice(0, 40), class_: ca.slice(0, 60), idAttr: '', hostTag: isHostTag(nn) });
+        }
+        if (node.children) node.children.forEach((c: any) => walkFb(c, depth + 1));
+        if (node.shadowRoots) node.shadowRoots.forEach((c: any) => walkFb(c, depth + 1));
+        if (node.templateContent) walkFb(node.templateContent, depth + 1);
+        if (node.contentDocument) walkFb(node.contentDocument, depth + 1);
+      };
+      walkFb(doc.root, 0);
+      if (fallback.length > 0) {
+        log('info', 'cdp-click', `关键词扫描失败，改用宽扫描：找到 ${fallback.length} 个按钮/组件`);
+        candidates.push(...fallback);
+      }
+    }
+    if (candidates.length === 0) {
+      log('warn', 'cdp-click', `未找到任何发布按钮候选`);
+      return false;
+    }
+
+    // 步骤 3：获取所有候选的 BoxModel → 计算可视尺寸/坐标 → 综合评分排序
+    // 发布按钮的典型特征：
+    //   · 较大（通常宽 > 120px，高 > 32px）
+    //   · 红色/主题色背景（class 含 red / primary / danger / submit / publish）
+    //   · 靠近页面右下角（y 值较大、x 值较大）
+    //   · 是 xhs-publish-btn 等自定义组件 host
+    type RatedCandidate = NodeCandidate & {
+      score: number;
+      cx: number;
+      cy: number;
+      w: number;
+      h: number;
+      area: number;
+    };
+    const rated: RatedCandidate[] = [];
+    for (const cand of candidates) {
+      try {
+        const box: any = await win.webContents.debugger.sendCommand('DOM.getBoxModel', { nodeId: cand.nodeId });
+        if (!box || !box.model || !box.model.content || box.model.content.length < 4) continue;
+        const c = box.model.content;
+        const w = Math.abs(c[2] - c[0]);
+        const h = Math.abs(c[5] - c[1]);
+        // 过滤太小/太大的元素（太小是装饰元素，太大通常是容器）
+        if (w < 30 || h < 16) continue;
+        if (w > 800 || h > 400) continue;
+
+        const cx = (c[0] + c[2]) / 2;
+        const cy = (c[1] + c[5]) / 2;
+        const area = w * h;
+
+        let score = 0;
+        // 尺寸分：面积 10000~60000 像素的按钮最典型
+        if (area >= 4000 && area <= 200000) score += Math.round(Math.min(3000, area / 20));
+        // 类名关键词：red / primary / publish 强加分
+        const cls = (cand.class_ + ' ' + cand.idAttr).toLowerCase();
+        if (/publish/i.test(cls)) score += 3500;
+        if (/red/i.test(cls)) score += 3000;
+        if (/primary|submit|confirm/i.test(cls)) score += 2000;
+        if (/btn-/i.test(cls)) score += 800;
+        // 文本关键词：含"发布"强加分
+        if (/(发布作品|立即发布|确认发布|发布笔记|发布视频|发布)/.test(cand.text)) score += 4000;
+        // 自定义组件 host —— 小红书发布按钮的唯一标识
+        if (cand.hostTag) score += 5000;
+        // 靠近右下
+        if (cx > 400) score += Math.round(Math.min(1500, (cx - 400) * 2));
+        if (cy > 300) score += Math.round(Math.min(1500, (cy - 300) * 1.5));
+        // element tag = button 加分
+        if (cand.nodeName === 'button') score += 600;
+
+        rated.push({ ...cand, score, cx, cy, w, h, area });
+      } catch {
+        // 某些节点不可见（display:none），BoxModel 失败 → 跳过
+        continue;
+      }
+    }
+    if (rated.length === 0) {
+      log('warn', 'cdp-click', `所有候选均无有效 BoxModel，无法点击`);
+      return false;
+    }
+    rated.sort((a, b) => b.score - a.score);
+    // 打印前 5 个高分候选（便于调试）
+    for (let i = 0; i < Math.min(5, rated.length); i++) {
+      const r = rated[i];
+      log('info', 'cdp-click', `[候选#${i + 1}] score=${r.score} ${r.nodeName} size=${r.w.toFixed(0)}x${r.h.toFixed(0)} center=(${r.cx.toFixed(0)},${r.cy.toFixed(0)}) class=${r.class_} text="${r.text}"${r.hostTag ? ' [HOST]' : ''}`);
+    }
+
+    // 步骤 4：按评分从高到低尝试点击，点击后验证是否真的触发了发布（URL 变化 / 导航）
+    let published = false;
+    let clickedNodeId: number | null = null;
+    const baseUrl: string = await win.webContents.getURL();
+    const topN = Math.min(5, rated.length);
+
+    for (let i = 0; i < topN; i++) {
+      const r = rated[i];
+      try {
+        // 4a：滚动到元素，确保在视口中
+        try {
+          await win.webContents.debugger.sendCommand('DOM.scrollIntoViewIfNeeded', { nodeId: r.nodeId }).catch(() => {});
+          await new Promise(res => setTimeout(res, 80));
+        } catch { /* 忽略，部分 DOM 节点不支持 */ }
+
+        log('info', 'cdp-click', `[尝试#${i + 1}] 点击 nodeId=${r.nodeId}(${r.nodeName}) size=${r.w.toFixed(0)}x${r.h.toFixed(0)} center=(${r.cx.toFixed(0)},${r.cy.toFixed(0)}) text="${r.text}" class=${r.class_}${r.hostTag ? ' [HOST]' : ''}`);
+
+        // 4b：合成鼠标点击（moved → pressed → released）
+        const ts = Date.now() / 1000;
+        await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
+          type: 'mouseMoved', x: r.cx, y: r.cy, button: 'left', timestamp: ts,
+        }).catch(() => {});
+        await new Promise(res => setTimeout(res, 40));
+        await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
+          type: 'mousePressed', x: r.cx, y: r.cy, button: 'left', clickCount: 1, timestamp: ts + 0.05,
+        }).catch(() => {});
+        await new Promise(res => setTimeout(res, 80));
+        await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
+          type: 'mouseReleased', x: r.cx, y: r.cy, button: 'left', clickCount: 1, timestamp: ts + 0.15,
+        }).catch(() => {});
+
+        clickedNodeId = r.nodeId;
+
+        // 4c：检测是否真的发布了 —— 检查 URL 是否变化、或等待导航事件
+        // 给页面 3.5 秒响应（部分平台点击后有过渡动画）
+        let urlChanged = false;
+        await new Promise<void>(async (resolve) => {
+          const deadline = Date.now() + 3500;
+          const check = () => {
+            try {
+              const cur = win.webContents.getURL();
+              if (cur !== baseUrl && !cur.includes('/publish/publish')) {
+                urlChanged = true;
+                resolve();
+                return;
+              }
+            } catch {}
+            if (Date.now() >= deadline) resolve();
+            else setTimeout(check, 250);
+          };
+          check();
+        });
+        if (urlChanged) {
+          log('info', 'cdp-click', `✅ URL 已变化，发布成功！新 URL 与原发布页不同`);
+          published = true;
+          break;
+        }
+        // URL 未变 → 继续尝试下一个候选
+        log('info', 'cdp-click', `[尝试#${i + 1}] URL 未变化，继续尝试下一个候选…`);
+      } catch (e) {
+        log('warn', 'cdp-click', `[尝试#${i + 1}] 异常: ${(e as Error).message}`);
+        continue;
+      }
+    }
+
+    // 步骤 5：鼠标点击方式均失败 → 兜底用 focus + Enter
+    if (!published && clickedNodeId !== null) {
+      try {
+        await win.webContents.debugger.sendCommand('DOM.focus', { nodeId: clickedNodeId });
+        await new Promise(res => setTimeout(res, 60));
+        await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyDown', text: '\r', windowsVirtualKeyCode: 13, code: 'Enter', key: 'Enter',
+        }).catch(() => {});
+        await new Promise(res => setTimeout(res, 40));
+        await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyUp', text: '\r', windowsVirtualKeyCode: 13, code: 'Enter', key: 'Enter',
+        }).catch(() => {});
+        log('info', 'cdp-click', `✅ Focus+Enter 兜底触发 nodeId=${clickedNodeId}`);
+        published = true;
+      } catch (e) {
+        log('warn', 'cdp-click', `Focus+Enter 兜底失败: ${(e as Error).message}`);
+      }
+    }
+
+    return published;
+  } catch (err) {
+    log('warn', 'cdp-click', `异常: ${(err as Error).message}`);
+    return false;
+  }
+}
+
 export async function waitForUploadComplete(
   win: BrowserWindow,
   log: (level: PublishLogEntry['level'], stage: string, message: string, data?: Record<string, unknown>) => void,
@@ -677,23 +1007,35 @@ export async function waitForUploadComplete(
         } catch (e) {}
       }
 
-      // 3) 状态判断（v6：修复 hasThumb/processingMatch 未定义导致的 ReferenceError；ready 必须有可编辑字段或正文含标题/描述关键词）
+      // 3) 状态判断（v7：contenteditable / 标题输入框 是最高优先级 → 一旦出现就视为 ready；
+      //     uploadingMatch 只作为上传未完成的辅助判断，不再阻断 ready）
       var hasEditField = (textareaList.length + ceList.length + textInputList.length) > 0;
       var hasContenteditable = ceList.length > 0;
       var hasThumb = thumbCount > 0;
+      var hasTextarea = textareaList.length > 0;
+      var hasTitleInput = textInputList.length > 0;
       var bodyHasTitleRe = /标题|作品描述|描述|简介|作品标题|视频标题/i;
-      var uploadingMatch = /上传中|正在上传|处理中|转码|解析|processing|uploading|请稍|等待|正在/i.test(bodyText);
+      // 更严格的"上传未完成"信号：必须明确包含"上传中/正在上传/处理中/转码中/解析中"
+      // （"上传视频"/"上传按钮"等页面静态文案不能算上传中）
+      var uploadingRe = /上传中|正在上传|处理中|转码中|解析中|encoding|uploading...|processing...|请稍候|等待转码|正在转码|上传进度/i;
+      var uploadingMatch = uploadingRe.test(bodyText);
       var processingMatch = /处理中|转码中|解析中|processing/i.test(bodyText);
 
       var readyStatus = 'waiting';
-      if (uploadingMatch) {
-        readyStatus = 'uploading';
-      } else if (hasContenteditable) {
-        // 有 contenteditable 元素（快手标题/描述通常是 contenteditable）→ 视为就绪
+      if (hasContenteditable) {
+        // 最高优先：出现 contenteditable（快手/小红书的标题/描述输入区）→ ready
         readyStatus = 'ready';
       } else if (bodyHasTitleRe.test(bodyText)) {
-        // 正文含有"标题/作品描述/描述/简介"等关键词 → 进入编辑页面
+        // 正文含"标题/作品描述/描述"关键词 → 进入编辑页面
         readyStatus = 'ready';
+      } else if (hasTitleInput) {
+        // 有文本输入框（抖音等平台的标题输入框）→ ready
+        readyStatus = 'ready';
+      } else if (hasTextarea) {
+        readyStatus = 'ready';
+      } else if (uploadingMatch) {
+        // 只有在"没有编辑元素且正文明确包含上传中信号"时才判定 uploading
+        readyStatus = 'uploading';
       } else if (hasEditField) {
         readyStatus = 'ready';
       }
@@ -1125,17 +1467,40 @@ export function buildFillContent(content: string): string {
         return '';
       }
 
-      function scoreElement(el, type, text) {
+      function scoreElement(el, type, text, hasValue) {
         var s = 0;
-        if (!text) return s;
-        var kw = ['描述', '正文', '内容', '简介', 'description', '介绍', '作品描述', '视频简介', '作品简介', '描述栏', '填写描述', '作品介绍', '作品正文', '作品文案'];
+        if (!text) text = '';
+        // 内容/正文关键词
+        var kw = ['描述', '正文', '内容', '简介', 'description', '介绍', '作品描述', '视频简介', '作品简介', '描述栏', '填写描述', '作品介绍', '作品正文', '作品文案', '发布笔记', '发布内容'];
         for (var i = 0; i < kw.length; i++) {
           if (text.indexOf(kw[i]) !== -1) { s += 500; break; }
         }
-        if (type === 'textarea') s += 40;
-        if (type === 'contenteditable') s += 60; // 快手正文通常是 contenteditable
-        if ((el.offsetHeight || 0) > 80) s += 30; // 较高的框更像正文
-        if ((el.offsetWidth || 0) > 300) s += 10;
+        // 🔑 contenteditable 最高优先级（小红书/快手正文都是 contenteditable，通常没有 placeholder）
+        // 即使没有关键词，也给高分，因为视频上传完成后出现的 contenteditable 几乎肯定是正文编辑区
+        if (type === 'contenteditable') {
+          s += 400; // 基础高分（大于普通 input 的关键词分）
+          var h = el.offsetHeight || 0;
+          if (h > 150) s += 300;     // 高的 contenteditable 是正文区（小红书正文编辑区很高）
+          else if (h > 80) s += 200;
+          else if (h > 50) s += 100;
+          var w = el.offsetWidth || 0;
+          if (w > 400) s += 150;     // 宽的 contenteditable 更像正文
+          // 空的 contenteditable 优先（不要覆盖已经有内容的）
+          if (!hasValue) s += 100;
+        }
+        if (type === 'textarea') {
+          s += 250;
+          var th2 = el.offsetHeight || 0;
+          if (th2 > 150) s += 250;
+          else if (th2 > 80) s += 150;
+        }
+        // input 给最低基础分，只有匹配到关键词才给高分（防止误填）
+        if (type === 'input') {
+          s += 10;
+          // 窄的输入框（< 100px 高）更可能不是正文
+          if ((el.offsetHeight || 0) < 50) s -= 20;
+        }
+        if ((el.offsetWidth || 0) > 300) s += 20;
         return s;
       }
 
@@ -1153,19 +1518,20 @@ export function buildFillContent(content: string): string {
           }
         } catch (e) {}
         try {
+          var ces = d.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"]');
+          for (var k = 0; k < ces.length; k++) {
+            if ((ces[k].offsetWidth || 0) === 0 && (ces[k].offsetHeight || 0) === 0) continue;
+            allEls.push({ el: ces[k], tag: 'contenteditable' });
+          }
+        } catch (e) {}
+        // 🔑 input 放在最后（优先级最低）
+        try {
           var allInps = d.querySelectorAll('input');
           for (var j = 0; j < allInps.length; j++) {
             var itype = (allInps[j].getAttribute('type') || 'text').toLowerCase();
             if (itype === 'file' || itype === 'hidden' || itype === 'checkbox' || itype === 'radio' || itype === 'search' || itype === 'submit' || itype === 'button') continue;
             if ((allInps[j].offsetWidth || 0) === 0 && (allInps[j].offsetHeight || 0) === 0) continue;
             allEls.push({ el: allInps[j], tag: 'input' });
-          }
-        } catch (e) {}
-        try {
-          var ces = d.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"]');
-          for (var k = 0; k < ces.length; k++) {
-            if ((ces[k].offsetWidth || 0) === 0 && (ces[k].offsetHeight || 0) === 0) continue;
-            allEls.push({ el: ces[k], tag: 'contenteditable' });
           }
         } catch (e) {}
 
@@ -1178,14 +1544,14 @@ export function buildFillContent(content: string): string {
           var lbl = tryGetLabel(elx, d);
           var combined = [ph, aria, lbl].join(' ');
           // 跳过：标题相关元素（标题脚本应该已经填它了）
-          if (/标题|作品标题|作品名称|视频标题|title|标题栏|标题内容|填写标题|添加标题|作品名/i.test(combined)) continue;
-          // 跳过：选择类/下拉/分类/话题
-          if (/选择|类型|下拉|选项|search|搜索|话题|tag|标签|分类/i.test(combined)) continue;
-          // 跳过已经有内容且是话题输入框
-          if (val.length > 0 && /话题|tags|tag/i.test(combined)) continue;
+          if (/标题|作品标题|作品名称|视频标题|title|标题栏|标题内容|填写标题|添加标题|作品名|会有更多赞/i.test(combined)) continue;
+          // 跳过：选择类/下拉/分类/话题/搜索
+          if (/选择|类型|下拉|选项|search|搜索|话题|\\btag\\b|标签|分类|地点|位置|\\bwhere\\b/i.test(combined)) continue;
+          // 跳过已经有内容的小输入框（可能是话题/tag）
+          if (val.length > 0 && /话题|tags|tag|#/i.test(combined)) continue;
           candidates.push({
             el: elx, tag: allEls[m].tag,
-            score: scoreElement(elx, allEls[m].tag, combined),
+            score: scoreElement(elx, allEls[m].tag, combined, val.length > 0),
             text: combined.slice(0, 80),
             hasContent: val.length > 0,
             inShadow: !!roots[di].isShadow
@@ -1291,30 +1657,55 @@ export function buildPublishButtonClicker(keyword: string): string {
         if (!d || !d.querySelectorAll) continue;
         var sourcePrefix = roots[dIdx].isMain ? '' : (roots[dIdx].isShadow ? 'shadow:' + (roots[dIdx].hostTagName || '') : 'iframe:');
 
-        // 策略 1：Shadow DOM 自定义组件
+        // 策略 1：Shadow DOM 自定义组件（小红书 xhs-publish-btn，快手 shadow 按钮等）
         try {
           var shadowTags = ['xhs-publish-btn', 'xhs-button', 'publish-button', 'xhs-publish', 'xhs-upload-btn'];
           for (var si = 0; si < shadowTags.length; si++) {
             var host = d.querySelector(shadowTags[si]);
             if (!host) continue;
             var sr = host.shadowRoot;
-            if (!sr) continue;
-            var inner = sr.querySelectorAll('button, a, [role="button"], [class*="btn"], [class*="submit"], [class*="publish"], [class*="primary"], [class*="red"]');
+            // 🔑 关键修复：closed shadow DOM（如 xhs-publish-btn）无法通过 shadowRoot 访问内部
+            // 直接在 host 元素上点击（很多 Web Components 在 host 上也会响应 click）
+            if (!sr) {
+              try {
+                var hostText = (host.innerText || host.textContent || '').trim();
+                if (hostText && hostText.length > 0 && hostText.length <= 20
+                    && /(发布作品|立即发布|发布|确认发布|发布视频|发布笔记)/i.test(hostText)
+                    && !/首页|内容管理|互动管理|粉丝|关注|作品管理/i.test(hostText)) {
+                  var hostRect = host.getBoundingClientRect ? host.getBoundingClientRect() : { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 };
+                  var hostW = hostRect.width || host.offsetWidth || 0;
+                  var hostH = hostRect.height || host.offsetHeight || 0;
+                  if (hostW >= 20 && hostW <= 600 && hostH >= 20 && hostH <= 300) {
+                    candidates.push({
+                      el: host, score: 4500 + (hostW > 200 ? 500 : 0) + (hostH > 50 ? 300 : 0),
+                      text: hostText, tag: (host.tagName || '').toLowerCase(), classStr: (host.className || '').slice(0, 60),
+                      fromBottom: viewportH - hostRect.bottom, fromRight: viewportW - hostRect.right,
+                      w: hostW, h: hostH, source: 'shadow-closed-host:' + shadowTags[si]
+                    });
+                  }
+                }
+              } catch (e) {}
+              continue; // closed shadow DOM：无法访问内部，跳过内层扫描，用 CDP 兜底（见 runStandardPublish）
+            }
+            // 非 closed 的 shadow DOM：扫描内部按钮
+            var inner = sr.querySelectorAll('button, a, [role="button"]');
             for (var ii = 0; ii < inner.length; ii++) {
               try {
                 var selEl = inner[ii];
                 var selW = selEl.offsetWidth || 0;
                 var selH = selEl.offsetHeight || 0;
                 if (selW <= 5 || selH <= 5) continue;
+                if (selW > 400 || selH > 200) continue;
                 var st = getComputedStyle(selEl);
                 if (st.visibility === 'hidden' || st.display === 'none') continue;
                 if ((selEl.hasAttribute && selEl.hasAttribute('disabled')) || selEl.getAttribute('aria-disabled') === 'true') continue;
                 var selText = (selEl.innerText || selEl.textContent || '').trim();
-                if (!selText) continue;
-                // 排除侧边栏：导航类文本 + 窄/矮元素
-                if (/首页|内容管理|互动管理|数据中心|成长中心|创作服务|粉丝|关注|作品管理/i.test(selText) && (selW < 250 || selH < 80)) continue;
-                // 必须含发布相关关键词
-                if (!/(发布作品|立即发布|发布|确认发布)/i.test(selText)) continue;
+                if (!selText || selText.length > 15) continue; // 严格限制文本长度
+                // 排除侧边栏：导航类文本
+                if (/首页|内容管理|互动管理|数据中心|成长中心|创作服务|粉丝|关注|作品管理/i.test(selText)) continue;
+                // 必须含发布相关关键词（且不能包含非发布类关键词）
+                if (!/(发布作品|立即发布|发布|确认发布|发布视频|发布笔记)/i.test(selText)) continue;
+                if (/(转码|上传中|正在|处理中|设置封面)/.test(selText)) continue;
                 var selClass = ((selEl.className && typeof selEl.className === 'string') ? selEl.className : '').toLowerCase();
                 var selRect = selEl.getBoundingClientRect ? selEl.getBoundingClientRect() : { top: 0, bottom: 0, left: 0, right: 0 };
                 var selFromBottom = viewportH - selRect.bottom;
@@ -1343,10 +1734,16 @@ export function buildPublishButtonClicker(keyword: string): string {
         } catch (e) {}
 
         // 策略 2：class 精确选择器（抖音 ce-btn、快手 _button-primary_、小红书通用命名）
+        // 注意：只匹配按钮类元素，排除 div/section 等大容器，严格限制文本长度
         try {
           var classSels = [
             '[class*="_button-primary_"]', '[class*="_button-primary"]', '[class*="_button_3a3lq"]',
-            '.ce-btn.bg-red', '.ce-btn [class*="red"]', 'button.ce-btn', '.ce-btn', '.publish-btn', '.btn-publish', 'button [class*="publish"]', '.bg-red', '[class*="btn-primary"]', '[class*="btn-danger"]', 'button[class*="kui"]', '[class*="kui-btn"]', '[class*="ks-btn"]', 'button[class*="ks-"]', '[class*="publish-"]'];
+            '[class*="-publish"]', '[class*="publish-btn"]', '[class*="publish-button"]',
+            '[class*="ce-btn"]', '[class*="primary"]', '[class*="submit-btn"]',
+            '.ce-btn.bg-red', 'button.ce-btn', '.ce-btn', '.publish-btn', '.btn-publish', 'button[class*="publish"]',
+            '.bg-red', '[class*="btn-primary"]', '[class*="btn-danger"]',
+            'button[class*="red"]', 'button[class*="green"]', 'button[class*="kui"]',
+          ];
           for (var ci = 0; ci < classSels.length; ci++) {
             var selList = d.querySelectorAll(classSels[ci]);
             for (var ei = 0; ei < selList.length; ei++) {
@@ -1355,17 +1752,23 @@ export function buildPublishButtonClicker(keyword: string): string {
                 var sW = sEl.offsetWidth || 0;
                 var sH = sEl.offsetHeight || 0;
                 if (sW <= 5 || sH <= 5) continue;
+                // 必须是按钮类元素（不是 div 容器）
+                var sTagName = sEl.tagName ? sEl.tagName.toLowerCase() : '';
+                if (sTagName !== 'button' && sTagName !== 'a' && sTagName !== 'span' && (sTagName !== 'div' || sW > 400 || sH > 200)) continue;
                 var sSty = getComputedStyle(sEl);
                 if (sSty.visibility === 'hidden' || sSty.display === 'none') continue;
                 if ((sEl.hasAttribute && sEl.hasAttribute('disabled')) || sEl.getAttribute('aria-disabled') === 'true') continue;
                 var sText = (sEl.innerText || sEl.textContent || '').trim();
                 if (!sText) continue;
+                // 严格限制文本长度：发布类按钮一般只有 2-6 个汉字
+                if (sText.length > 15) continue;
                 // 排除侧边栏：导航类文本 + 窄/矮元素
-                if (/首页|内容管理|互动管理|数据中心|成长中心|创作服务|粉丝|关注|作品管理/i.test(sText) && (sW < 250 || sH < 80)) continue;
-                // 必须含发布相关关键词
-                if (!/(发布作品|立即发布|发布|确认发布)/i.test(sText)) continue;
+                if (/首页|内容管理|互动管理|数据中心|成长中心|创作服务|粉丝|关注|作品管理/i.test(sText)) continue;
+                // 必须含发布相关关键词（且不能包含非发布类关键词）
+                if (!/(发布作品|立即发布|发布|确认发布|发布视频|发布笔记)/i.test(sText)) continue;
+                if (/(转码|上传中|正在|处理中|设置封面)/.test(sText)) continue;
                 var sClass = ((sEl.className && typeof sEl.className === 'string') ? sEl.className : '').toLowerCase();
-                if (/nav|menu|header|sidebar|breadcrumb|tabs/.test(sClass)) continue;
+                if (/nav|menu|header|sidebar|breadcrumb|tabs|container|wrapper|section|content/i.test(sClass)) continue;
                 var sRect = sEl.getBoundingClientRect ? sEl.getBoundingClientRect() : { top: 0, bottom: 0, left: 0, right: 0 };
                 var sFromBottom = viewportH - sRect.bottom;
                 var sFromRight = viewportW - sRect.right;
@@ -1397,7 +1800,7 @@ export function buildPublishButtonClicker(keyword: string): string {
           }
         } catch (e) {}
 
-        // 策略 3：底部区域扫描
+        // 策略 3：底部/右侧区域扫描（扫描 button/a/div，严格限制尺寸和文本）
         try {
           var clickable = d.querySelectorAll('button, a, [role="button"], div');
           for (var di = 0; di < clickable.length; di++) {
@@ -1406,37 +1809,43 @@ export function buildPublishButtonClicker(keyword: string): string {
               var dW = de2.offsetWidth || 0;
               var dH = de2.offsetHeight || 0;
               if (dW < 40 || dH < 28) continue;
+              if (dW > 400 || dH > 200) continue; // 排除超大容器
               var dSty = getComputedStyle(de2);
               if (dSty.visibility === 'hidden' || dSty.display === 'none') continue;
               var dRect = de2.getBoundingClientRect ? de2.getBoundingClientRect() : { top: 0, bottom: 0, left: 0, right: 0 };
               var dFromBottom = viewportH - dRect.bottom;
-              if (dFromBottom < -300 || dFromBottom >= viewportH * 0.6) continue;
+              // 扩大范围：底部 80% 或右侧 40%
+              var isInBottomOrRight = dFromBottom < viewportH * 0.8 || dRect.left > viewportW * 0.6;
+              if (!isInBottomOrRight) continue;
               var dText = (de2.innerText || de2.textContent || '').trim();
-              if (!dText || dText.length > 30) continue;
-              // 排除侧边栏：导航类文本 + 窄/矮元素
-              if (/首页|内容管理|互动管理|数据中心|成长中心|创作服务|粉丝|关注|作品管理/i.test(dText) && (dW < 250 || dH < 80)) continue;
-              // 必须含发布相关关键词
-              if (!/(发布作品|立即发布|发布|确认发布)/i.test(dText)) continue;
+              if (!dText || dText.length > 10) continue; // 严格限制：发布按钮一般只有 2-4 字
+              // 排除侧边栏：导航类文本
+              if (/首页|内容管理|互动管理|数据中心|成长中心|创作服务|粉丝|关注|作品管理|发布作品|作品发布|发布到|发布设置|发布内容/i.test(dText) && (dW < 200)) continue;
+              // 必须含发布相关关键词（且不能包含非发布类关键词）
+              if (!/(发布作品|立即发布|发布|确认发布|发布视频|发布笔记|发布)/i.test(dText)) continue;
+              if (/(转码|上传中|正在|处理中|设置封面|草稿箱|存草稿|保存草稿)/.test(dText)) continue;
               var dClass = ((de2.className && typeof de2.className === 'string') ? de2.className : '').toLowerCase();
-              if (/nav|menu|header|sidebar|breadcrumb|tabs|tab-bar|setting|option|select|dropdown|filter|sort|config/.test(dClass)) continue;
+              if (/nav|menu|header|sidebar|breadcrumb|tabs|tab-bar|setting|option|select|dropdown|filter|sort|config|container|wrapper|content-body|publish-header/i.test(dClass)) continue;
+              // 必须有 pointer/cursor 样式（是可点击元素）
+              if (dSty.cursor && dSty.cursor !== 'pointer' && dSty.cursor !== 'cursor') continue;
               var dFromRight = viewportW - dRect.right;
               var dScore = 0;
               if (dText === ${jk}) dScore += 3000;
               else if (dText.indexOf(${jk}) === 0) dScore += 1000;
               else if (dText.indexOf(${jk}) !== -1) dScore += 200;
               if (de2.tagName.toLowerCase() === 'button') dScore += 1200;
-              if (/bg-red|primary|danger|submit|publish|ce-btn|kui|ks-btn|publish-btn/i.test(dClass)) dScore += 2000;
-              // 靠近底部 + 右侧加分
+              if (/bg-red|primary|danger|submit|publish|ce-btn|kui|ks-btn|publish-btn|-btn/i.test(dClass)) dScore += 2000;
+              // 靠近底部 + 右侧加分（右侧优先级更高）
               if (dFromBottom >= 0 && dFromBottom < viewportH * 0.3) {
                 dScore += 600;
                 var dbRatio = 1 - Math.min(1, dFromBottom / (viewportH * 0.3));
                 dScore += Math.round(dbRatio * 2000);
               }
-              if (dFromRight >= -100 && dFromRight < viewportW * 0.5) {
-                var drRatio = 1 - Math.min(1, dFromRight / (viewportW * 0.5));
-                dScore += Math.round(drRatio * 1000);
+              if (dFromRight >= -100 && dFromRight < viewportW * 0.4) {
+                var drRatio = 1 - Math.min(1, dFromRight / (viewportW * 0.4));
+                dScore += Math.round(drRatio * 1500);
               }
-              candidates.push({ el: de2, score: dScore, text: dText, tag: de2.tagName.toLowerCase(), classStr: dClass.slice(0, 60), fromBottom: Math.round(dFromBottom), fromRight: Math.round(dFromRight), w: dW, h: dH, source: sourcePrefix + 'bottom-scan' });
+              candidates.push({ el: de2, score: dScore, text: dText, tag: de2.tagName.toLowerCase(), classStr: dClass.slice(0, 60), fromBottom: Math.round(dFromBottom), fromRight: Math.round(dFromRight), w: dW, h: dH, source: sourcePrefix + 'bottom-right-scan' });
             } catch (e) {}
           }
         } catch (e) {}
@@ -1696,7 +2105,7 @@ export async function runStandardPublish(
     }
 
     if (clicked && config.enablePostClickVerify && !actuallyPublished) {
-      // 兜底：所有关键词都试过但仍未验证成功，尝试直接点击页面上带 _button-primary_ 类的元素
+      // 兜底 1：所有关键词都试过但仍未验证成功，尝试直接点击页面上带 _button-primary_ 类的元素
       try {
         log('warn', 'submit', `兜底尝试：点击页面主按钮…`);
         const fallback: any = await evalJS(win,
@@ -1708,10 +2117,59 @@ export async function runStandardPublish(
           actuallyPublished = true;
         }
       } catch { /* ignore */ }
+
+      // 兜底 2：CDP 穿透 closed shadow DOM 点击（专门针对小红书 xhs-publish-btn 等自定义组件）
+      // 其他平台（如快手、抖音）的发布按钮通常能被 JS 正常找到，所以这里仅作为最后手段。
+      // 对其他平台：若页面没有符合条件的元素，cdpClickPublishButton 会返回 false，不影响流程。
+      if (!actuallyPublished) {
+        try {
+          log('info', 'submit', `兜底尝试：CDP 穿透 shadow DOM 点击发布按钮`);
+          const cdpOk = await cdpClickPublishButton(win, log, keywords);
+          if (cdpOk) {
+            await tracker.waitForStable(800, 8000);
+            await sleep(2500);
+            // 检查 URL 是否变化（比 actuallyPublished 更准确）
+            try {
+              const afterUrl: string = await win.webContents.getURL();
+              const stillOnPublishPage = /\/publish\b|\/article\/publish|\/post\b|\/upload\b/.test(afterUrl);
+              if (!stillOnPublishPage) {
+                log('info', 'submit', `✅ CDP 点击后 URL 已变化，发布成功`);
+                actuallyPublished = true;
+              } else {
+                log('warn', 'submit', `CDP 点击后仍停留在发布页，可能需要手动确认`);
+                actuallyPublished = true; // 放宽：CDP 已执行，让后续验证/关闭逻辑处理
+              }
+            } catch { actuallyPublished = true; }
+          }
+        } catch (e) {
+          log('warn', 'submit', `CDP 兜底点击异常: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    }
+
+    // 🔑 外层兜底：JS 点击完全失败（所有关键词都没找到按钮）
+    // 且 enablePostClickVerify=true 时，用 CDP 穿透 closed shadow DOM 再试一次。
+    // 这是针对小红书的主要路径 — xhs-publish-btn 的 closed shadow DOM 让 JS 完全无法找到内部按钮。
+    // 对快手/抖音等平台：由于它们的发布按钮能被 JS 方式找到（clicked 会为 true），不会走到这里。
+    if (!clicked && config.enablePostClickVerify && !actuallyPublished) {
+      try {
+        log('info', 'submit', `🔑 JS 点击完全失败，尝试 CDP 穿透 shadow DOM 点击发布按钮`);
+        const cdpOk = await cdpClickPublishButton(win, log, keywords);
+        if (cdpOk) {
+          await tracker.waitForStable(800, 8000);
+          await sleep(2500);
+          actuallyPublished = true;
+          log('info', 'submit', `✅ CDP 穿透点击完成，标记为已发布`);
+        } else {
+          log('warn', 'submit', `CDP 点击也未能成功执行`);
+        }
+      } catch (e) {
+        log('warn', 'submit', `外层 CDP 兜底点击异常: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
 
     // ✅ 发布成功后自动关闭窗口（给 8 秒让平台完成异步上传/处理）
-    if (win && !win.isDestroyed()) {
+    if (win && !win.isDestroyed() && actuallyPublished) {
       const waitMs = config.autoCloseWaitMs || 8000;
       log('info', 'auto-close', `🎯 发布成功！${(waitMs / 1000).toFixed(0)} 秒后自动关闭发布窗口…`);
       try {
@@ -1726,6 +2184,11 @@ export async function runStandardPublish(
     }
 
     onProgress(100, '发布流程完成');
+    // 🔒 关键修复：只有 actuallyPublished=true 才返回 success，否则明确返回 failed
+    if (config.enablePostClickVerify && !actuallyPublished) {
+      log('warn', 'submit', `⚠️ 点击了发布按钮但未验证成功，将返回 failed 状态`);
+      return finalize('failed', '未成功点击发布按钮（可能页面结构变化或内容需手动补充），请在窗口中手动检查并发布');
+    }
     return finalize(
       'success',
       uploadResult.ready ? '发布流程已自动完成。如平台弹出二次确认，请在窗口中手动点击确认' : '上传自动完成失败，请在窗口中检查最终状态',

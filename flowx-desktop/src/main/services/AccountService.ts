@@ -570,6 +570,19 @@ export class AccountService {
           likeCount = extracted.likeCount;
 
           logger.info(`[Account-Refresh]   → 第${attempt}次提取: 粉丝=${fansCount ?? '-'}, 关注=${followCount ?? '-'}, 获赞=${likeCount ?? '-'}`);
+          // 打印调试信息（仅快手平台返回 _debug）
+          const _dbg = (extracted as any)._debug;
+          if (_dbg) {
+            const samples: unknown[] = Array.isArray(_dbg.samples)
+              ? _dbg.samples
+              : (Array.isArray(_dbg.popTextSamples)
+                  ? _dbg.popTextSamples
+                  : _dbg.s2samples ?? []);
+            const hits = _dbg.hit ?? _dbg.firstHits ?? _dbg.s0hits ?? 0;
+            const errs: string = Array.isArray(_dbg.errors) ? _dbg.errors.join('; ') : '';
+            const cname: string = _dbg.cookieUserId ?? _dbg.platformAccountId ?? '';
+            logger.info(`[Account-Refresh]     [debug] statsHit=${hits}/3 cookieUserId=${cname} samples=${JSON.stringify(samples)}${errs ? ' errors=' + errs : ''}`);
+          }
 
           // 有至少一个统计数据 或 已获取到昵称和头像 → 认为够用
           const hasAnyStat = typeof fansCount === 'number' || typeof followCount === 'number' || typeof likeCount === 'number';
