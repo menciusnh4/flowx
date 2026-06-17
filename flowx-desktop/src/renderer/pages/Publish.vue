@@ -82,6 +82,31 @@ const currentAccounts = computed(() => {
   return articleAccounts.value
 })
 
+// ======== 内容限制（按平台汇总，取最小值当限制 ========
+const platformContentLimit = computed(() => {
+  const ids = getSelectedIds()
+  if (ids.length === 0) return { min: 1000, platforms: [] }
+  const limits = new Set<number>()
+  const plats: Array<{ platform: string; limit: number }> = []
+  for (const id of ids) {
+    const a = accountStore.accounts.find((x) => x.id === id)
+    if (!a) continue
+    const meta = accountStore.platforms.find((p) => p.key === a.platform)
+    if (meta && typeof meta.contentLimits?.content) {
+      limits.add(meta.contentLimits.content)
+      plats.push({ platform: a.platform, limit: meta.contentLimits.content })
+    }
+  }
+  // 若没有限制数据，默认 1000 字（小红书/抖音默认值）
+  if (limits.size === 0) return { min: 1000, platforms: [] }
+  return { min: Math.min(...limits.values()), platforms: plats }
+})
+const isContentOverLimit = computed(() => content.value.length > platformContentLimit.value.min)
+const kuaishouSelected = computed(() => {
+  const ids = getSelectedIds()
+  return accountStore.accounts.some((a) => ids.includes(a.id) && a.platform === 'kuaishou')
+})
+
 // ============ 文件操作 ============
 async function pickMediaFiles() {
   console.log('[Publish.vue] pickMediaFiles start')
@@ -135,6 +160,39 @@ async function submitPublish() {
     ElMessage.warning('请上传素材文件')
     console.warn('[Publish.vue] no media files, abort')
     return
+  }
+
+  // ===== 字数限制预检：提醒用户 =====
+  // 按平台分别检查标题和内容，若任意平台超限，在提交时弹提醒（不阻塞，用户可自己取舍）
+  const overLimitPlats: Array<{ platform: string; titleLen?: number; contentLen?: number; titleMax?: number; contentMax?: number }> = []
+  for (const id of accountIds) {
+    const a = accountStore.accounts.find((x) => x.id === id)
+    if (!a) continue
+    const meta = accountStore.platforms.find((p) => p.key === a.platform)
+    if (!meta || !meta.contentLimits) continue
+    const tMax = meta.contentLimits.title
+    const cMax = meta.contentLimits.content
+    if ((typeof tMax === 'number' && title.value.length > tMax) ||
+        (typeof cMax === 'number' && content.value.length > cMax)) {
+      overLimitPlats.push({
+        platform: a.platform,
+        titleLen: title.value.length, contentLen: content.value.length,
+        titleMax: tMax, contentMax: cMax,
+      })
+    }
+  }
+  if (overLimitPlats.length > 0) {
+    const msg = overLimitPlats.map((p) => {
+      const parts: string[] = []
+      if (typeof p.titleMax === 'number' && p.titleLen! > p.titleMax) parts.push(`标题${p.titleLen}/${p.titleMax}`)
+      if (typeof p.contentMax === 'number' && p.contentLen! > p.contentMax) parts.push(`正文${p.contentLen}/${p.contentMax}`)
+      return `  · ${platformName(p.platform)}：${parts.join('、')}`
+    }).join('\n')
+    ElMessage.warning({
+      message: `以下平台将截断内容（超出限制自动截断，不影响发布）：\n${msg}`,
+      duration: 5000,
+    })
+    console.warn('[Publish.vue] content over limits:', overLimitPlats)
   }
 
   const tags = tagsRaw.value
@@ -273,10 +331,19 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
             v-model="content"
             type="textarea"
             :rows="contentType === 'article' ? 8 : 4"
-            :placeholder="contentType === 'article' ? '请输入正文内容' : '可选：为视频/图文添加描述文案（将作为笔记正文发布）'"
-            maxlength="1000"
+            :placeholder="contentType === 'article' ? '请输入正文内容（小红书/抖音最多 1000 字，快手 500 字）' : '可选：为视频/图文添加描述文案（将作为笔记正文发布，快手最多 500 字）'"
+            :maxlength="platformContentLimit.min"
             show-word-limit
           />
+          <div v-if="kuaishouSelected" class="kuaishou-hint">
+            ⚡ 已选快手账号：正文将被限制为 500 字，超出部分将自动截断
+          </div>
+          <div v-if="isContentOverLimit" class="over-limit-hint">
+            ⚠️ 当前内容（{{ content.length }} 字）超出所选平台最大限制（{{ platformContentLimit.min }} 字），超出部分将在发布时自动截断
+          </div>
+          <div v-if="platformContentLimit.platforms.length > 0" class="limits-hint">
+            各平台正文限制：{{ platformContentLimit.platforms.map(p => `${platformName(p.platform)} ${p.limit}字`).join(' / ') }}
+          </div>
         </el-form-item>
 
         <el-form-item label="话题">
@@ -308,6 +375,12 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
           <div class="platform-tag">{{ iconOf(a.platform) }} {{ platformName(a.platform) }}</div>
           <div class="nickname">{{ a.nickname }}</div>
           <div class="account-id">{{ a.id }}</div>
+          <div class="content-limit-tag">
+            {{ (() => {
+              const meta = accountStore.platforms.find(p => p.key === a.platform);
+              return meta?.contentLimits?.content ? `正文最多 ${meta.contentLimits.content} 字` : '';
+            })() }}
+          </div>
           <div v-if="selectedIds[a.id]" class="selected-mark">✓</div>
         </div>
       </div>
@@ -444,6 +517,36 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
 .account-id { font-size: 11px; color: #c0c4cc; margin-top: 4px; word-break: break-all; }
 .selected-mark { position: absolute; top: 8px; right: 10px; color: #409eff; font-weight: bold; }
 .submit-row { display: flex; gap: 10px; align-items: center; }
+
+/* ======== 字数限制提示 ======== */
+.kuaishou-hint {
+  font-size: 12px;
+  color: #e6a23c;
+  margin-top: 4px;
+  background: #fdf6ec;
+  border-left: 3px solid #e6a23c;
+  padding: 6px 10px;
+  border-radius: 3px;
+}
+.over-limit-hint {
+  font-size: 12px;
+  color: #f56c6c;
+  margin-top: 4px;
+  background: #fef0f0;
+  border-left: 3px solid #f56c6c;
+  padding: 6px 10px;
+  border-radius: 3px;
+}
+.limits-hint {
+  font-size: 11px;
+  color: #909399;
+  margin-top: 4px;
+}
+.content-limit-tag {
+  font-size: 11px;
+  color: #909399;
+  margin-top: 4px;
+}
 
 /* 调试日志 */
 .debug-hint { font-size: 12px; color: #909399; margin-bottom: 6px; }

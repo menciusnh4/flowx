@@ -12,6 +12,7 @@ import type {
   PublishRequest,
   PublishItemProgress,
   AccountCapabilities,
+  ContentType,
 } from '../../../types';
 
 /**
@@ -45,6 +46,10 @@ const meta: PlatformMeta = {
     publishImage: true,
     publishArticle: false,
   } as AccountCapabilities,
+  contentLimits: {
+    title: 80,
+    content: 500,
+  },
   nicknameSelectors: [
     '[class*="user-name"]',
     '[class*="nickname"]',
@@ -131,11 +136,207 @@ async function publishVideo(
     enableConfirmStep: false,
     enablePostClickVerify: true,
     fillWaitMs: 1500,
+    contentLimits: { title: 80, content: 500 },
+    contentType: 'video',
   });
 }
 
 /**
+ * [快手专用] 图文 tab 切换 — 点击页面上的"上传图文"按钮。
+ *
+ * 快手视频发布页上有三个并列按钮："上传视频 | 上传图文 | 上传全景视频"。
+ * 通用 switchContentTypeTab 脚本匹配不到，因为：
+ *   - 按钮可能在 shadow DOM 或特定容器内
+ *   - 文本"上传图文"可能被拆分成多个节点或包含特殊字符
+ *
+ * 策略（多层 fallback）：
+ *   1. 精确匹配文本为"上传图文"的 <button> / <a> / div
+ *   2. 包含"图文"关键词的可点击元素（排除"视频"）
+ *   3. 通过 CSS 类名匹配（tab / switch / upload 等前缀）
+ *   4. fallback：尝试直接导航到图文 URL
+ */
+async function kuaishouTabSwitcher(
+  win: BrowserWindow,
+  contentType: ContentType,
+  log: (level: 'info' | 'warn' | 'error', stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  // 视频类型：不需要切换
+  if (!contentType || contentType === 'video') return true;
+
+  log('info', 'tab', `[kuaishou] 执行平台专用图文 tab 切换…`);
+
+  const script = `
+    (function () {
+      // 递归收集 root（主文档 + shadow DOM + iframe）
+      var roots = [document];
+      function collectShadow(root) {
+        try {
+          if (!root || !root.querySelectorAll) return;
+          var all = root.querySelectorAll('*');
+          for (var i = 0; i < all.length; i++) {
+            try {
+              if (all[i].shadowRoot) {
+                roots.push(all[i].shadowRoot);
+                collectShadow(all[i].shadowRoot);
+              }
+            } catch (e) {}
+          }
+        } catch (e) {}
+      }
+      function collectIframes(root) {
+        try {
+          var ifs = root.querySelectorAll('iframe');
+          for (var i = 0; i < ifs.length; i++) {
+            try {
+              var idoc = ifs[i].contentDocument || (ifs[i].contentWindow && ifs[i].contentWindow.document);
+              if (idoc) {
+                roots.push(idoc);
+                collectShadow(idoc);
+              }
+            } catch (e) {}
+          }
+        } catch (e) {}
+      }
+      collectShadow(document);
+      collectIframes(document);
+
+      var candidates = [];
+      for (var ri = 0; ri < roots.length; ri++) {
+        var root = roots[ri];
+        if (!root || !root.querySelectorAll) continue;
+
+        // 1. 搜索 button / a / div / span 中的文本精确匹配
+        var tags = ['button', 'a', 'div', 'span', 'li', 'p'];
+        for (var ti = 0; ti < tags.length; ti++) {
+          var els = root.querySelectorAll(tags[ti]);
+          for (var ei = 0; ei < els.length; ei++) {
+            var el = els[ei];
+            try {
+              var txt = (el.innerText || el.textContent || '').trim();
+              if (!txt || txt.length > 40) continue;
+
+              // 计分
+              var score = 0;
+              var isExact = txt === '上传图文';
+              var hasTuwen = txt.indexOf('图文') !== -1;
+              var hasImage = txt.indexOf('图片') !== -1 || txt.indexOf('相册') !== -1;
+              var hasVideo = txt.indexOf('视频') !== -1;
+
+              if (isExact) score += 2000;
+              else if (hasTuwen && !hasVideo) score += 1000;
+              else if (hasImage && !hasVideo) score += 500;
+              if (score === 0) continue;
+
+              // tag 加分
+              if (tags[ti] === 'button') score += 300;
+              else if (tags[ti] === 'a') score += 200;
+
+              // 可点击性检测
+              var cls = el.getAttribute && el.getAttribute('class') || '';
+              if (el.onclick || /cursor-pointer|pointer|clickable|tab|upload/i.test(cls)) score += 100;
+
+              // 尺寸过滤
+              try {
+                if ((el.offsetWidth || 0) < 20 || (el.offsetHeight || 0) < 15) continue;
+                if ((el.offsetWidth || 0) > 1200 || (el.offsetHeight || 0) > 300) continue;
+              } catch (eSz) {}
+
+              candidates.push({ el: el, score: score, text: txt.slice(0, 40), tag: tags[ti], cls: (cls || '').slice(0, 60) });
+            } catch (e) {}
+          }
+        }
+
+        // 2. 搜索 [role="tab"] 或含 tab 类的元素
+        try {
+          var roleTabs = root.querySelectorAll('[role="tab"], [class*="tab-"], [class*="Tab"]');
+          for (var ri2 = 0; ri2 < roleTabs.length; ri2++) {
+            var rt = roleTabs[ri2];
+            try {
+              var txt2 = (rt.innerText || rt.textContent || '').trim();
+              if (!txt2 || txt2.length > 40) continue;
+              var hasT = txt2.indexOf('图文') !== -1;
+              var hasV = txt2.indexOf('视频') !== -1;
+              if (hasT && !hasV) {
+                candidates.push({ el: rt, score: 800, text: txt2.slice(0, 40), tag: 'role-tab', cls: (rt.getAttribute && rt.getAttribute('class') || '').slice(0, 60) });
+              }
+            } catch (e2) {}
+          }
+        } catch (e) {}
+
+        // 3. 搜索 <a> 链接，匹配 URL 中含 article / image
+        try {
+          var links = root.querySelectorAll('a');
+          for (var li = 0; li < links.length; li++) {
+            var lnk = links[li];
+            try {
+              var href = lnk.getAttribute && lnk.getAttribute('href') || '';
+              var ltxt = (lnk.innerText || lnk.textContent || '').trim();
+              if (/publish.*article|publish.*image|article.*publish/i.test(href) || (ltxt && ltxt.indexOf('图文') !== -1 && ltxt.indexOf('视频') === -1)) {
+                candidates.push({ el: lnk, score: 600, text: ltxt.slice(0, 40) || href.slice(0, 40), tag: 'link', cls: href.slice(0, 60) });
+              }
+            } catch (e3) {}
+          }
+        } catch (e) {}
+      }
+
+      if (candidates.length === 0) {
+        return { clicked: false, reason: 'no-candidate', roots: roots.length };
+      }
+
+      candidates.sort(function (a, b) { return b.score - a.score; });
+      var top = candidates[0];
+      try {
+        top.el.click();
+      } catch (e) {
+        try {
+          var evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+          top.el.dispatchEvent(evt);
+        } catch (e2) {
+          return { clicked: false, reason: 'click-failed', text: top.text };
+        }
+      }
+      var topFive = candidates.slice(0, 5).map(function (c) {
+        return { text: c.text, score: c.score, tag: c.tag, cls: c.cls };
+      });
+      return { clicked: true, text: top.text, score: top.score, candidates: topFive };
+    })();
+  `;
+
+  try {
+    const val: any = await win.webContents.executeJavaScript(script).catch(() => null);
+    if (val && val.clicked) {
+      log('info', 'tab', `✅ 已切换到图文（匹配="${val.text}" score=${val.score}）`);
+      // 导航到图文页面后需要等待加载完成
+      await new Promise((r) => setTimeout(r, 2000));
+      return true;
+    }
+    log('warn', 'tab', `[kuaishou] 专用脚本未找到图文按钮（${JSON.stringify(val).slice(0, 200)}），尝试 URL fallback…`);
+
+    // fallback：直接把 URL 从 /video 改成 /article（如果当前 URL 是视频页面）
+    try {
+      const currentUrl = win.webContents.getURL();
+      if (/\/article\/publish\/video/i.test(currentUrl)) {
+        const imageUrl = currentUrl.replace(/\/article\/publish\/video.*/i, '/article/publish/article');
+        log('info', 'tab', `[kuaishou] URL fallback: ${imageUrl}`);
+        await win.loadURL(imageUrl);
+        await new Promise((r) => setTimeout(r, 2500));
+        return true;
+      }
+    } catch (eNav) {
+      log('warn', 'tab', `[kuaishou] URL fallback 失败: ${(eNav as Error).message}`);
+    }
+    return false;
+  } catch (e) {
+    log('warn', 'tab', `[kuaishou] 图文切换异常: ${(e as Error).message}`);
+    return false;
+  }
+}
+
+/**
  * 发布图文 — contentType === 'image'
+ *
+ * 快手视频和图文发布页在不同 URL（或通过按钮切换）。
+ * 这里通过专用 tabSwitcher 确保进入图文发布模式。
  */
 async function publishImage(
   accountId: string,
@@ -150,6 +351,10 @@ async function publishImage(
     enableConfirmStep: false,
     enablePostClickVerify: true,
     fillWaitMs: 1500,
+    contentLimits: { title: 80, content: 500 },
+    contentType: 'image',
+    // 🔑 快手专用：图文发布必须切换到图文页面（tab 切换 + URL fallback 双重保险）
+    tabSwitcher: kuaishouTabSwitcher,
   });
 }
 

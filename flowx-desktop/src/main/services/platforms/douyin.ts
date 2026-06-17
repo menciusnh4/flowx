@@ -12,6 +12,7 @@ import type {
   PublishRequest,
   PublishItemProgress,
   AccountCapabilities,
+  ContentType,
 } from '../../../types';
 
 /**
@@ -37,6 +38,10 @@ const meta: PlatformMeta = {
     publishImage: true,
     publishArticle: true,
   } as AccountCapabilities,
+  contentLimits: {
+    title: 80,
+    content: 1000,
+  },
   nicknameSelectors: [
     '[class*="header-"] [class*="name-_"]',
     '[class*="name-_"]',
@@ -223,7 +228,200 @@ async function publishVideo(
     enableConfirmStep: true,
     enablePostClickVerify: true,
     fillWaitMs: 1500,
+    contentLimits: { title: 80, content: 1000 },
+    contentType: 'video',
+    tabSwitcher: douyinTabSwitcher,
   });
+}
+
+/**
+ * [抖音专用] tab 切换 — 支持视频/图文/文章三种模式。
+ *
+ * 抖音创作者服务平台有多个内容类型入口：
+ *   - 视频上传（默认）
+ *   - 图文发布（可能叫"图文"或"图片"tab）
+ *   - 文章发布（可能叫"文章"或"长文"tab）
+ *
+ * 策略：
+ *   1. 优先选择 role="tab" 的元素
+ *   2. 搜索 button/a/div 中含关键词的元素
+ *   3. 检测当前是否已在正确 tab（含 active 类）
+ */
+async function douyinTabSwitcher(
+  win: BrowserWindow,
+  contentType: ContentType,
+  log: (level: 'info' | 'warn' | 'error', stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  // 根据 contentType 定义关键词
+  let targetKeyword: string;
+  let excludeKeyword: string;
+  if (contentType === 'article') {
+    targetKeyword = '文章';
+    excludeKeyword = '视频';
+  } else if (contentType === 'image') {
+    targetKeyword = '图文';
+    excludeKeyword = '视频';
+  } else {
+    targetKeyword = '视频';
+    excludeKeyword = '图文';
+  }
+
+  log('info', 'tab', `[douyin] 执行平台专用 tab 切换 → ${targetKeyword}`);
+
+  const script = `
+    (function () {
+      var targetKw = ${JSON.stringify(targetKeyword)};
+      var excludeKw = ${JSON.stringify(excludeKeyword)};
+      var altKws = [];
+      if (targetKw === '图文') altKws = ['图片', '图集', '图文'];
+      if (targetKw === '视频') altKws = ['视频', '上传视频'];
+      if (targetKw === '文章') altKws = ['文章', '长文', '图文文章'];
+
+      // 递归收集 root
+      var roots = [document];
+      function collectShadow(root) {
+        try {
+          if (!root || !root.querySelectorAll) return;
+          var all = root.querySelectorAll('*');
+          for (var i = 0; i < all.length; i++) {
+            try {
+              if (all[i].shadowRoot) {
+                roots.push(all[i].shadowRoot);
+                collectShadow(all[i].shadowRoot);
+              }
+            } catch (e) {}
+          }
+        } catch (e) {}
+      }
+      function collectIframes(root) {
+        try {
+          var ifs = root.querySelectorAll('iframe');
+          for (var i = 0; i < ifs.length; i++) {
+            try {
+              var idoc = ifs[i].contentDocument || (ifs[i].contentWindow && ifs[i].contentWindow.document);
+              if (idoc) {
+                roots.push(idoc);
+                collectShadow(idoc);
+              }
+            } catch (e) {}
+          }
+        } catch (e) {}
+      }
+      collectShadow(document);
+      collectIframes(document);
+
+      var candidates = [];
+      for (var ri = 0; ri < roots.length; ri++) {
+        var root = roots[ri];
+        if (!root || !root.querySelectorAll) continue;
+
+        // 1. role="tab" 优先
+        try {
+          var roleTabs = root.querySelectorAll('[role="tab"]');
+          for (var ti = 0; ti < roleTabs.length; ti++) {
+            var rt = roleTabs[ti];
+            var txt = (rt.innerText || rt.textContent || '').trim();
+            if (!txt || txt.length > 50) continue;
+            var matched = txt.indexOf(targetKw) !== -1;
+            for (var ai = 0; ai < altKws.length; ai++) {
+              if (txt.indexOf(altKws[ai]) !== -1) matched = true;
+            }
+            var hasExclude = txt.indexOf(excludeKw) !== -1 && excludeKw !== targetKw;
+            if (matched && !hasExclude) {
+              candidates.push({ el: rt, score: 3000, text: txt, tag: 'role-tab',
+                cls: (rt.getAttribute && rt.getAttribute('class') || '').slice(0, 60) });
+            }
+          }
+        } catch (e) {}
+
+        // 2. 搜索 button / a / div / span，匹配关键词
+        var tags = ['button', 'a', 'div', 'span', 'li'];
+        for (var ti2 = 0; ti2 < tags.length; ti2++) {
+          var els = root.querySelectorAll(tags[ti2]);
+          for (var ei = 0; ei < els.length; ei++) {
+            var el = els[ei];
+            try {
+              var txt2 = (el.innerText || el.textContent || '').trim();
+              if (!txt2 || txt2.length > 50) continue;
+
+              var hasTarget = txt2.indexOf(targetKw) !== -1;
+              for (var ai2 = 0; ai2 < altKws.length; ai2++) {
+                if (txt2.indexOf(altKws[ai2]) !== -1) hasTarget = true;
+              }
+              var hasExclude2 = txt2.indexOf(excludeKw) !== -1 && targetKw !== excludeKw;
+              if (!hasTarget || hasExclude2) continue;
+
+              var score = 0;
+              var cls = el.getAttribute && el.getAttribute('class') || '';
+              if (/tab|Tab|TAB|switch|Switch|nav|Nav|menu|Menu/i.test(cls)) score += 500;
+              if (tags[ti2] === 'button') score += 200;
+              else if (tags[ti2] === 'a') score += 150;
+              if (el.onclick !== null || /cursor-pointer|pointer|clickable/i.test(cls)) score += 100;
+              score += 200;
+
+              try {
+                var w = el.offsetWidth || 0;
+                var h = el.offsetHeight || 0;
+                if (w < 30 || h < 20) continue;
+                if (w > 1500 || h > 400) continue;
+              } catch (eSz) {}
+
+              candidates.push({ el: el, score: score, text: txt2.slice(0, 50), tag: tags[ti2], cls: cls.slice(0, 60) });
+            } catch (e) {}
+          }
+        }
+      }
+
+      if (candidates.length === 0) return { clicked: false, reason: 'no-candidate' };
+
+      // 检查当前是否已选中
+      var topCandidates = candidates.slice(0, 5);
+      for (var ai = 0; ai < topCandidates.length; ai++) {
+        var c = topCandidates[ai];
+        try {
+          var activeCls = c.el.getAttribute && c.el.getAttribute('class') || '';
+          if (/is-active|isActive|is_selected|selected|active|-active/i.test(activeCls)) {
+            return { clicked: true, alreadyActive: true, text: '当前已在正确 tab' };
+          }
+        } catch (e) {}
+      }
+
+      candidates.sort(function (a, b) { return b.score - a.score; });
+      var top = candidates[0];
+      try {
+        top.el.click();
+      } catch (e) {
+        try {
+          var evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+          top.el.dispatchEvent(evt);
+        } catch (e2) {
+          return { clicked: false, reason: 'click-failed', text: top.text };
+        }
+      }
+      var topFive = candidates.slice(0, 5).map(function (c) {
+        return { text: c.text, score: c.score, tag: c.tag, cls: c.cls };
+      });
+      return { clicked: true, text: top.text, score: top.score, candidates: topFive };
+    })();
+  `;
+
+  try {
+    const val: any = await win.webContents.executeJavaScript(script).catch(() => null);
+    if (val && val.clicked) {
+      if (val.alreadyActive) {
+        log('info', 'tab', `[douyin] 当前已在${targetKeyword} tab，无需切换`);
+      } else {
+        log('info', 'tab', `✅ 已切换到${targetKeyword} tab（匹配="${val.text}" score=${val.score}）`);
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      return true;
+    }
+    log('warn', 'tab', `[douyin] 专用脚本未找到${targetKeyword} tab（${JSON.stringify(val).slice(0, 200)}），fallback 到通用脚本`);
+    return false;
+  } catch (e) {
+    log('warn', 'tab', `[douyin] tab 切换异常: ${(e as Error).message}`);
+    return false;
+  }
 }
 
 /**
@@ -243,6 +441,9 @@ async function publishImage(
     enableConfirmStep: true,
     enablePostClickVerify: true,
     fillWaitMs: 1500,
+    contentLimits: { title: 80, content: 1000 },
+    contentType: 'image',
+    tabSwitcher: douyinTabSwitcher,
   });
 }
 
@@ -263,6 +464,9 @@ async function publishArticle(
     enableConfirmStep: true,
     enablePostClickVerify: true,
     fillWaitMs: 1500,
+    contentLimits: { title: 80, content: 1000 },
+    contentType: 'article',
+    tabSwitcher: douyinTabSwitcher,
   });
 }
 

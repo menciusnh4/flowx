@@ -29,6 +29,13 @@ export interface PlatformMeta {
   avatarSelectors?: string[];
   /** 页面已登录的启发式关键字（body 文本中含任意即判为已登录） */
   loginKeywords?: string[];
+  /** 平台字数限制（按中文"字符"计算，一个中文/字母/数字/符号均算 1 字） */
+  contentLimits?: {
+    /** 标题最大字符数（超出将被截断，默认不限制） */
+    title?: number;
+    /** 正文/描述最大字符数（超出将被截断，默认不限制） */
+    content?: number;
+  };
 }
 
 /** 内容类型 */

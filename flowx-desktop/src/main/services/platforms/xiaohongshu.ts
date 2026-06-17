@@ -12,6 +12,7 @@ import type {
   PublishRequest,
   PublishItemProgress,
   AccountCapabilities,
+  ContentType,
 } from '../../../types';
 
 /**
@@ -38,6 +39,10 @@ const meta: PlatformMeta = {
     publishImage: true,
     publishArticle: false,
   } as AccountCapabilities,
+  contentLimits: {
+    title: 80,
+    content: 1000,
+  },
   nicknameSelectors: [
     '.account-name',
     '.user-name',
@@ -310,11 +315,189 @@ async function publishVideo(
     publishKeywords: ['发布视频', '发布笔记', '发布', '立即发布', '确认发布'],
     enablePostClickVerify: true,
     fillWaitMs: 1500,
+    contentLimits: { title: 80, content: 1000 },
+    contentType: 'video',
+    // 小红书：视频 tab 通常是默认选中的，但提供 tabSwitcher 以防万一（默认就是视频 tab）
+    tabSwitcher: xiaohongshuTabSwitcher,
   });
 }
 
 /**
- * 发布图文 — 由 PlatformDispatcher.execute 调用（contentType === 'image'）
+ * [小红书专用] tab 切换 — 点击页面上对应的"视频/图文"tab。
+ *
+ * 小红书发布页顶部有两个 tab："上传视频" 和 "上传图文"（或类似文案）。
+ * 页面默认会根据 URL 参数或上次选择打开某个 tab。
+ *
+ * 策略：
+ *   1. 检查当前 URL 是否已经在正确 tab（通过 hash 或参数）
+ *   2. 在整页（含 shadow DOM）搜索含"图文/视频"关键词的 tab 元素
+ *   3. 优先选择 role="tab" 或类名含 "tab" 的元素
+ */
+async function xiaohongshuTabSwitcher(
+  win: BrowserWindow,
+  contentType: ContentType,
+  log: (level: 'info' | 'warn' | 'error', stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  const targetKeyword = contentType === 'image' || contentType === 'article' ? '图文' : '视频';
+  const excludeKeyword = contentType === 'image' || contentType === 'article' ? '视频' : '图文';
+
+  log('info', 'tab', `[xiaohongshu] 执行平台专用 tab 切换 → ${targetKeyword}`);
+
+  const script = `
+    (function () {
+      var targetKw = ${JSON.stringify(targetKeyword)};
+      var excludeKw = ${JSON.stringify(excludeKeyword)};
+
+      // 递归收集 root
+      var roots = [document];
+      function collectShadow(root) {
+        try {
+          if (!root || !root.querySelectorAll) return;
+          var all = root.querySelectorAll('*');
+          for (var i = 0; i < all.length; i++) {
+            try {
+              if (all[i].shadowRoot) {
+                roots.push(all[i].shadowRoot);
+                collectShadow(all[i].shadowRoot);
+              }
+            } catch (e) {}
+          }
+        } catch (e) {}
+      }
+      function collectIframes(root) {
+        try {
+          var ifs = root.querySelectorAll('iframe');
+          for (var i = 0; i < ifs.length; i++) {
+            try {
+              var idoc = ifs[i].contentDocument || (ifs[i].contentWindow && ifs[i].contentWindow.document);
+              if (idoc) {
+                roots.push(idoc);
+                collectShadow(idoc);
+              }
+            } catch (e) {}
+          }
+        } catch (e) {}
+      }
+      collectShadow(document);
+      collectIframes(document);
+
+      var candidates = [];
+      for (var ri = 0; ri < roots.length; ri++) {
+        var root = roots[ri];
+        if (!root || !root.querySelectorAll) continue;
+
+        // 1. 优先：role="tab" 元素（最可靠的选择）
+        try {
+          var roleTabs = root.querySelectorAll('[role="tab"]');
+          for (var ti = 0; ti < roleTabs.length; ti++) {
+            var rt = roleTabs[ti];
+            var txt = (rt.innerText || rt.textContent || '').trim();
+            if (!txt || txt.length > 40) continue;
+            if (txt.indexOf(targetKw) !== -1 && txt.indexOf(excludeKw) === -1) {
+              candidates.push({ el: rt, score: 3000, text: txt, tag: 'role-tab', cls: (rt.getAttribute && rt.getAttribute('class') || '').slice(0, 60) });
+            }
+          }
+        } catch (e) {}
+
+        // 2. 搜索 button / a / div，匹配目标关键词
+        var tags = ['button', 'a', 'div', 'span', 'li'];
+        for (var ti2 = 0; ti2 < tags.length; ti2++) {
+          var els = root.querySelectorAll(tags[ti2]);
+          for (var ei = 0; ei < els.length; ei++) {
+            var el = els[ei];
+            try {
+              var txt2 = (el.innerText || el.textContent || '').trim();
+              if (!txt2 || txt2.length > 50) continue;
+
+              var hasTarget = txt2.indexOf(targetKw) !== -1;
+              var hasExclude = txt2.indexOf(excludeKw) !== -1;
+              if (!hasTarget || hasExclude) continue;
+
+              var score = 0;
+              // 类名含 tab / nav / switch 加分
+              var cls = el.getAttribute && el.getAttribute('class') || '';
+              if (/tab|Tab|TAB|switch|Switch|nav|Nav/i.test(cls)) score += 500;
+              // 标签加分
+              if (tags[ti2] === 'button') score += 200;
+              else if (tags[ti2] === 'a') score += 150;
+              // 可点击检测
+              if (el.onclick !== null || /cursor-pointer|pointer|clickable/i.test(cls)) score += 100;
+              // 基础分：包含目标关键词就命中
+              score += 200;
+
+              // 尺寸过滤
+              try {
+                var w = el.offsetWidth || 0;
+                var h = el.offsetHeight || 0;
+                if (w < 30 || h < 20) continue;
+                if (w > 1500 || h > 400) continue;
+              } catch (eSz) {}
+
+              candidates.push({ el: el, score: score, text: txt2.slice(0, 50), tag: tags[ti2], cls: cls.slice(0, 60) });
+            } catch (e) {}
+          }
+        }
+      }
+
+      if (candidates.length === 0) return { clicked: false, reason: 'no-candidate' };
+
+      // 检查当前是否已选中目标 tab（已有 is-active / active 类）
+      var topCandidates = candidates.slice(0, 5);
+      var alreadyActive = false;
+      for (var ai = 0; ai < topCandidates.length; ai++) {
+        var c = topCandidates[ai];
+        try {
+          var activeCls = c.el.getAttribute && c.el.getAttribute('class') || '';
+          if (/is-active|isActive|is_selected|selected|active/i.test(activeCls)) {
+            alreadyActive = true;
+            break;
+          }
+        } catch (e) {}
+      }
+      if (alreadyActive) {
+        return { clicked: true, alreadyActive: true, text: '当前已在正确 tab' };
+      }
+
+      candidates.sort(function (a, b) { return b.score - a.score; });
+      var top = candidates[0];
+      try {
+        top.el.click();
+      } catch (e) {
+        try {
+          var evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+          top.el.dispatchEvent(evt);
+        } catch (e2) {
+          return { clicked: false, reason: 'click-failed', text: top.text };
+        }
+      }
+      var topFive = candidates.slice(0, 5).map(function (c) {
+        return { text: c.text, score: c.score, tag: c.tag, cls: c.cls };
+      });
+      return { clicked: true, text: top.text, score: top.score, candidates: topFive };
+    })();
+  `;
+
+  try {
+    const val: any = await win.webContents.executeJavaScript(script).catch(() => null);
+    if (val && val.clicked) {
+      if (val.alreadyActive) {
+        log('info', 'tab', `[xiaohongshu] 当前已在${targetKeyword} tab，无需切换`);
+      } else {
+        log('info', 'tab', `✅ 已切换到${targetKeyword} tab（匹配="${val.text}" score=${val.score}）`);
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      return true;
+    }
+    log('warn', 'tab', `[xiaohongshu] 专用脚本未找到${targetKeyword} tab（${JSON.stringify(val).slice(0, 200)}），fallback 到通用脚本`);
+    return false;
+  } catch (e) {
+    log('warn', 'tab', `[xiaohongshu] tab 切换异常: ${(e as Error).message}`);
+    return false;
+  }
+}
+
+/**
+ * 发布图文 — contentType === 'image'
  * 小红书图文与视频使用相同的发布页面：上传图片文件 → 填标题/正文 → 点击"发布笔记"按钮
  */
 async function publishImage(
@@ -329,6 +512,10 @@ async function publishImage(
     publishKeywords: ['发布笔记', '发布', '发布视频', '立即发布', '确认发布'],
     enablePostClickVerify: true,
     fillWaitMs: 1500,
+    contentLimits: { title: 80, content: 1000 },
+    contentType: 'image',
+    // 🔑 小红书专用：确保切换到图文 tab
+    tabSwitcher: xiaohongshuTabSwitcher,
   });
 }
 

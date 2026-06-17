@@ -261,10 +261,180 @@ export function makeFailedResult(
  * 关键改进：所有策略成功后均会执行 verifyFilesInjected() 校验 input.files.length>0
  * 页面实际结构：<input type=file style=display:none> 已在主文档中存在，点击按钮触发它
  */
+
+/**
+ * 切换发布页的"内容类型 tab"（视频 ↔ 图文）。
+ *
+ * 背景：
+ *   - 小红书 / 抖音 / 快手 的发布页默认都在"视频上传"模式
+ *   - 发布图文需要先点击页面上的"图文 / 图片上传"区域或 tab 切换到图文上传模式
+ *   - 切换后页面的 file input 才会替换为"接受图片"的 input
+ *
+ * 实现思路（通用脚本，不依赖特定 DOM 结构）：
+ *   在整页（主文档 + iframe + shadow DOM）搜索包含以下关键词的可点击元素：
+ *     图文 / 图片 / 相册 / 上传图文 / 发布图文 / 图文笔记
+ *   同时排除包含"视频"关键词的元素（避免误点视频 tab）。
+ *
+ * @param contentType 当前发布类型 — 'image'/'article' 需要切换到图文；'video' 无需切换
+ * @returns true 表示切换成功（或本来就是正确的类型）；false 表示未找到可切换的元素
+ */
+export async function switchContentTypeTab(
+  win: BrowserWindow,
+  contentType: ContentType | undefined,
+  log: (level: PublishLogEntry['level'], stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  // 视频类型：保持默认即可，无需切换 tab
+  if (!contentType || contentType === 'video') {
+    log('info', 'tab', `当前 contentType=${contentType || 'video'}，保持默认视频 tab`);
+    return true;
+  }
+  log('info', 'tab', `检测到 contentType=${contentType}，尝试切换到图文 tab…`);
+
+  const switchScript = `
+    (function () {
+      // 递归收集 root：主文档 + iframe.contentDocument + shadowRoot
+      var roots = [];
+      function collectRoot(root) {
+        if (!root) return;
+        roots.push(root);
+        try {
+          var iframes = root.querySelectorAll('iframe');
+          for (var i = 0; i < iframes.length; i++) {
+            try {
+              var idoc = iframes[i].contentDocument || (iframes[i].contentWindow && iframes[i].contentWindow.document);
+              if (idoc) collectRoot(idoc);
+            } catch (e) { /* 跨域 iframe 忽略 */ }
+          }
+        } catch (e) {}
+        try {
+          // shadow DOM（open）
+          if (root.querySelectorAll) {
+            var els = root.querySelectorAll('*');
+            for (var j = 0; j < els.length; j++) {
+              try {
+                if (els[j].shadowRoot) collectRoot(els[j].shadowRoot);
+              } catch (e) {}
+            }
+          }
+        } catch (e) {}
+      }
+      collectRoot(document);
+
+      // 在每个 root 中搜索候选（div / button / a / [role=button] / [role=tab]）
+      var candidates = [];
+      var keywords_article = ['图文', '图片', '相册', '发布图文', '上传图文', '图文笔记', '图片上传', '图'];
+      var keywords_video = ['视频', '上传视频', '视频上传'];
+
+      function addCandidate(el, rootHint) {
+        try {
+          var txt = (el.innerText || el.textContent || '').trim();
+          if (!txt || txt.length > 50) return;
+          var isArticle = false;
+          for (var ki = 0; ki < keywords_article.length; ki++) {
+            if (txt.indexOf(keywords_article[ki]) !== -1) { isArticle = true; break; }
+          }
+          var isVideo = false;
+          for (var kv = 0; kv < keywords_video.length; kv++) {
+            if (txt.indexOf(keywords_video[kv]) !== -1) { isVideo = true; break; }
+          }
+          // 只选"含图文关键词且不含视频关键词"的元素
+          if (!isArticle || isVideo) return;
+
+          var tag = (el.tagName || '').toLowerCase();
+          var role = el.getAttribute && el.getAttribute('role') || '';
+          var cls = el.getAttribute && el.getAttribute('class') || '';
+          var score = 0;
+          // role=tab / tag=button 优先
+          if (role === 'tab') score += 500;
+          if (tag === 'button') score += 400;
+          if (role === 'button') score += 300;
+          if (tag === 'a') score += 200;
+          // 含特定 tab 关键词（来自页面结构）加分
+          if (txt.indexOf('图文') !== -1) score += 200;
+          if (txt.indexOf('图片') !== -1) score += 150;
+          // 可点击判断：有 onclick / 有 cursor pointer / 是原生可点击标签
+          var hasClickHandler = el.onclick !== null || (el.style && el.style.cursor === 'pointer');
+          if (hasClickHandler || tag === 'button' || tag === 'a' || role === 'button' || role === 'tab') {
+            score += 100;
+          }
+          // 尺寸过滤
+          if (el.offsetWidth < 30 || el.offsetHeight < 20) return;  // 太小
+          if (el.offsetWidth > 800 || el.offsetHeight > 500) return; // 太大（可能是容器）
+
+          candidates.push({
+            el: el,
+            score: score,
+            text: txt.slice(0, 40),
+            tag: tag,
+            role: role,
+            cls: (cls || '').slice(0, 60),
+            rootHint: rootHint,
+          });
+        } catch (e) {}
+      }
+
+      for (var ri = 0; ri < roots.length; ri++) {
+        try {
+          var r = roots[ri];
+          var tags = ['div', 'button', 'a', 'span', 'section', 'li'];
+          for (var ti = 0; ti < tags.length; ti++) {
+            var list = r.querySelectorAll(tags[ti]);
+            for (var ci = 0; ci < list.length; ci++) {
+              addCandidate(list[ci], ri === 0 ? 'main' : 'sub');
+            }
+          }
+          // role=tab 特殊搜索
+          var roleTabs = r.querySelectorAll('[role="tab"]');
+          for (var ri2 = 0; ri2 < roleTabs.length; ri2++) addCandidate(roleTabs[ri2], 'role-tab');
+        } catch (e) {}
+      }
+
+      if (candidates.length === 0) return { clicked: false, reason: 'no-candidate', totalRoots: roots.length };
+
+      candidates.sort(function (a, b) { return b.score - a.score; });
+      var top = candidates[0];
+      try {
+        top.el.click();
+      } catch (e) {
+        try {
+          var evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+          top.el.dispatchEvent(evt);
+        } catch (e2) {}
+      }
+      // 返回前 5 个候选，方便调试
+      var topFive = candidates.slice(0, 5).map(function (c) {
+        return { text: c.text, score: c.score, tag: c.tag, role: c.role, cls: c.cls };
+      });
+      return { clicked: true, text: top.text, score: top.score, candidates: topFive, totalRoots: roots.length };
+    })();
+  `;
+
+  try {
+    // 确保 CDP debugger 已 attach（如果之前没有调用过 uploadViaCDP，可能未 attach）
+    try { await win.webContents.debugger.attach('1.3'); } catch { /* 已 attached */ }
+    const res: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+      expression: switchScript, returnByValue: true,
+    }).catch(() => null);
+    const val = res && res.result && res.result.value ? res.result.value : null;
+    if (val && val.clicked) {
+      log('info', 'tab', `✅ 已切换到图文 tab（匹配文本="${val.text}"，score=${val.score}）`);
+      await sleep(1500); // 给页面一点时间完成 tab 切换后 DOM 替换
+      return true;
+    }
+    log('warn', 'tab', `未找到图文 tab（可能是页面结构不同或已在正确 tab），继续原流程。debug: ${JSON.stringify(val).slice(0, 300)}`);
+    // 找不到也不阻断 — 继续用默认方式上传
+    return false;
+  } catch (e) {
+    log('warn', 'tab', `tab 切换脚本异常: ${(e as Error).message}`);
+    return false;
+  }
+}
+
 export async function uploadViaCDP(
   win: BrowserWindow,
   files: string[],
   log: (level: PublishLogEntry['level'], stage: string, message: string, data?: Record<string, unknown>) => void,
+  contentType?: ContentType,
 ): Promise<boolean> {
   try {
     log('info', 'upload', `开始上传: ${files.join(', ')}`);
@@ -297,14 +467,17 @@ export async function uploadViaCDP(
     };
 
     // 步骤 A：点击上传按钮，让页面创建 input[type=file]
-    // （快手等平台是懒创建的：需要先点击"上传视频"按钮才会创建 file input）
-    // 关键点：只点击真正的交互元素（<button>/<a>），不要误点页面标题、侧边栏等纯文本容器
+    //   - 视频发布：点击"上传视频 / 点击上传"按钮
+    //   - 图文发布：优先点击"上传图文 / 上传图片 / 图片上传"按钮
+    //   - 通用兜底：_upload-btn / upload-btn class 或"上传"文本
     try {
-      log('info', 'upload', `[A] 点击上传按钮，让页面创建 file input…`);
+      const isImage = contentType === 'image' || contentType === 'article';
+      log('info', 'upload', `[A] 点击上传按钮（contentType=${contentType || 'video'}，${isImage ? '图文模式' : '视频模式'}）…`);
       const clickScript = `
         (function () {
+          var isImageMode = ${isImage ? 'true' : 'false'};
           var candidates = [];
-          // 判断元素是否真的可交互：是 <button>/<a> 或有 role=button；排除明显是导航/标题的容器
+          // 判断是否真的可交互
           function isInteractive(el) {
             try {
               var tag = (el.tagName || '').toLowerCase();
@@ -313,37 +486,63 @@ export async function uploadViaCDP(
               if (role === 'button' || role === 'link') return true;
               var cls = el.getAttribute && el.getAttribute('class') || '';
               if (cls.indexOf('_upload-btn') !== -1 || cls.indexOf('upload-btn') !== -1) return true;
-              // 排除明显是导航/标题的文字容器
               if (cls.indexOf('header') !== -1 || cls.indexOf('nav') !== -1 || cls.indexOf('sidebar') !== -1) return false;
-              // 排除特别宽/高的元素（通常是容器不是按钮）
-              if (el.offsetWidth > 500 || el.offsetHeight > 100) return false;
+              if (el.offsetWidth > 800 || el.offsetHeight > 500) return false;
               return false;
             } catch (e) { return false; }
           }
-          // 1. 优先点击 class 含 _upload-btn 的元素（快手专用 class）
+          // 1. 通用 upload-btn class（快手等平台的通用按钮类名）
           try {
-            var classBtns = document.querySelectorAll('[class*="_upload-btn"]');
+            var classBtns = document.querySelectorAll('[class*="_upload-btn"], [class*="upload-btn"]');
             for (var ci = 0; ci < classBtns.length; ci++) {
               var cb = classBtns[ci];
               if (cb && cb.offsetWidth >= 20 && cb.offsetHeight >= 20) {
-                candidates.push({ el: cb, score: 1000, reason: 'class-upload-btn', text: (cb.innerText || cb.textContent || '').trim() });
+                var cbtxt = (cb.innerText || cb.textContent || '').trim();
+                // 图文模式下，如果文本含"视频"关键词，降分；如果含"图文/图片"关键词，大幅加分
+                var sc = 1000;
+                if (isImageMode) {
+                  if (cbtxt.indexOf('视频') !== -1) sc -= 500;
+                  if (cbtxt.indexOf('图文') !== -1 || cbtxt.indexOf('图片') !== -1) sc += 300;
+                }
+                candidates.push({ el: cb, score: sc, reason: 'class-upload-btn', text: cbtxt.slice(0, 40) });
               }
             }
           } catch (e) {}
-          // 2. 匹配"上传视频/点击上传/上传文件"等文字的 <button> 或 <a>
+          // 2. 根据 contentType 选择文本匹配按钮
           try {
-            var buttons = document.querySelectorAll('button, a, [role="button"]');
+            var buttons = document.querySelectorAll('button, a, [role="button"], div, span');
             for (var ti = 0; ti < buttons.length; ti++) {
               var txt = (buttons[ti].innerText || buttons[ti].textContent || '').trim();
-              if (!txt || txt.length > 30) continue;
+              if (!txt || txt.length > 40) continue;
               var score = 0;
-              if (txt === '上传视频') score += 800;
-              else if (txt.indexOf('上传视频') !== -1) score += 600;
-              else if (txt === '点击上传') score += 700;
-              else if (txt === '上传文件') score += 500;
-              else if (txt === '上传') score += 300;
+              var tagName = (buttons[ti].tagName || '').toLowerCase();
+              var roleName = buttons[ti].getAttribute && buttons[ti].getAttribute('role') || '';
+              var isNativeClickable = (tagName === 'button' || tagName === 'a' || roleName === 'button' || roleName === 'tab');
+
+              if (isImageMode) {
+                // 图文模式：优先匹配"图文/图片"类关键词
+                if (txt === '上传图文') score += 900;
+                else if (txt === '图文') score += 800;
+                else if (txt.indexOf('图文') !== -1) score += 700;
+                else if (txt === '上传图片') score += 750;
+                else if (txt.indexOf('图片上传') !== -1) score += 700;
+                else if (txt.indexOf('图片') !== -1) score += 600;
+                else if (txt.indexOf('相册') !== -1) score += 500;
+                else if (txt === '点击上传') score += 550;
+                else if (txt.indexOf('上传') !== -1 && txt.indexOf('视频') === -1) score += 400;
+              } else {
+                // 视频模式：沿用原逻辑
+                if (txt === '上传视频') score += 900;
+                else if (txt.indexOf('上传视频') !== -1) score += 700;
+                else if (txt === '点击上传') score += 650;
+                else if (txt === '上传文件') score += 550;
+                else if (txt.indexOf('视频') !== -1 && txt.indexOf('图文') === -1) score += 450;
+                else if (txt === '上传') score += 300;
+              }
               if (score > 0 && buttons[ti].offsetWidth >= 20 && buttons[ti].offsetHeight >= 20) {
-                candidates.push({ el: buttons[ti], score: score, reason: 'interactive-text-match', text: txt });
+                // 原生可点击元素额外加分
+                if (isNativeClickable) score += 200;
+                candidates.push({ el: buttons[ti], score: score, reason: 'text-match', text: txt });
               }
             }
           } catch (e) {}
@@ -352,14 +551,15 @@ export async function uploadViaCDP(
           var target = candidates[0];
           try { target.el.click(); } catch (e) {}
           try { target.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); } catch (e) {}
-          return { clicked: true, count: candidates.length, text: target.text.slice(0, 60), reason: target.reason };
+          var topFive = candidates.slice(0, 5).map(function (c) { return { text: c.text, score: c.score, reason: c.reason }; });
+          return { clicked: true, count: candidates.length, text: target.text.slice(0, 60), reason: target.reason, topFive: topFive };
         })();
       `;
       const clickRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
         expression: clickScript, returnByValue: true,
       }).catch(() => null);
       const clickVal = clickRes && clickRes.result && clickRes.result.value ? clickRes.result.value : null;
-      log('info', 'upload', `[A] 点击结果: ${clickVal ? JSON.stringify(clickVal).slice(0, 200) : 'unknown'}`);
+      log('info', 'upload', `[A] 点击结果: ${clickVal ? JSON.stringify(clickVal).slice(0, 300) : 'unknown'}`);
       await sleep(1500);
     } catch (err) {
       log('warn', 'upload', `[A] 点击上传按钮异常: ${(err as Error).message}`);
@@ -489,9 +689,24 @@ export async function uploadViaCDP(
       }
 
       if (interceptionEnabled) {
+        const isImageFallback = contentType === 'image' || contentType === 'article';
         const fallbackClick = `
           (function () {
+            var isImg = ${isImageFallback ? 'true' : 'false'};
             var btn = document.querySelector('button[class*=_upload-btn]') || document.querySelector('button[class*=upload-btn]') || document.querySelector('button');
+            // 优先尝试：图文模式下找"图文/图片"关键词的按钮
+            if (isImg) {
+              try {
+                var allBtns = document.querySelectorAll('button, a, [role="button"], div, span');
+                for (var j = 0; j < allBtns.length; j++) {
+                  var jtxt = (allBtns[j].innerText || allBtns[j].textContent || '').trim();
+                  if (jtxt && (jtxt.indexOf('图文') !== -1 || jtxt.indexOf('图片') !== -1)) {
+                    allBtns[j].click();
+                    return { clicked: true, text: jtxt };
+                  }
+                }
+              } catch (e) {}
+            }
             if (btn) {
               try { btn.click(); return { clicked: true, text: btn.innerText || btn.textContent || '' }; }
               catch (e) { return { clicked: false, error: String(e) }; }
@@ -499,9 +714,16 @@ export async function uploadViaCDP(
             var all = document.querySelectorAll('*');
             for (var i = 0; i < all.length; i++) {
               var txt = (all[i].innerText || all[i].textContent || '').trim();
-              if (txt === '上传视频' || txt === '点击上传' || txt === '上传文件') {
-                try { all[i].click(); return { clicked: true, text: txt }; }
-                catch (e) { return { clicked: false, error: String(e) }; }
+              if (isImg) {
+                if (txt === '上传图文' || txt === '图文' || txt.indexOf('图文') !== -1 || txt.indexOf('图片') !== -1) {
+                  try { all[i].click(); return { clicked: true, text: txt }; }
+                  catch (e) { return { clicked: false, error: String(e) }; }
+                }
+              } else {
+                if (txt === '上传视频' || txt === '点击上传' || txt === '上传文件') {
+                  try { all[i].click(); return { clicked: true, text: txt }; }
+                  catch (e) { return { clicked: false, error: String(e) }; }
+                }
               }
             }
             return { clicked: false };
@@ -1285,12 +1507,21 @@ export function buildFillTitle(title: string): string {
         for (var i = 0; i < titleKw.length; i++) {
           if (text.indexOf(titleKw[i]) !== -1) { s += 500; break; }
         }
-        // 标题输入框通常较短（1 行），给 contenteditable 更高的基础分（快手标题是 contenteditable）
+        // 🔑 关键修复：ProseMirror/Tiptap 是**正文编辑器**，绝对不可能是标题！
+        // 检测到 ProseMirror 类 → 大幅扣分，避免把正文编辑器误识别为标题输入框
+        var clsAttr = el.getAttribute && el.getAttribute('class') || '';
+        if (/tiptap|ProseMirror|prosemirror/i.test(clsAttr)) s -= 5000;
+        // 额外保险：检测子元素是否含 ProseMirror 类（父容器也可能被误判）
+        try {
+          var pmChild = el.querySelector && el.querySelector('.tiptap, .ProseMirror, [class*="tiptap"], [class*="ProseMirror"]');
+          if (pmChild !== null && pmChild !== el) s -= 5000;
+        } catch (epm) {}
+        // 标题输入框通常较短（1 行），给 contenteditable 更高的基础分
         if (isTitle) {
-          if (type === 'contenteditable') s += 80; // 快手标题框是 contenteditable，优先
+          if (type === 'contenteditable') s += 80;
           if (type === 'input') s += 30;
-          if ((el.offsetHeight || 0) < 80) s += 20; // 矮框优先（通常是标题）
-          if ((el.offsetWidth || 0) > 200) s += 10; // 较宽的输入框更可能是标题
+          if ((el.offsetHeight || 0) < 80) s += 20;
+          if ((el.offsetWidth || 0) > 200) s += 10;
         }
         return s;
       }
@@ -1366,25 +1597,47 @@ export function buildFillTitle(title: string): string {
       candidates.sort(function (a, b) { return b.score - a.score; });
       var target = candidates[0];
 
-      // 填充 + 派发事件（兼容 React 受控组件）
+      // 填充 + 派发事件（兼容 React 受控组件 + ProseMirror/Tiptap）
       var method = 'unknown';
+      var tgtCls2 = target.el.getAttribute && target.el.getAttribute('class') || '';
+      var tgtIsProseMirror = /tiptap|ProseMirror|prosemirror/i.test(tgtCls2);
       try {
         if (target.tag === 'contenteditable') {
-          target.el.innerText = ${jt};
-          method = 'innerText';
+          // 对 contenteditable 优先使用 execCommand，兼容 ProseMirror/Tiptap
+          try {
+            target.el.focus();
+            try {
+              var rng2 = document.createRange();
+              rng2.selectNodeContents(target.el);
+              var sel2 = window.getSelection();
+              sel2.removeAllRanges();
+              sel2.addRange(rng2);
+            } catch (ex2) {}
+            try { document.execCommand('delete'); } catch (ex3) {}
+            try {
+              document.execCommand('insertText', false, ${jt});
+              method = 'title-execCommand';
+            } catch (ex4) {
+              target.el.innerText = ${jt};
+              method = 'title-innerText-fallback';
+            }
+          } catch (ex) {
+            target.el.innerText = ${jt};
+            method = 'title-innerText';
+          }
         } else {
           try {
             var proto = target.tag === 'textarea' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
             var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
             setter.call(target.el, ${jt});
-            method = 'native-setter';
+            method = 'title-native-setter';
           } catch (e1) {
             try {
               target.el.value = ${jt};
-              method = 'direct-value';
+              method = 'title-direct-value';
             } catch (e2) {
               target.el.innerText = ${jt};
-              method = 'fallback-innerText';
+              method = 'title-fallback-innerText';
             }
           }
         }
@@ -1398,6 +1651,7 @@ export function buildFillTitle(title: string): string {
           tag: target.tag,
           score: target.score,
           matchedText: target.text,
+          isProseMirror: tgtIsProseMirror,
           readBack: (target.el.innerText || target.el.value || '').slice(0, 80),
           totalCandidates: candidates.length
         };
@@ -1408,7 +1662,7 @@ export function buildFillTitle(title: string): string {
   `;
 }
 
-/** 填写正文/描述脚本（v4：iframe 穿透 + Shadow DOM 穿透 + 更精准的内容区域匹配 + 跳过选择下拉） */
+/** 填写正文/描述脚本（v4：iframe 穿透 + Shadow DOM 穿透 + 更精准的内容区域匹配 + ProseMirror 支持） */
 export function buildFillContent(content: string): string {
   const jc = JSON.stringify(content);
   return `
@@ -1475,17 +1729,43 @@ export function buildFillContent(content: string): string {
         for (var i = 0; i < kw.length; i++) {
           if (text.indexOf(kw[i]) !== -1) { s += 500; break; }
         }
-        // 🔑 contenteditable 最高优先级（小红书/快手正文都是 contenteditable，通常没有 placeholder）
-        // 即使没有关键词，也给高分，因为视频上传完成后出现的 contenteditable 几乎肯定是正文编辑区
+        // 🔑 ProseMirror / Tiptap 编辑器检测 —— 小红书正文使用此框架
+        // 这类编辑器有自己的内部 state 管理，需要专门的填充方法
+        var clsAttr = el.getAttribute && el.getAttribute('class') || '';
+        var isProseMirror = /tiptap|ProseMirror|prosemirror/i.test(clsAttr);
+        var hasDataPlaceholder = el.getAttribute && el.getAttribute('data-placeholder');
+        // 🔑 新增：递归检查子元素的 data-placeholder（小红书 ProseMirror 容器的 <p> 子元素才带 data-placeholder）
+        if (!hasDataPlaceholder) {
+          try {
+            var childPh = el.querySelectorAll('[data-placeholder]');
+            if (childPh.length > 0) {
+              for (var pi = 0; pi < childPh.length; pi++) {
+                var phVal = childPh[pi].getAttribute && childPh[pi].getAttribute('data-placeholder') || '';
+                if (/正文|描述|内容|分享|简介|作品/i.test(phVal)) { hasDataPlaceholder = phVal; break; }
+              }
+            }
+          } catch (ePh) {}
+        }
+        var hasProseMirrorChild = false;
+        try {
+          var inner = el.querySelectorAll('[class*="ProseMirror"], [class*="tiptap"]');
+          hasProseMirrorChild = inner.length > 0;
+        } catch (e) {}
+        if (isProseMirror || hasProseMirrorChild) {
+          s += 2000; // 超高优先级：肯定是正文编辑区
+        }
+        if (hasDataPlaceholder && /正文|描述|内容|分享|简介/i.test(hasDataPlaceholder || '')) {
+          s += 1000;
+        }
+        // contenteditable 高优先级（快手/小红书正文）
         if (type === 'contenteditable') {
-          s += 400; // 基础高分（大于普通 input 的关键词分）
+          s += 400; // 基础高分
           var h = el.offsetHeight || 0;
-          if (h > 150) s += 300;     // 高的 contenteditable 是正文区（小红书正文编辑区很高）
+          if (h > 150) s += 300;    // 高的 contenteditable 是正文区
           else if (h > 80) s += 200;
           else if (h > 50) s += 100;
           var w = el.offsetWidth || 0;
-          if (w > 400) s += 150;     // 宽的 contenteditable 更像正文
-          // 空的 contenteditable 优先（不要覆盖已经有内容的）
+          if (w > 400) s += 150;
           if (!hasValue) s += 100;
         }
         if (type === 'textarea') {
@@ -1494,17 +1774,15 @@ export function buildFillContent(content: string): string {
           if (th2 > 150) s += 250;
           else if (th2 > 80) s += 150;
         }
-        // input 给最低基础分，只有匹配到关键词才给高分（防止误填）
         if (type === 'input') {
           s += 10;
-          // 窄的输入框（< 100px 高）更可能不是正文
           if ((el.offsetHeight || 0) < 50) s -= 20;
         }
         if ((el.offsetWidth || 0) > 300) s += 20;
         return s;
       }
 
-      // 遍历所有 root（主文档 + iframe + Shadow DOM）收集可编辑元素
+      // 遍历所有 root 收集可编辑元素
       for (var di = 0; di < roots.length; di++) {
         var d = roots[di].doc;
         if (!d || !d.querySelectorAll) continue;
@@ -1524,7 +1802,6 @@ export function buildFillContent(content: string): string {
             allEls.push({ el: ces[k], tag: 'contenteditable' });
           }
         } catch (e) {}
-        // 🔑 input 放在最后（优先级最低）
         try {
           var allInps = d.querySelectorAll('input');
           for (var j = 0; j < allInps.length; j++) {
@@ -1543,25 +1820,85 @@ export function buildFillContent(content: string): string {
           var aria = (elx.getAttribute('aria-label') || '').toLowerCase();
           var lbl = tryGetLabel(elx, d);
           var combined = [ph, aria, lbl].join(' ');
-          // 跳过：标题相关元素（标题脚本应该已经填它了）
+          // 跳过：标题相关元素
           if (/标题|作品标题|作品名称|视频标题|title|标题栏|标题内容|填写标题|添加标题|作品名|会有更多赞/i.test(combined)) continue;
-          // 跳过：选择类/下拉/分类/话题/搜索
+          // 跳过：选择类/下拉/分类/话题/搜索/地点
           if (/选择|类型|下拉|选项|search|搜索|话题|\\btag\\b|标签|分类|地点|位置|\\bwhere\\b/i.test(combined)) continue;
-          // 跳过已经有内容的小输入框（可能是话题/tag）
           if (val.length > 0 && /话题|tags|tag|#/i.test(combined)) continue;
+
+          // 🔑 修正 ProseMirror 编辑器的 hasContent 判断：
+          // ProseMirror 空状态结构为 <p class="is-empty"><br></p>，innerText 可能为空串或换行
+          // 但更可靠的是检测 class 中是否含 is-empty，或子元素是否含 is-empty
+          var realHasContent = val.length > 0;
+          if (allEls[m].tag === 'contenteditable') {
+            var xCls = elx.getAttribute && elx.getAttribute('class') || '';
+            if (/tiptap|ProseMirror|prosemirror/i.test(xCls)) {
+              // 如果编辑器自身有 is-empty 类，明确标记为空
+              if (/is-empty|is-editor-empty/i.test(xCls)) {
+                realHasContent = false;
+              } else {
+                // 检查子元素是否有 is-empty 类
+                try {
+                  var emptyChild = elx.querySelector('.is-empty, .is-editor-empty');
+                  if (emptyChild !== null) realHasContent = false;
+                  else realHasContent = (val.trim().length > 0);
+                } catch (eX) {
+                  realHasContent = (val.trim().length > 0);
+                }
+              }
+            } else {
+              // 普通 contenteditable：trim 后再判断
+              realHasContent = (val.trim().length > 0);
+            }
+          }
+
           candidates.push({
             el: elx, tag: allEls[m].tag,
-            score: scoreElement(elx, allEls[m].tag, combined, val.length > 0),
+            score: scoreElement(elx, allEls[m].tag, combined, realHasContent),
             text: combined.slice(0, 80),
-            hasContent: val.length > 0,
+            hasContent: realHasContent,
             inShadow: !!roots[di].isShadow
           });
         }
       }
 
+      // 🔑 详细调试信息（帮助诊断为什么内容没填写）
+      var debugInfo = {
+        rootCount: roots.length,
+        mainRoot: 0,
+        shadowRoot: 0,
+        totalCands: candidates.length,
+        top5: [],
+        target: null,
+        fillSteps: [],
+        readBack: ''
+      };
+      try {
+        for (var ddx = 0; ddx < roots.length; ddx++) {
+          if (roots[ddx].isMain) debugInfo.mainRoot++;
+          else if (roots[ddx].isShadow) debugInfo.shadowRoot++;
+        }
+      } catch (e) {}
+
       if (candidates.length === 0) {
-        return { success: false, reason: 'no-candidates', count: 0 };
+        return { success: false, reason: 'no-candidates', count: 0, debug: debugInfo };
       }
+
+      // 记录 top 5 candidates
+      try {
+        var sortedCands = candidates.slice().sort(function (a, b) { return b.score - a.score; });
+        for (var tIdx = 0; tIdx < Math.min(5, sortedCands.length); tIdx++) {
+          var c = sortedCands[tIdx];
+          var cCls = c.el.getAttribute && c.el.getAttribute('class') || '';
+          debugInfo.top5.push({
+            score: c.score, tag: c.tag, hasContent: c.hasContent,
+            text: (c.text || '').slice(0, 50),
+            cls: cCls.slice(0, 80),
+            h: c.el.offsetHeight || 0, w: c.el.offsetWidth || 0,
+            isPm: /tiptap|ProseMirror|prosemirror/i.test(cCls)
+          });
+        }
+      } catch (e) {}
 
       // 优先选没有内容的元素（避免覆盖标题）
       var emptyCandidates = candidates.filter(function (c) { return !c.hasContent; });
@@ -1569,12 +1906,120 @@ export function buildFillContent(content: string): string {
       pool.sort(function (a, b) { return b.score - a.score; });
       var target = pool[0];
 
+      // 🔑 检测是否为 ProseMirror/Tiptap 编辑器
+      var tgtCls = target.el.getAttribute && target.el.getAttribute('class') || '';
+      var tgtIsProseMirror = /tiptap|ProseMirror|prosemirror/i.test(tgtCls);
+      var tgtHasProseChild = false;
+      try {
+        tgtHasProseChild = target.el.querySelector &&
+          target.el.querySelector('.tiptap, .ProseMirror, [class*="tiptap"], [class*="ProseMirror"]') !== null;
+      } catch (e) {}
+
+      debugInfo.target = {
+        tag: target.tag, score: target.score, text: (target.text || '').slice(0, 50),
+        isProseMirror: tgtIsProseMirror, hasProseChild: tgtHasProseChild,
+        cls: tgtCls.slice(0, 80), h: target.el.offsetHeight || 0, w: target.el.offsetWidth || 0,
+        hasContent: target.hasContent
+      };
+
       var method = 'unknown';
       try {
-        if (target.tag === 'contenteditable') {
-          target.el.innerText = ${jc};
-          method = 'innerText';
+        if (target.tag === 'contenteditable' && (tgtIsProseMirror || tgtHasProseChild)) {
+          // ========== ProseMirror/Tiptap 专用填充（极简 v3）
+          var targetText = ${jc};
+          var lines = targetText.split('\\n');
+          var pmWrote = false;
+          debugInfo.fillSteps.push('type:prosemirror lines:' + lines.length + ' textlen:' + targetText.length);
+
+          // 方案 A: 传统 DOM 操作 + input 事件（最可靠，不需要 execCommand）
+          try {
+            // Step 1: focus
+            try { target.el.focus(); } catch (eFc) { debugInfo.fillSteps.push('focus-err:' + eFc.message); }
+            // Step 2: 清空现有内容
+            try {
+              while (target.el.firstChild) target.el.removeChild(target.el.firstChild);
+              debugInfo.fillSteps.push('cleared');
+            } catch (e2) { debugInfo.fillSteps.push('clear-err:' + e2.message); }
+            // Step 3: 每行一个 <p> 节点写入（ProseMirror 的标准结构）
+            for (var lyi = 0; lyi < lines.length; lyi++) {
+              var pN = document.createElement('p');
+              pN.textContent = lines[lyi] || '';
+              target.el.appendChild(pN);
+            }
+            pmWrote = true;
+            method = 'prosemirror-v3-domAppend';
+            debugInfo.fillSteps.push('domAppend ok lines:' + lines.length);
+          } catch (eDomA) {
+            debugInfo.fillSteps.push('domA-err:' + eDomA.message);
+            // fallback: innerText
+            try {
+              target.el.innerText = targetText;
+              method = 'prosemirror-v3-innerText';
+              pmWrote = true;
+              debugInfo.fillSteps.push('innerText ok');
+            } catch (eFT) {
+              debugInfo.fillSteps.push('innerText-err:' + eFT.message);
+            }
+          }
+
+          // 方案 B: 再尝试 execCommand（触发 ProseMirror 的 input 监听）
+          if (pmWrote) {
+            try {
+              target.el.focus();
+              var tryRange = document.createRange();
+              tryRange.selectNodeContents(target.el);
+              tryRange.collapse(false);
+              var trySel = window.getSelection();
+              trySel.removeAllRanges();
+              trySel.addRange(tryRange);
+              document.execCommand('insertText', false, ' ');
+              debugInfo.fillSteps.push('execCommand-space ok');
+            } catch (eB) {
+              debugInfo.fillSteps.push('execCommand-err:' + eB.message);
+            }
+          }
+
+          // 🔑 关键：触发 input 事件（ProseMirror 监听此事件来同步内部 state）
+          try {
+            var inpEv = document.createEvent('Event');
+            inpEv.initEvent('input', true, true);
+            target.el.dispatchEvent(inpEv);
+            debugInfo.fillSteps.push('input-event ok');
+          } catch (eEv1) { debugInfo.fillSteps.push('input-event-err:' + eEv1.message); }
+          try {
+            target.el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+          } catch (eEv2) {}
+          try {
+            target.el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+          } catch (eEv3) {}
+          try { target.el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (eEv4) {}
+
+          debugInfo.readBack = (target.el.innerText || '').slice(0, 120);
+        } else if (target.tag === 'contenteditable') {
+          // 普通 contenteditable（非 ProseMirror）
+          try {
+            target.el.focus();
+            try {
+              var rangeB = document.createRange();
+              rangeB.selectNodeContents(target.el);
+              var selB = window.getSelection();
+              selB.removeAllRanges();
+              selB.addRange(rangeB);
+            } catch (ex) {}
+            try { document.execCommand('delete'); } catch (ex) {}
+            try { document.execCommand('insertText', false, ${jc}); } catch (ex) {
+              target.el.innerText = ${jc};
+            }
+            target.el.dispatchEvent(new Event('input', { bubbles: true }));
+            target.el.dispatchEvent(new Event('change', { bubbles: true }));
+            method = 'contenteditable-execCommand';
+          } catch (eC) {
+            target.el.innerText = ${jc};
+            target.el.dispatchEvent(new Event('input', { bubbles: true }));
+            method = 'contenteditable-innerText';
+          }
         } else {
+          // textarea / input： 使用原生 setter
           try {
             var proto = target.tag === 'textarea' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
             var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
@@ -1590,6 +2035,7 @@ export function buildFillContent(content: string): string {
             }
           }
         }
+
         try { target.el.dispatchEvent(new Event('input', { bubbles: true })); } catch (ev) {}
         try { target.el.dispatchEvent(new Event('change', { bubbles: true })); } catch (ev) {}
         try { target.el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (ev) {}
@@ -1600,11 +2046,13 @@ export function buildFillContent(content: string): string {
           tag: target.tag,
           score: target.score,
           matchedText: target.text,
-          readBack: (target.el.innerText || target.el.value || '').slice(0, 80),
-          totalCandidates: candidates.length
+          isProseMirror: tgtIsProseMirror || tgtHasProseChild,
+          readBack: (target.el.innerText || target.el.value || '').slice(0, 120),
+          totalCandidates: candidates.length,
+          debug: debugInfo
         };
       } catch (err) {
-        return { success: false, reason: String(err).slice(0, 100), tag: target.tag, score: target.score };
+        return { success: false, reason: String(err).slice(0, 100), tag: target.tag, score: target.score, debug: debugInfo };
       }
     })();
   `;
@@ -1668,26 +2116,67 @@ export function buildPublishButtonClicker(keyword: string): string {
             // 直接在 host 元素上点击（很多 Web Components 在 host 上也会响应 click）
             if (!sr) {
               try {
-                var hostText = (host.innerText || host.textContent || '').trim();
-                if (hostText && hostText.length > 0 && hostText.length <= 20
-                    && /(发布作品|立即发布|发布|确认发布|发布视频|发布笔记)/i.test(hostText)
-                    && !/首页|内容管理|互动管理|粉丝|关注|作品管理/i.test(hostText)) {
-                  var hostRect = host.getBoundingClientRect ? host.getBoundingClientRect() : { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 };
-                  var hostW = hostRect.width || host.offsetWidth || 0;
-                  var hostH = hostRect.height || host.offsetHeight || 0;
-                  if (hostW >= 20 && hostW <= 600 && hostH >= 20 && hostH <= 300) {
-                    candidates.push({
-                      el: host, score: 4500 + (hostW > 200 ? 500 : 0) + (hostH > 50 ? 300 : 0),
-                      text: hostText, tag: (host.tagName || '').toLowerCase(), classStr: (host.className || '').slice(0, 60),
-                      fromBottom: viewportH - hostRect.bottom, fromRight: viewportW - hostRect.right,
-                      w: hostW, h: hostH, source: 'shadow-closed-host:' + shadowTags[si]
-                    });
+                var hostText2 = (host.innerText || host.textContent || '').trim();
+                // 🔑 修复：closed shadow DOM（如 xhs-publish-btn）的 hostText 可能是"发布暂存离开"等拼接文本
+                // 不要求整段文本完全匹配，也不限长度，而是检查：是否可见 + 尺寸合理 + 含"发布"关键词
+                var hostVisible2 = true;
+                try {
+                  var hostStyle2 = getComputedStyle(host);
+                  if (hostStyle2.visibility === 'hidden' || hostStyle2.display === 'none') hostVisible2 = false;
+                } catch (eSt) {}
+                var hostDisabled2 = (host.hasAttribute && host.hasAttribute('disabled')) || host.getAttribute('aria-disabled') === 'true';
+                var hostRect2 = host.getBoundingClientRect ? host.getBoundingClientRect() : { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 };
+                var hostW2 = hostRect2.width || host.offsetWidth || 0;
+                var hostH2 = hostRect2.height || host.offsetHeight || 0;
+                if (!hostDisabled2 && hostVisible2 && hostW2 >= 20 && hostH2 >= 20 && hostW2 <= 1200 && hostH2 <= 400
+                    && /发布|publish|确认|提交/i.test(hostText2)) {
+                  // 🔑 关键修复：closed shadow DOM host（如 xhs-publish-btn）只是一个容器，
+                  // 文本是多个子按钮文本的拼接（"发布暂存离开"），直接 click host 可能不触发实际发布。
+                  // 策略：
+                  //   1. host 分数降为中等优先级（给普通 button 更优先）
+                  //   2. 不 continue，继续在 host 上找真正的 ce-btn bg-red 子 button
+                  var hostScore2 = 4000; // 🔑 从 8000 降到 4000（低于普通 bg-red button）
+                  var hFB2 = viewportH - hostRect2.bottom;
+                  if (hFB2 >= -300 && hFB2 < viewportH) hostScore2 += 1000;
+                  // 🔑 同时：在 host 的 DOM 中找 ce-btn bg-red 子 button（小红书的实际发布按钮是普通 HTML button
+                  try {
+                    var innerBtn = null;
+                    // 尝试 host.querySelector('.ce-btn.bg-red');
+                    innerBtn = host.querySelector('.ce-btn.bg-red');
+                    if (innerBtn !== null) {
+                      var iw = innerBtn.offsetWidth || 0;
+                      var ih = innerBtn.offsetHeight || 0;
+                      if (iw > 0 && ih > 0) {
+                        var innerText = (innerBtn.innerText || innerBtn.textContent || '').trim();
+                        if (/发布|publish|确认|提交/i.test(innerText)) {
+                          candidates.push({
+                            el: innerBtn, score: hostScore2 + 5000, text: innerText.slice(0, 20),
+                            tag: innerBtn.tagName ? innerBtn.tagName.toLowerCase() : 'button',
+                            classStr: ((innerBtn.className && typeof innerBtn.className === 'string') ? innerBtn.className.slice(0, 60) : ''),
+                            fromBottom: Math.round(viewportH - innerBtn.getBoundingClientRect().bottom),
+                            fromRight: Math.round(viewportW - innerBtn.getBoundingClientRect().right),
+                            w: iw, h: ih, source: 'shadow-closed-inner:' + shadowTags[si]
+                          });
+                        }
+                      }
+                    }
+                  } catch (eInner) {
+                    // ignore：找不到就回退到 host
                   }
+                  candidates.push({
+                    el: host, score: hostScore2,
+                    text: hostText2.slice(0, 40),
+                    tag: (host.tagName || '').toLowerCase(),
+                    classStr: (host.className || '').slice(0, 60),
+                    fromBottom: Math.round(hFB2), fromRight: Math.round(viewportW - hostRect2.right),
+                    w: hostW2, h: hostH2, source: 'shadow-closed-host:' + shadowTags[si]
+                  });
                 }
               } catch (e) {}
-              continue; // closed shadow DOM：无法访问内部，跳过内层扫描，用 CDP 兜底（见 runStandardPublish）
+              // 🔑 不再 continue！即使是 closed shadow DOM：也继续走后面的普通 button 策略（确保找到 ce-btn bg-red）
             }
-            // 非 closed 的 shadow DOM：扫描内部按钮
+            // 非 closed 的 shadow DOM：扫描内部按钮（注意：closed shadow DOM 的 sr === null，跳过）
+            if (!sr) continue;
             var inner = sr.querySelectorAll('button, a, [role="button"]');
             for (var ii = 0; ii < inner.length; ii++) {
               try {
@@ -1932,6 +2421,14 @@ export function buildPublishButtonClicker(keyword: string): string {
  * 然后调用此函数完成"导航 → 登录检测 → 上传 → 等待 → 填写 → 点击"标准流程。
  * 这样平台发布逻辑变更不会互相影响，改进 shared.ts 的一处逻辑就能让所有平台受益。
  */
+/**
+ * 平台发布策略配置（适配器模式：各平台通过钩子注入差异化行为）。
+ *
+ * 设计原则：
+ *   - 单一职责：runStandardPublish 是流程编排器，平台差异通过回调注入，不写在主流程里
+ *   - 开闭原则：新增平台 / 修改平台行为只需改平台文件，不动 shared.ts
+ *   - 可选钩子：所有策略钩子都是 optional，未提供时用通用 fallback（switchContentTypeTab 等）
+ */
 export interface StandardPublishConfig {
   /** 平台 key（用于日志 / 结果标识） */
   platform: PlatformType;
@@ -1952,6 +2449,33 @@ export interface StandardPublishConfig {
   fillWaitMs?: number;
   /** 发布成功后多少毫秒再自动关闭窗口（默认 8000ms），留给平台完成异步上传/处理 */
   autoCloseWaitMs?: number;
+  /**
+   * 平台字数限制（按"字符"计算，一个中文/字母/数字/符号均算 1 字）。
+   * 若提供，在填写标题/正文前会自动按此限制截断内容并输出警告日志。
+   */
+  contentLimits?: {
+    title?: number;
+    content?: number;
+  };
+  /** 本次发布的内容类型：video / image / article */
+  contentType?: ContentType;
+
+  // ============== 平台策略钩子（可选，未提供时用通用 fallback） ==============
+  /**
+   * [策略钩子] 根据内容类型返回发布 URL（策略模式：路由策略）。
+   *  - 快手：视频页 URL 与图文页 URL 不同，必须提供
+   *  - 小红书 / 抖音：同一 URL，可省略
+   */
+  getPublishUrl?: (contentType: ContentType) => string;
+  /**
+   * [策略钩子] 自定义 tab 切换实现（适配器模式：平台自行处理从视频到图文的切换）。
+   * 返回 true 表示切换成功；返回 false 或未提供 → 回落到通用 switchContentTypeTab。
+   */
+  tabSwitcher?: (
+    win: BrowserWindow,
+    contentType: ContentType,
+    log: (level: PublishLogEntry['level'], stage: string, message: string, data?: Record<string, unknown>) => void,
+  ) => Promise<boolean>;
 }
 
 export async function runStandardPublish(
@@ -1984,7 +2508,13 @@ export async function runStandardPublish(
     tracker = attachNavigationTracker(win, log);
 
     onProgress(10, '加载发布页面…');
-    await win.loadURL(config.meta.publishUrl, {
+    // [策略模式] 优先使用平台自定义的 URL 路由；fallback 到 meta.publishUrl
+    const effectiveContentType = config.contentType || (request.contentType as ContentType) || 'video';
+    const effectivePublishUrl = config.getPublishUrl
+      ? config.getPublishUrl(effectiveContentType)
+      : config.meta.publishUrl;
+    log('info', 'navigation', `加载发布页 (contentType=${effectiveContentType})`, { url: effectivePublishUrl });
+    await win.loadURL(effectivePublishUrl, {
       userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     });
     await tracker.waitForStable(1200, 12000);
@@ -2002,10 +2532,22 @@ export async function runStandardPublish(
     }
     if (!win.isDestroyed()) { win.show(); win.focus(); }
 
-    // 上传素材
+    // 上传素材（先切换到正确的内容类型 tab，再上传）
     if (request.mediaFiles.length > 0) {
       onProgress(30, '上传素材…');
-      await uploadViaCDP(win, request.mediaFiles, log);
+      // [适配器模式] 优先平台自定义 tab 切换；fallback 到通用 switchContentTypeTab
+      let tabSwitched = false;
+      if (config.tabSwitcher) {
+        try {
+          tabSwitched = await config.tabSwitcher(win, effectiveContentType, log);
+        } catch (e) {
+          log('warn', 'tab', `平台 tab 切换异常: ${(e as Error).message}`);
+        }
+      }
+      if (!tabSwitched) {
+        await switchContentTypeTab(win, effectiveContentType, log);
+      }
+      await uploadViaCDP(win, request.mediaFiles, log, effectiveContentType);
       // 上传后最容易触发导航/白屏，多等待一次稳定
       await tracker.waitForStable(1000, 10000);
     } else {
@@ -2015,16 +2557,30 @@ export async function runStandardPublish(
     const uploadResult = await waitForUploadComplete(win, log, onProgress, 300000, tracker);
     if (!uploadResult.ready) onProgress(60, '上传未完成，继续尝试填写…');
 
-    // 填写内容
+    // 填写内容 —— 先按平台限制截断，避免超长内容被平台暴力截断或拒绝
     onProgress(75, '填写标题与正文…');
-    if (request.title) {
-      try { await evalJS(win, buildFillTitle(request.title), 'fill-title', log); }
+    // ===== 字数限制处理（开始） =====
+    const limits = config.contentLimits;
+    let finalTitle = request.title || '';
+    let finalContent = (request.content || '') +
+      (request.tags && request.tags.length ? '\n' + request.tags.map((t) => `#${t}`).join(' ') : '');
+
+    if (limits && typeof limits.title === 'number' && finalTitle.length > limits.title) {
+      log('warn', 'limits', `标题超出限制 (${finalTitle.length} > ${limits.title})，已截断`);
+      finalTitle = finalTitle.slice(0, limits.title);
+    }
+    if (limits && typeof limits.content === 'number' && finalContent.length > limits.content) {
+      log('warn', 'limits', `正文超出限制 (${finalContent.length} > ${limits.content})，已截断（快手/小红书/抖音对正文字符数有严格限制）`);
+      finalContent = finalContent.slice(0, limits.content);
+    }
+    // ===== 字数限制处理（结束） =====
+
+    if (finalTitle) {
+      try { await evalJS(win, buildFillTitle(finalTitle), 'fill-title', log); }
       catch (e) { log('warn', 'fill', `标题填写异常: ${(e as Error).message}`); }
     }
-    const combinedContent = (request.content || '') +
-      (request.tags && request.tags.length ? '\n' + request.tags.map((t) => `#${t}`).join(' ') : '');
-    if (combinedContent.trim().length > 0) {
-      try { await evalJS(win, buildFillContent(combinedContent), 'fill-content', log); }
+    if (finalContent.trim().length > 0) {
+      try { await evalJS(win, buildFillContent(finalContent), 'fill-content', log); }
       catch (e) { log('warn', 'fill', `正文填写异常: ${(e as Error).message}`); }
     }
     await sleep(config.fillWaitMs ?? 1500);
