@@ -101,6 +101,63 @@ const platformContentLimit = computed(() => {
   if (limits.size === 0) return { min: 1000, platforms: [] }
   return { min: Math.min(...limits.values()), platforms: plats }
 })
+// ======== 标题限制（按内容类型区分）=======
+//  - 文章（article）：抖音 30 字 / 小红书 64 字（取最小值用于前端提示）
+//  - 图文（image）：小红书 20 字 / 抖音 80 字
+//  - 视频（video）：抖音 80 字 / 快手 80 字
+const titleMaxLength = computed(() => {
+  if (contentType.value === 'article') {
+    const ids = getSelectedIds()
+    if (ids.length === 0) return 64
+    // 取所选平台中最小的标题限制
+    let min = Infinity
+    for (const id of ids) {
+      const a = accountStore.accounts.find((x) => x.id === id)
+      if (!a) continue
+      if (a.platform === 'douyin') min = Math.min(min, 30)
+      else if (a.platform === 'xiaohongshu') min = Math.min(min, 64)
+      else if (a.platform === 'kuaishou') min = Math.min(min, 80)
+    }
+    return Number.isFinite(min) ? min : 64
+  }
+  if (contentType.value === 'image') {
+    const ids = getSelectedIds()
+    if (ids.length === 0) return 80
+    let min = Infinity
+    for (const id of ids) {
+      const a = accountStore.accounts.find((x) => x.id === id)
+      if (!a) continue
+      if (a.platform === 'xiaohongshu') min = Math.min(min, 20)
+      else if (a.platform === 'douyin') min = Math.min(min, 80)
+      else if (a.platform === 'kuaishou') min = Math.min(min, 80)
+    }
+    return Number.isFinite(min) ? min : 80
+  }
+  // video 默认 80
+  return 80
+})
+const titlePlaceholder = computed(() => {
+  if (contentType.value === 'article') {
+    const ids = getSelectedIds()
+    if (ids.length === 0) return '请输入文章标题（最多 64 字）'
+    const hasDouyin = ids.some((id) => {
+      const a = accountStore.accounts.find((x) => x.id === id)
+      return a?.platform === 'douyin'
+    })
+    const hasXhs = ids.some((id) => {
+      const a = accountStore.accounts.find((x) => x.id === id)
+      return a?.platform === 'xiaohongshu'
+    })
+    if (hasDouyin && hasXhs) return '请输入文章标题（抖音最多 30 字，小红书最多 64 字，超出部分将被截断）'
+    if (hasDouyin) return '请输入文章标题（抖音最多 30 字，超出部分将被截断）'
+    if (hasXhs) return '请输入文章标题（小红书最多 64 字）'
+    return '请输入文章标题'
+  }
+  if (contentType.value === 'image') {
+    return '请输入图文标题（小红书最多 20 字，超出部分将被截断）'
+  }
+  return '请输入视频标题'
+})
 const isContentOverLimit = computed(() => content.value.length > platformContentLimit.value.min)
 const kuaishouSelected = computed(() => {
   const ids = getSelectedIds()
@@ -305,7 +362,12 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
       <h2 class="section-title">② 标题与内容</h2>
       <el-form label-width="80px" label-position="right">
         <el-form-item label="标题">
-          <el-input v-model="title" placeholder="请输入标题" maxlength="80" show-word-limit />
+          <el-input
+            v-model="title"
+            :placeholder="titlePlaceholder"
+            :maxlength="titleMaxLength"
+            show-word-limit
+          />
         </el-form-item>
 
         <el-form-item v-if="contentType !== 'article'" label="素材">
@@ -331,7 +393,11 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
             v-model="content"
             type="textarea"
             :rows="contentType === 'article' ? 8 : 4"
-            :placeholder="contentType === 'article' ? '请输入正文内容（小红书/抖音最多 1000 字，快手 500 字）' : '可选：为视频/图文添加描述文案（将作为笔记正文发布，快手最多 500 字）'"
+            :placeholder="contentType === 'article'
+              ? '请输入文章正文（抖音 8000 字/小红书不限制字数）'
+              : contentType === 'image'
+                ? '可选：为图文添加描述文案（将作为笔记正文发布，小红书 1000 字/抖音 1000 字/快手 500 字）'
+                : '可选：为视频添加描述文案（快手最多 500 字）'"
             :maxlength="platformContentLimit.min"
             show-word-limit
           />

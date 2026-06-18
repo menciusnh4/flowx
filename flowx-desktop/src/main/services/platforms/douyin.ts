@@ -4,9 +4,15 @@ import { sleep, makePublishLogger, makePublishWindow, attachNavigationTracker, e
 import { registerPlatform } from './registry';
 import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities, ContentType } from '../../../types';
 
+// 视频/图文发布限制
 const TITLE_MAX = 80;
 const CONTENT_MAX = 1000;
 const TAG_MAX = 10;
+
+// 文章发布限制（独立：标题30字，正文8000字）
+const ARTICLE_TITLE_MAX = 30;
+const ARTICLE_CONTENT_MAX = 8000;
+const ARTICLE_TAG_MAX = 10;
 
 // 工具函数
 function truncate(text: string, max: number): string {
@@ -57,36 +63,159 @@ async function detectLoggedIn(win: BrowserWindow): Promise<LoginCheckResult> {
   }
 }
 
-// === 账号信息提取
+// === 账号信息提取（粉丝/关注/获赞数）
+// 🔑 抖音 HTML 结构：标签在前，数字在独立 span 中
+//    <div class="statics-kyUhqC">
+//      <div class="statics-item-MDWoNA" id="guide_home_following">关注 <span class="number-No6ev9">0</span></div>
+//      <div class="statics-item-MDWoNA" id="guide_home_fans">粉丝 <span class="number-No6ev9">2</span></div>
+//      <div class="statics-item-MDWoNA">获赞 <span class="number-No6ev9">61</span></div>
+//    </div>
+// 策略：1) 基于 .number-* 或 .statics-* 容器的 DOM 提取  2) 文本正则兜底
 async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo> {
   try {
     const info = await win.webContents.executeJavaScript(`
       (function () {
-        var r = { nickname: '', avatar: '', fansCount: null };
-        var nickSelectors = ['[class*="header-"] [class*="name-"]'];
-        for (var i = 0; i < nickSelectors.length; i++) {
-          var el = document.querySelector(nickSelectors[i]);
-          if (el && el.textContent && el.textContent.trim()) { r.nickname = el.textContent.trim(); break; }
+        var r = { nickname: '', avatar: '', platformAccountId: '', fansCount: null, followCount: null, likeCount: null };
+
+        // ===== 数字解析 =====
+        function _parse(text) {
+          try {
+            var clean = (text || '').trim().replace(/[,\\s]/g, '');
+            var pm = clean.match(/^(\\d+(?:\\.\\d+)?)([万wWkK千])?$/);
+            if (!pm) return null;
+            var n = parseFloat(pm[1]);
+            if (pm[2]) { if (/[万wW]/.test(pm[2])) n *= 10000; else if (/[千kK]/.test(pm[2])) n *= 1000; }
+            return Math.round(n);
+          } catch (e) { return null; }
         }
+
+        // ===== 从单个容器中提取统计数据 =====
+        function _tryContainer(el) {
+          if (!el) return;
+          try {
+            // 方式1：查找 class 含 "number-" 的 span，配合父节点文本标签
+            var numSpans = el.querySelectorAll('[class*="number-"]');
+            for (var i = 0; i < numSpans.length; i++) {
+              var sp = numSpans[i];
+              var numVal = _parse(sp.textContent || '');
+              if (numVal === null) continue;
+              // 从父节点中提取标签（"关注"/"粉丝"/"获赞"）
+              var parent = sp.parentNode;
+              var label = '';
+              if (parent) {
+                // 克隆节点后删除自身，得到标签文本
+                var clone = parent.cloneNode(true);
+                var clones = clone.querySelectorAll('[class*="number-"]');
+                for (var ci = 0; ci < clones.length; ci++) { clones[ci].textContent = ''; }
+                label = (clone.textContent || '').trim();
+              }
+              if (!label && parent) label = (parent.textContent || '').replace(/[\\d.万千\\s,]/g, '').trim();
+              if (!label) continue;
+              if (/关注/.test(label) && r.followCount === null) r.followCount = numVal;
+              else if (/粉丝/.test(label) && r.fansCount === null) r.fansCount = numVal;
+              else if ((/获赞|点赞|收藏/.test(label)) && r.likeCount === null) r.likeCount = numVal;
+            }
+
+            // 方式2：查找 .statics-* 容器中的所有子 div（每个 div 是一个统计项）
+            var statItems = el.querySelectorAll('[class*="statics-item"], [class*="stat-item"]');
+            for (var si = 0; si < statItems.length; si++) {
+              var itemEl = statItems[si];
+              var itemText = (itemEl.innerText || itemEl.textContent || '').trim();
+              if (!itemText || itemText.length > 40) continue;
+              var labelMatch = itemText.match(/(关注|粉丝|获赞|点赞)/);
+              var numMatch = itemText.match(/(\\d+(?:\\.\\d+)?[万wWkK千]?)/);
+              if (!labelMatch || !numMatch) continue;
+              var v = _parse(numMatch[1]);
+              if (v === null) continue;
+              if (labelMatch[1] === '关注' && r.followCount === null) r.followCount = v;
+              else if (labelMatch[1] === '粉丝' && r.fansCount === null) r.fansCount = v;
+              else if ((labelMatch[1] === '获赞' || labelMatch[1] === '点赞') && r.likeCount === null) r.likeCount = v;
+            }
+
+            // 方式3：从整个容器文本中正则提取
+            var fullText = (el.innerText || el.textContent || '').trim();
+            if (fullText) {
+              var lines = fullText.split(/[\\n\\r\\t]+/);
+              for (var li = 0; li < lines.length; li++) {
+                var line = lines[li].trim();
+                if (!line || line.length > 40) continue;
+                // "关注 12" / "粉丝 34" / "获赞 56"
+                var m1 = line.match(/(关注|粉丝|获赞|点赞)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百]?)/);
+                if (m1) {
+                  var v1 = _parse(m1[2]);
+                  if (v1 !== null) {
+                    if (m1[1] === '关注' && r.followCount === null) r.followCount = v1;
+                    else if (m1[1] === '粉丝' && r.fansCount === null) r.fansCount = v1;
+                    else if ((m1[1] === '获赞' || m1[1] === '点赞') && r.likeCount === null) r.likeCount = v1;
+                  }
+                }
+              }
+            }
+          } catch (e) {}
+        }
+
+        // ===== 1) 优先从统计区提取数据 =====
         try {
-          var avaSels = ['.user_avatar', 'img[class*="avatar"]'];
+          var containers = [
+            document.querySelector('[class*="statics-"]'),
+            document.querySelector('[class*="statics"]'),
+            document.querySelector('[class*="header-info"]'),
+            document.querySelector('[class*="creator-center"]'),
+            document.body
+          ];
+          for (var ci = 0; ci < containers.length; ci++) {
+            if (!containers[ci]) continue;
+            _tryContainer(containers[ci]);
+            if (r.fansCount !== null && r.followCount !== null && r.likeCount !== null) break;
+          }
+        } catch (e) {}
+
+        // ===== 2) 昵称 =====
+        try {
+          var nickSels = ['[class*="header-"] [class*="name-"]', '[class*="name-"]', '[class*="name"]', '.name-box', '.user-name', '.nickname'];
+          for (var i = 0; i < nickSels.length; i++) {
+            var el = document.querySelector(nickSels[i]);
+            if (el && el.textContent && el.textContent.trim()) { r.nickname = el.textContent.trim(); break; }
+          }
+        } catch (e) {}
+
+        // ===== 3) 头像 =====
+        try {
+          var avaSels = ['img.user_avatar', 'img[class*="avatar"]'];
           for (var j = 0; j < avaSels.length; j++) {
             var el2 = document.querySelector(avaSels[j]);
             if (el2 && el2.getAttribute && el2.getAttribute('src')) { r.avatar = el2.getAttribute('src'); break; }
           }
         } catch (e) {}
+
+        // ===== 4) 兜底：body 全文正则 =====
         try {
-          var fullText = document.body ? (document.body.innerText || '') : '';
-          var fm = fullText.match(/(\\d+(?:\\.\\d+)?[万wWkK千]?)\\s*粉丝|粉丝\\s*[数:：]?\\s*(\\d+(?:\\.\\d+)?[万wWkK千]?)/i);
-          if (fm && fm[1]) {
-            var v1 = parseFloat(fm[1]);
-            if (!isNaN(v1)) { if (/[万wW]/.test(fm[1])) v1 = Math.round(v1 * 10000); r.fansCount = Math.round(v1); }
+          var bodyText = (document.body ? (document.body.innerText || '') : '') || '';
+          if (r.fansCount === null) {
+            var fm = bodyText.match(/粉丝[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万wWkK千]?)/i);
+            if (fm && fm[1]) { var v = _parse(fm[1]); if (v !== null) r.fansCount = v; }
+          }
+          if (r.followCount === null) {
+            var flm = bodyText.match(/关注[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万wWkK千]?)/i);
+            if (flm && flm[1]) { var v2 = _parse(flm[1]); if (v2 !== null) r.followCount = v2; }
+          }
+          if (r.likeCount === null) {
+            var lm = bodyText.match(/(获赞|点赞)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万wWkK千]?)/i);
+            if (lm && lm[2]) { var v3 = _parse(lm[2]); if (v3 !== null) r.likeCount = v3; }
           }
         } catch (e) {}
+
         return r;
       })();
     `).catch(function () { return {}; });
-    return { nickname: info.nickname || '', avatar: info.avatar, fansCount: typeof info.fansCount === 'number' ? info.fansCount : undefined } as ExtractedAccountInfo;
+    return {
+      nickname: info.nickname || '',
+      avatar: info.avatar || undefined,
+      platformAccountId: info.platformAccountId || undefined,
+      fansCount: typeof info.fansCount === 'number' ? info.fansCount : undefined,
+      followCount: typeof info.followCount === 'number' ? info.followCount : undefined,
+      likeCount: typeof info.likeCount === 'number' ? info.likeCount : undefined,
+    } as ExtractedAccountInfo;
   } catch (e) {
     return { nickname: '', avatar: undefined, fansCount: undefined } as ExtractedAccountInfo;
   }
@@ -459,7 +588,147 @@ async function publishImage(accountId: string, request: PublishRequest, onProgre
   return runDouyinPublish(accountId, request, onProgress, 'image');
 }
 async function publishArticle(accountId: string, request: PublishRequest, onProgress: ProgressCallback): Promise<PublishItemProgress> {
-  return runDouyinPublish(accountId, request, onProgress, 'article');
+  const startedAt = Date.now();
+  const log = makePublishLogger({ accountId: accountId, platform: 'douyin' });
+  // 🔑 文章发布专用 URL：default-tab=5 直接进入长文发布页
+  const publishUrl = 'https://creator.douyin.com/creator-micro/content/upload?default-tab=5';
+  const winTitle = '抖音发布文章 - ' + accountId;
+  let win: BrowserWindow | null = null;
+  let tracker: any = null;
+  try {
+    onProgress(2, '初始化窗口…');
+    win = makePublishWindow(accountId, winTitle);
+    tracker = attachNavigationTracker(win, log);
+    onProgress(5, '加载文章发布页…');
+    log('info', 'load', '文章 URL: ' + publishUrl);
+    await win.loadURL(publishUrl);
+    onProgress(10, '等待页面稳定…');
+    await tracker.waitForStable(1500, 15000);
+    await sleep(2000);
+    onProgress(15, '检测登录状态…');
+    const loginInfo = await detectLoggedIn(win);
+    if (!loginInfo.loggedIn) {
+      win.show();
+      onProgress(15, '请在窗口中登录抖音账号…');
+      const deadline = Date.now() + 120000;
+      let logged = false;
+      while (Date.now() < deadline) {
+        await sleep(3000);
+        if (win && !win.isDestroyed()) {
+          const rec = await detectLoggedIn(win).catch(function () { return { loggedIn: false }; });
+          if (rec && rec.loggedIn) { logged = true; break; }
+        }
+      }
+      if (!logged) return makeFailedResult(accountId, 'douyin', '登录超时', startedAt);
+      log('info', 'login', '登录成功');
+      // 重新加载文章发布页
+      await win.loadURL(publishUrl);
+      await tracker.waitForStable(1500, 15000);
+      await sleep(2000);
+    } else {
+      log('info', 'login', '已登录，URL: ' + win.webContents.getURL().slice(0, 100));
+    }
+
+    // 文章发布：上传用户提供的素材（如有）
+    const mediaFiles = request.mediaFiles || [];
+    if (mediaFiles.length > 0) {
+      onProgress(25, '上传 ' + mediaFiles.length + ' 个素材…');
+      const uploadOk = await uploadViaCDP(win, mediaFiles, log, 'image');
+      if (!uploadOk) {
+        log('warn', 'upload', '素材上传失败，继续发布流程（可能缺少封面）');
+      } else {
+        onProgress(40, '等待上传完成…');
+        const uploadResult = await waitForUploadComplete(win, log, onProgress, 300000, tracker);
+        if (!uploadResult.ready) log('warn', 'upload', '上传完成检测失败: ' + uploadResult.finalStatus);
+      }
+      await sleep(1500);
+    } else {
+      log('info', 'upload', '无素材上传，跳过上传步骤');
+      onProgress(40, '准备填写内容…');
+    }
+
+    // 标题（最多 30 字）
+    const titleText = truncate((request.title || '').trim(), ARTICLE_TITLE_MAX);
+    // 正文 + 话题（最多 8000 字）
+    const rawContent = (request.content || '').trim();
+    const tagText = buildArticleTags(request.tags);
+    const combinedContent = [rawContent, tagText].filter(function (s) { return s && s.length > 0; }).join('\n');
+    const contentText = truncate(combinedContent, ARTICLE_CONTENT_MAX);
+    log('info', 'fill', '文章标题: ' + (titleText || '').slice(0, 40) + ' (限' + ARTICLE_TITLE_MAX + '字)');
+    log('info', 'fill', '文章正文: ' + contentText.length + '字 (限' + ARTICLE_CONTENT_MAX + '字)');
+
+    onProgress(55, '填写标题…');
+    if (titleText) {
+      const script1 = buildFillTitleScript(titleText);
+      const res1: any = await evalJS(win, script1, 'article-fill-title', log).catch(function () { return null; });
+      if (!res1 || !res1.ok) log('warn', 'fill', '文章标题填写失败');
+      else log('info', 'fill', '文章标题已写入');
+      await sleep(800);
+    }
+
+    onProgress(65, '填写正文…');
+    if (contentText) {
+      const script2 = buildFillContentScript(contentText);
+      const res2: any = await evalJS(win, script2, 'article-fill-content', log).catch(function () { return null; });
+      if (!res2 || !res2.ok) log('warn', 'fill', '文章正文填写失败');
+      else log('info', 'fill', '文章正文已写入 (' + (res2 && res2.method) + ')');
+      await sleep(1500);
+    }
+
+    // 点击发布
+    onProgress(80, '点击发布按钮…');
+    const clickScript = buildClickPublishScript();
+    const clickRes: any = await evalJS(win, clickScript, 'article-click-publish', log).catch(function () { return null; });
+    if (!clickRes || !clickRes.clicked) {
+      log('warn', 'publish', '发布按钮点击失败');
+    } else {
+      log('info', 'publish', '发布按钮已点击 (text=' + clickRes.text + ')');
+    }
+
+    // 等待发布结果
+    onProgress(90, '等待发布结果…');
+    const resultDeadline = Date.now() + 120000;
+    let lastUrl = '', lastText = '';
+    while (Date.now() < resultDeadline) {
+      if (!win || win.isDestroyed()) break;
+      try {
+        const check: any = await evalJS(win, buildPublishResultProbeScript(), 'article-check-result', log).catch(function () { return null; });
+        if (check) {
+          lastUrl = check.url || '';
+          lastText = check.text || '';
+          if (check.success) {
+            log('info', 'done', '文章发布成功');
+            onProgress(100, '发布成功');
+            return { accountId: accountId, platform: 'douyin', status: 'success', progress: 100, message: '文章发布成功', url: lastUrl, startedAt: startedAt, finishedAt: Date.now() } as PublishItemProgress;
+          }
+          if (check.fail) {
+            log('warn', 'done', '页面提示失败');
+            return makeFailedResult(accountId, 'douyin', '文章发布失败', startedAt);
+          }
+        }
+      } catch (e) {}
+      await sleep(2500);
+    }
+    return makeFailedResult(accountId, 'douyin', '等待文章发布结果超时', startedAt);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log('error', 'exception', '文章发布异常: ' + msg);
+    return makeFailedResult(accountId, 'douyin', msg, startedAt);
+  } finally {
+    if (tracker) { try { tracker.dispose(); } catch (e) {} }
+    if (win && !win.isDestroyed()) {
+      setTimeout(function () { try { if (win && !win.isDestroyed()) win.destroy(); } catch (e) {} }, 3000);
+    }
+  }
+}
+
+// 辅助：构建文章的话题文本（不超过 ARTICLE_TAG_MAX 个）
+function buildArticleTags(tags: string[] | undefined): string {
+  if (!tags || tags.length === 0) return '';
+  const cleaned = tags.map(function (t) { return (t || '').trim(); }).filter(function (t) { return t.length > 0; }).map(function (t) { return t.startsWith('#') ? t : '#' + t; });
+  const deduped = Array.from(new Set(cleaned));
+  const limited = deduped.slice(0, ARTICLE_TAG_MAX);
+  return limited.join(' ');
 }
 async function publish(accountId: string, request: PublishRequest, onProgress: ProgressCallback): Promise<PublishItemProgress> {
   const files = request.mediaFiles || [];

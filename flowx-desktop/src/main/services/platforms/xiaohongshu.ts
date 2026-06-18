@@ -1,5 +1,6 @@
 import type { BrowserWindow } from 'electron';
 import type { PlatformAdapter, ExtractedAccountInfo, LoginCheckResult, ProgressCallback } from './types';
+import type { NavigationTracker } from './shared';
 import {
   sleep,
   makePublishLogger,
@@ -19,7 +20,12 @@ import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabili
 // 常量 / 配置
 // =====================================================================
 
+// 通用发布页 URL（视频/图文）
 const PUBLISH_URL = 'https://creator.xiaohongshu.com/publish/publish';
+
+// 文章（长文）发布专用 URL
+const PUBLISH_ARTICLE_URL =
+  'https://creator.xiaohongshu.com/publish/publish?source=official&from=menu&target=article';
 
 const LOGIN_KEYWORDS = [
   '创作中心',
@@ -36,6 +42,10 @@ const LOGIN_KEYWORDS = [
 const TITLE_LIMIT = 20;
 const CONTENT_LIMIT = 1000;
 const MAX_TAGS = 10;
+
+// 🔑 小红书文章（长文）发布平台限制：标题最多 64 字，正文不限，话题最多 10 个
+const ARTICLE_TITLE_LIMIT = 64;
+// ARTICLE_CONTENT_LIMIT = undefined 表示正文无字数限制
 
 // =====================================================================
 // 页面脚本构造器
@@ -88,15 +98,136 @@ function buildDetectLoggedInScript(loginKeywords: string[]): string {
 }
 
 /**
- * 生成"提取昵称 / 头像 / 平台账号ID / 粉丝数"的 JS 脚本
+ * 生成"提取昵称 / 头像 / 平台账号ID / 粉丝数 / 关注数 / 获赞数"的 JS 脚本
+ * 🔑 小红书 HTML 结构：数字在前，标签在后（分离在不同子元素）
+ *     <div class="static description-text">
+ *       <div><span class="numerical">19</span><span>关注数</span></div>
+ *       <div><span class="numerical">14</span><span>粉丝数</span></div>
+ *       <div><span class="numerical">109</span><span>获赞与收藏</span></div>
+ *     </div>
+ * 策略：1) 全局搜索 .numerical 元素 + 兄弟节点标签  2) 容器文本正则（双向格式）  3) body 全文正则兜底
  */
 function buildExtractPageInfoScript(): string {
   return (
     '(function(){' +
     'var result = { nickname: "", avatar: "", platformAccountId: "", fansCount: null, followCount: null, likeCount: null };' +
-    // 昵称：按优先级尝试多个选择器
+    // ===== 辅助：数字解析 =====
+    'function _parseNumber(s) {' +
+    '  if (!s) return null;' +
+    '  var t = String(s).replace(/\\s+/g, "").replace(/,/g, "");' +
+    '  var base = parseFloat(t);' +
+    '  if (isNaN(base)) return null;' +
+    '  if (t.indexOf("万") !== -1) base *= 10000;' +
+    '  else if (t.indexOf("千") !== -1) base *= 1000;' +
+    '  else if (t.indexOf("百") !== -1) base *= 100;' +
+    '  return Math.round(base);' +
+    '}' +
+    // ===== 辅助：根据标签设置对应字段（只在字段为 null 时设置） =====
+    'function _setByLabel(labelText, numValue) {' +
+    '  if (numValue === null || !labelText) return false;' +
+    '  if (/粉丝/.test(labelText) && result.fansCount === null) { result.fansCount = numValue; return true; }' +
+    '  if (/关注/.test(labelText) && result.followCount === null) { result.followCount = numValue; return true; }' +
+    '  if ((/获赞|点赞|收藏/.test(labelText)) && result.likeCount === null) { result.likeCount = numValue; return true; }' +
+    '  return false;' +
+    '}' +
+    // ===== 方式 A：全局搜索所有 class 含 "numerical" 的元素 =====
+    //    对每个数字元素，从其兄弟节点/父节点文本中提取标签
+    'try {' +
+    '  var allNumEls = document.querySelectorAll(\'[class*="numerical"]\');' +
+    '  for (var ai = 0; ai < allNumEls.length; ai++) {' +
+    '    var aEl = allNumEls[ai];' +
+    '    var aVal = _parseNumber(aEl.textContent || "");' +
+    '    if (aVal === null) continue;' +
+    '    var labelFound = false;' +
+    '    var aParent = aEl.parentNode;' +
+    '    if (aParent && aParent.children) {' +
+    // 优先检查兄弟节点
+    '      for (var bi = 0; bi < aParent.children.length; bi++) {' +
+    '        var sib = aParent.children[bi];' +
+    '        if (sib === aEl) continue;' +
+    '        var lblTxt = (sib.textContent || "").trim();' +
+    '        if (lblTxt && lblTxt.length <= 10 && /(粉丝|关注|获赞|点赞|收藏)/.test(lblTxt)) {' +
+    '          if (_setByLabel(lblTxt, aVal)) { labelFound = true; break; }' +
+    '        }' +
+    '      }' +
+    '    }' +
+    '    if (labelFound) continue;' +
+    // 兜底：从父节点的完整文本中提取
+    '    if (aParent) {' +
+    '      var parentTxt = (aParent.textContent || "").replace(/\\d/g, " ").trim();' +
+    '      if (parentTxt) _setByLabel(parentTxt, aVal);' +
+    '    }' +
+    '  }' +
+    '} catch(e) {}' +
+    // ===== 方式 B：搜索统计容器 + 文本正则匹配 =====
+    'try {' +
+    '  var statSel = [' +
+    '    \'[class*="description-text"]\',' +
+    '    \'[class*="static"]\',' +
+    '    \'[class*="statics"]\',' +
+    '    \'[class*="header-info"]\',' +
+    '    \'[class*="user-info"]\',' +
+    '    \'[class*="creator-home"]\'' +
+    '  ];' +
+    '  for (var si2 = 0; si2 < statSel.length; si2++) {' +
+    '    try {' +
+    '      var cEl = document.querySelector(statSel[si2]);' +
+    '      if (!cEl) continue;' +
+    '      var cText = (cEl.innerText || cEl.textContent || "").trim();' +
+    '      if (!cText) continue;' +
+    // 在容器文本中搜索所有 "数字+标签" 和 "标签+数字" 组合
+    '      var tokens = cText.split(/[\\n\\r\\t,，;；]+/);' +
+    '      for (var ti = 0; ti < tokens.length; ti++) {' +
+    '        var tok = tokens[ti].trim();' +
+    '        if (!tok || tok.length > 30) continue;' +
+    // 格式 1: "关注数19" / "粉丝数 14" (标签+数字)
+    '        var mLabelFirst = tok.match(/(关注数|粉丝数|获赞与收藏|关注|粉丝|获赞|点赞|收藏)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百]?)/);' +
+    '        if (mLabelFirst) {' +
+    '          var vLf = _parseNumber(mLabelFirst[2]);' +
+    '          _setByLabel(mLabelFirst[1], vLf);' +
+    '        }' +
+    // 格式 2: "19关注数" / "14粉丝数" (数字+标签)
+    '        var mNumFirst = tok.match(/(\\d+(?:\\.\\d+)?[万千百]?)[^0-9]{0,5}(关注数|粉丝数|获赞与收藏|关注|粉丝|获赞|点赞|收藏)/);' +
+    '        if (mNumFirst) {' +
+    '          var vNf = _parseNumber(mNumFirst[1]);' +
+    '          _setByLabel(mNumFirst[2], vNf);' +
+    '        }' +
+    '      }' +
+    '    } catch(e2) {}' +
+    '    if (result.fansCount !== null && result.followCount !== null && result.likeCount !== null) break;' +
+    '  }' +
+    '} catch(e) {}' +
+    // ===== 方式 C：body 全文正则兜底（双重格式） =====
+    'try {' +
+    '  var bodyText = (document.body ? (document.body.innerText || "") : "") || "";' +
+    // 小红书号
+    '  var reAccount = /小红书号[：:\\s]*([A-Za-z0-9_\\-]{3,30})/;' +
+    '  var accountMatch = bodyText.match(reAccount);' +
+    '  if (accountMatch && accountMatch[1]) result.platformAccountId = accountMatch[1];' +
+    // 粉丝（两种格式）
+    '  if (result.fansCount === null) {' +
+    '    var fm1 = bodyText.match(/(粉丝数|粉丝)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百]?)/);' +
+    '    var fm2 = bodyText.match(/(\\d+(?:\\.\\d+)?[万千百]?)[^0-9]{0,5}(粉丝数|粉丝)/);' +
+    '    if (fm1 && fm1[2]) result.fansCount = _parseNumber(fm1[2]);' +
+    '    else if (fm2 && fm2[1]) result.fansCount = _parseNumber(fm2[1]);' +
+    '  }' +
+    // 关注（两种格式）
+    '  if (result.followCount === null) {' +
+    '    var fol1 = bodyText.match(/(关注数|关注)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百]?)/);' +
+    '    var fol2 = bodyText.match(/(\\d+(?:\\.\\d+)?[万千百]?)[^0-9]{0,5}(关注数|关注)/);' +
+    '    if (fol1 && fol1[2]) result.followCount = _parseNumber(fol1[2]);' +
+    '    else if (fol2 && fol2[1]) result.followCount = _parseNumber(fol2[1]);' +
+    '  }' +
+    // 获赞（两种格式）
+    '  if (result.likeCount === null) {' +
+    '    var lk1 = bodyText.match(/(获赞与收藏|获赞|点赞|收藏)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百]?)/);' +
+    '    var lk2 = bodyText.match(/(\\d+(?:\\.\\d+)?[万千百]?)[^0-9]{0,5}(获赞与收藏|获赞|点赞|收藏)/);' +
+    '    if (lk1 && lk1[2]) result.likeCount = _parseNumber(lk1[2]);' +
+    '    else if (lk2 && lk2[1]) result.likeCount = _parseNumber(lk2[1]);' +
+    '  }' +
+    '} catch(e) {}' +
+    // ===== 昵称：按优先级尝试多个选择器 =====
     'var nickSelectors = [' +
-    // ⚠️ 外层用 \' 转义单引号字符串，CSS 属性选择器内部用双引号，避免引号冲突
     '  \'[class*="account-name"]\', \'[class*="user-name"]\', \'[class*="nickname"]\', ' +
     '  ".account-name", ".user-name", ".nickname", ".user-nick"' +
     '];' +
@@ -109,7 +240,7 @@ function buildExtractPageInfoScript(): string {
     '    }' +
     '  } catch(e) {}' +
     '}' +
-    // 头像：img 的 src
+    // ===== 头像：img 的 src =====
     'var avatarSelectors = [' +
     '  \'img[class*="avatar"]\', \'img[class*="img-"]\', \'[class*="avatar"] img\',' +
     '  "img.user_avatar"' +
@@ -122,36 +253,6 @@ function buildExtractPageInfoScript(): string {
     '      break;' +
     '    }' +
     '  } catch(e) {}' +
-    '}' +
-    // 平台账号ID / 粉丝数：在页面文本中用正则启发式提取
-    'try {' +
-    '  var bodyText = (document.body ? (document.body.innerText || "") : "") || "";' +
-    // 小红书号：匹配"小红书号: XXXX"或"小红书号 XXXX"或冒号
-    '  var reAccount = /小红书号[：:\\s]*([A-Za-z0-9_\\-]{3,30})/;' +
-    '  var accountMatch = bodyText.match(reAccount);' +
-    '  if (accountMatch && accountMatch[1]) result.platformAccountId = accountMatch[1];' +
-    // 粉丝数：匹配"粉丝 1.2万 / 1234"等
-    '  var reFans = /粉丝[：:\\s]*([0-9]+(?:\\.[0-9]+)?\\s*[万千百]?)/;' +
-    '  var fansMatch = bodyText.match(reFans);' +
-    '  if (fansMatch && fansMatch[1]) result.fansCount = _parseNumber(fansMatch[1]);' +
-    // 关注数
-    '  var reFollow = /(?:关注|关注数)[：:\\s]*([0-9]+(?:\\.[0-9]+)?\\s*[万千百]?)/;' +
-    '  var followMatch = bodyText.match(reFollow);' +
-    '  if (followMatch && followMatch[1]) result.followCount = _parseNumber(followMatch[1]);' +
-    // 获赞数
-    '  var reLike = /(?:获赞|点赞|累计)[：:\\s]*([0-9]+(?:\\.[0-9]+)?\\s*[万千百]?)/;' +
-    '  var likeMatch = bodyText.match(reLike);' +
-    '  if (likeMatch && likeMatch[1]) result.likeCount = _parseNumber(likeMatch[1]);' +
-    '} catch(e) {}' +
-    'function _parseNumber(s) {' +
-    '  if (!s) return null;' +
-    '  var t = String(s).replace(/\\s+/g, "");' +
-    '  var base = parseFloat(t);' +
-    '  if (isNaN(base)) return null;' +
-    '  if (t.indexOf("万") !== -1) base *= 10000;' +
-    '  else if (t.indexOf("千") !== -1) base *= 1000;' +
-    '  else if (t.indexOf("百") !== -1) base *= 100;' +
-    '  return Math.round(base);' +
     '}' +
     'return result;' +
     '})()'
@@ -739,6 +840,238 @@ async function publishImage(
   return runXhsPublish(accountId, request, onProgress, 'image');
 }
 
+// =====================================================================
+// 文章（长文）发布：独立流程，不影响视频/图文
+//  - URL: PUBLISH_ARTICLE_URL
+//  - 标题最多 64 字（图文是 20 字）
+//  - 正文不限制字数（图文是 1000 字）
+//  - 使用与图文相同的 ProseMirror / tiptap 富文本写入
+//  - 使用 CDP 穿透 closed shadow DOM 点击发布按钮
+// =====================================================================
+
+async function publishArticle(
+  accountId: string,
+  request: PublishRequest,
+  onProgress: ProgressCallback,
+): Promise<PublishItemProgress> {
+  const startedAt = Date.now();
+  const log = makePublishLogger({ accountId, platform: 'xiaohongshu' });
+
+  log('info', 'start', `开始发布小红书 [article]`, { title: request.title });
+
+  let win: BrowserWindow | null = null;
+  let disposeTracker: (() => void) | null = null;
+
+  try {
+    // 1) 创建窗口 + 挂导航跟踪器
+    onProgress(3, '初始化窗口…');
+    win = makePublishWindow(accountId, `小红书发布文章 - ${request.title || '未命名'}`);
+    const tracker = attachNavigationTracker(win, log);
+    disposeTracker = () => tracker.dispose();
+
+    // 2) 加载文章发布页
+    onProgress(8, '加载文章发布页…');
+    log('info', 'load', `打开 ${PUBLISH_ARTICLE_URL}`);
+    await win.loadURL(PUBLISH_ARTICLE_URL).catch((err) => {
+      log('warn', 'load', `loadURL 异常: ${err.message}`);
+    });
+
+    // 3) 等待页面稳定
+    onProgress(15, '等待页面加载稳定…');
+    await tracker.waitForStable(1500, 15000);
+    await sleep(1500);
+
+    // 4) 登录态检测
+    onProgress(22, '检测登录状态…');
+    let loginCheck: any = null;
+    try {
+      loginCheck = await evalJS(win, buildDetectLoggedInScript(LOGIN_KEYWORDS), '文章-登录态', log);
+    } catch (scriptErr) {
+      log('warn', 'login', `登录态检测失败: ${scriptErr instanceof Error ? scriptErr.message : String(scriptErr)}`);
+      loginCheck = { loggedIn: false };
+    }
+    if (!loginCheck || !loginCheck.loggedIn) {
+      log('warn', 'login', '未检测到登录态，显示窗口，等待用户登录…');
+      onProgress(25, '请在打开的窗口中完成登录（最长等待 120 秒）');
+      win.show();
+      win.focus();
+
+      const loginDeadline = Date.now() + 120 * 1000;
+      let loggedInNow = false;
+      while (Date.now() < loginDeadline) {
+        await sleep(3000);
+        if (win.isDestroyed()) break;
+        try {
+          const checkRes: any = await win.webContents
+            .executeJavaScript(buildDetectLoggedInScript(LOGIN_KEYWORDS))
+            .catch(() => null);
+          if (checkRes && checkRes.loggedIn) {
+            loggedInNow = true;
+            log('info', 'login', '检测到已登录，继续发布流程');
+            break;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (!loggedInNow) {
+        return makeFailedResult(accountId, 'xiaohongshu', '登录超时或未完成登录', startedAt);
+      }
+      // 回到文章发布页
+      if (!win.isDestroyed()) {
+        const currentUrl = win.webContents.getURL();
+        if (currentUrl.indexOf('target=article') === -1) {
+          log('info', 'login', `当前不在文章发布页，重新跳转`);
+          await win.loadURL(PUBLISH_ARTICLE_URL).catch(() => {});
+        }
+      }
+      await tracker.waitForStable(1500, 15000);
+      await sleep(1500);
+    } else {
+      log('info', 'login', '已登录，继续发布流程');
+    }
+
+    onProgress(30, '已登录，准备上传/填写内容…');
+
+    // 5) 上传用户提供的素材（如有）
+    const files = request.mediaFiles || [];
+    if (files.length > 0) {
+      onProgress(38, '上传文件…');
+      log('info', 'upload', `待上传文件: ${files.join(', ')}`);
+      const uploadOk = await uploadViaCDP(win, files, log, 'image');
+      if (uploadOk) {
+        onProgress(50, '等待上传完成…');
+        const uploadResult = await waitForUploadComplete(win, log, onProgress, 300000, tracker);
+        if (!uploadResult || !uploadResult.ready) {
+          log('warn', 'upload', `上传完成检测失败 (status=${uploadResult?.finalStatus || 'unknown'})`);
+        }
+        await sleep(1000);
+      } else {
+        log('warn', 'upload', '文件上传失败，继续填写其他字段（可能缺少封面）');
+      }
+    }
+
+    // 6) 标题（最多 64 字，文章专用限制）
+    onProgress(62, '填写标题…');
+    const originalTitle = request.title || '';
+    const articleTitleText = truncate(originalTitle, ARTICLE_TITLE_LIMIT);
+    if (originalTitle.length > ARTICLE_TITLE_LIMIT) {
+      log('warn', 'fill-title', `文章标题过长，已从 ${originalTitle.length} 字截断为 ${ARTICLE_TITLE_LIMIT} 字: "${articleTitleText}"`);
+    } else {
+      log('info', 'fill-title', `文章标题: ${articleTitleText.length}/${ARTICLE_TITLE_LIMIT} 字`);
+    }
+    const titleRes: any = await evalJS(win, buildFillTitleTextScript(articleTitleText), '文章-填写标题', log).catch(() => null);
+    log('info', 'fill-title', `标题填写结果: ${JSON.stringify(titleRes)}`);
+    await sleep(500);
+
+    // 7) 正文（富文本，不限制字数）
+    onProgress(72, '填写正文…');
+    const rawContent = request.content || '';
+    // 话题处理：与图文相同，最多 10 个
+    const trimmedTags = (request.tags || [])
+      .map((t) => (t || '').trim())
+      .filter((t) => t.length > 0)
+      .slice(0, MAX_TAGS)
+      .map((t) => (t.startsWith('#') ? t : '#' + t));
+    let articleContent = rawContent;
+    if (trimmedTags.length > 0) {
+      const tagStr = trimmedTags.join(' ');
+      articleContent = articleContent.length > 0 ? articleContent + '\n' + tagStr : tagStr;
+    }
+    log('info', 'fill-content', `文章正文: ${articleContent.length} 字`);
+    const contentRes: any = await evalJS(win, buildFillContentScript(articleContent), '文章-填写正文', log).catch(() => null);
+    log('info', 'fill-content', `正文填写结果: ${JSON.stringify(contentRes)}`);
+    await sleep(800);
+
+    // 8) 点击发布按钮（JS click + CDP 穿透 shadow DOM）
+    onProgress(88, '点击发布按钮…');
+    let clicked = false;
+    const clickResult: any = await evalJS(win, buildClickPublishScript(), '文章-点击发布', log).catch(() => null);
+    log('info', 'click-publish', `JS 点击结果: ${JSON.stringify(clickResult)}`);
+    clicked = !!(clickResult && clickResult.clicked);
+
+    try {
+      const cdpOk = await cdpClickPublishButton(win, log, [
+        '发布笔记', '发布文章', '立即发布', '发布作品', '确认发布', '发布', 'publish', 'confirm',
+      ]);
+      if (cdpOk) {
+        log('info', 'click-publish', '✅ CDP 穿透式点击成功');
+        clicked = true;
+      } else {
+        log('warn', 'click-publish', 'CDP 点击返回 false，继续轮询发布结果');
+      }
+    } catch (cdpErr) {
+      log('warn', 'click-publish', `CDP 点击异常: ${cdpErr instanceof Error ? cdpErr.message : String(cdpErr)}`);
+    }
+
+    if (!clicked) {
+      log('warn', 'click-publish', `所有点击方式均未命中发布按钮`);
+      return makeFailedResult(accountId, 'xiaohongshu', '未找到发布按钮或点击失败', startedAt);
+    }
+    await sleep(1200);
+
+    // 9) 等待发布结果（60 秒超时）
+    onProgress(94, '等待发布结果…');
+    const probeDeadline = Date.now() + 60 * 1000;
+    let finalState: any = null;
+    const probeScript = buildPublishResultProbeScript();
+    while (Date.now() < probeDeadline) {
+      await sleep(2500);
+      if (!win || win.isDestroyed()) break;
+      try {
+        const probeRes: any = await win.webContents.executeJavaScript(probeScript).catch(() => null);
+        if (probeRes && probeRes.success) {
+          finalState = probeRes;
+          break;
+        }
+        if (probeRes && probeRes.failed) {
+          finalState = probeRes;
+          break;
+        }
+      } catch {
+        // ignore transient errors
+      }
+    }
+
+    onProgress(100, '发布完成');
+    log('info', 'done', `文章发布最终状态: ${JSON.stringify(finalState)}`);
+
+    const success = !!(finalState && finalState.success);
+    const progress: PublishItemProgress = {
+      accountId,
+      platform: 'xiaohongshu',
+      status: success ? 'success' : 'failed',
+      progress: 100,
+      message: success
+        ? '小红书文章发布成功'
+        : finalState && finalState.hitFail && finalState.hitFail.length > 0
+          ? `发布失败: ${finalState.hitFail.join(', ')}`
+          : '发布结果未明确，请在小红书后台确认',
+      resultUrl: finalState && finalState.url ? finalState.url : PUBLISH_ARTICLE_URL,
+      startedAt,
+      finishedAt: Date.now(),
+    };
+    return progress;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log('error', 'fatal', `文章发布流程异常: ${message}`);
+    return makeFailedResult(accountId, 'xiaohongshu', message, startedAt);
+  } finally {
+    try {
+      disposeTracker?.();
+    } catch {
+      // ignore
+    }
+    if (win && !win.isDestroyed()) {
+      try {
+        win.destroy();
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
 async function publish(
   accountId: string,
   request: PublishRequest,
@@ -805,8 +1138,8 @@ const meta: PlatformMeta = {
   authUrl: 'https://creator.xiaohongshu.com/creator/home',
   publishUrl: PUBLISH_URL,
   homeUrl: 'https://creator.xiaohongshu.com/creator/home',
-  contentTypes: ['video', 'image'],
-  capabilities: { publishVideo: true, publishImage: true, publishArticle: false } as AccountCapabilities,
+  contentTypes: ['video', 'image', 'article'],
+  capabilities: { publishVideo: true, publishImage: true, publishArticle: true } as AccountCapabilities,
   contentLimits: { title: TITLE_LIMIT, content: CONTENT_LIMIT },
   nicknameSelectors: [
     '.account-name',
@@ -832,6 +1165,7 @@ const adapter: PlatformAdapter = {
   extractPageInfo,
   publishVideo,
   publishImage,
+  publishArticle,
   publish,
 };
 
