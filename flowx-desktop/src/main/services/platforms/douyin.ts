@@ -94,6 +94,10 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
 
 // === 抖音标题填写脚本（标题是 <input type="text">，不是 contenteditable！）
 // 优先级：1) placeholder 含"标题"/"作品标题"的 input  2) 普通 contenteditable（兜底）
+// === 抖音标题填写脚本（解决 React 受控组件 state 不更新的问题）
+// 🔑 核心修复: 不直接 .value 赋值,而是用 execCommand('insertText')
+//    直接 .value 赋值 + dispatchEvent 不会同步 React state → 内容写入后触发 React 重渲染,标题被 state(空) 覆盖
+//    execCommand 走原生浏览器输入路径,React 能正确监听并更新 state
 function buildFillTitleScript(text: string): string {
   const textJson = JSON.stringify(text);
   return `(function () {
@@ -107,9 +111,18 @@ function buildFillTitleScript(text: string): string {
         var ph = (inp.getAttribute && inp.getAttribute('placeholder')) || '';
         if (/标题|作品标题|添加标题/i.test(ph)) {
           inp.focus();
-          inp.value = text;
-          try { var ev1 = document.createEvent('Event'); ev1.initEvent('input', true, true); inp.dispatchEvent(ev1); } catch (eEv) {}
-          try { var ev2 = document.createEvent('Event'); ev2.initEvent('change', true, true); inp.dispatchEvent(ev2); } catch (eEv2) {}
+          // 🔑 用 execCommand 模拟原生输入,让 React 受控组件正确更新 state
+          try {
+            try { document.execCommand('selectAll'); } catch (eSA) {}
+            try { document.execCommand('delete'); } catch (eDel) {}
+            // 逐字符插入确保输入法安全
+            document.execCommand('insertText', false, text);
+          } catch (eCmd) {
+            // execCommand 失败兜底: 回退到 .value + dispatchEvent
+            inp.value = text;
+            try { inp.dispatchEvent(new Event('input', { bubbles: true })); } catch (eEv) {}
+            try { inp.dispatchEvent(new Event('change', { bubbles: true })); } catch (eEv2) {}
+          }
           return { ok: true, method: 'title-input', placeholder: ph };
         }
       }
@@ -122,8 +135,14 @@ function buildFillTitleScript(text: string): string {
         var ph2 = (ta.getAttribute && ta.getAttribute('placeholder')) || '';
         if (/标题|作品标题|添加标题/i.test(ph2)) {
           ta.focus();
-          ta.value = text;
-          try { var ev3 = document.createEvent('Event'); ev3.initEvent('input', true, true); ta.dispatchEvent(ev3); } catch (eEv3) {}
+          try {
+            try { document.execCommand('selectAll'); } catch (eSA) {}
+            try { document.execCommand('delete'); } catch (eDel) {}
+            document.execCommand('insertText', false, text);
+          } catch (eCmd) {
+            ta.value = text;
+            try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch (eEv) {}
+          }
           return { ok: true, method: 'title-textarea', placeholder: ph2 };
         }
       }
