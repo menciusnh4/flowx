@@ -10,6 +10,7 @@ import {
   uploadViaCDP,
   waitForUploadComplete,
   buildPageStructureProbe,
+  cdpClickPublishButton, // 🔑 CDP 穿透 closed shadow DOM 点击（小红书发布按钮是自定义 web component）
 } from './shared';
 import { registerPlatform } from './registry';
 import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities, ContentType } from '../../../types';
@@ -30,7 +31,9 @@ const LOGIN_KEYWORDS = [
   '数据分析',
 ];
 
-const TITLE_LIMIT = 80;
+// 🔑 小红书图文发布平台限制：标题最多 20 字，正文 1000 字，话题最多 10 个
+//    超过限制时自动截断并记录日志，避免发布失败
+const TITLE_LIMIT = 20;
 const CONTENT_LIMIT = 1000;
 const MAX_TAGS = 10;
 
@@ -62,12 +65,13 @@ function buildDetectLoggedInScript(loginKeywords: string[]): string {
     'var hasAccountSignal = false;' +
     'try { ' +
     '  var navText = ""; ' +
-    '  var navs = document.querySelectorAll("header, nav, [class*=\"header\"], [class*=\"nav\"]"); ' +
+    // ⚠️ 用单引号包裹 CSS 选择器字符串（外层 TS 单引号字符串用 \' 转义）
+    '  var navs = document.querySelectorAll(\'header, nav, [class*="header"], [class*="nav"]\'); ' +
     '  for (var ni = 0; ni < navs.length; ni++) { navText += (navs[ni].innerText || "") + " "; } ' +
     '  var topText = (document.body ? document.body.innerText.slice(0, 2000) : "") + " " + navText; ' +
     '  for (var j = 0; j < kws.length; j++) { if (topText.indexOf(kws[j]) !== -1 && matched.indexOf(kws[j]) === -1) matched.push(kws[j]); } ' +
-    '  var hasMeta = document.querySelector("meta[name*=\"creator\"]") || document.querySelector("meta[property*=\"creator\"]"); ' +
-    '  var hasNick = document.querySelector("[class*=\"account\"], [class*=\"nickname\"], [class*=\"user-name\"], [class*=\"avatar\"]"); ' +
+    '  var hasMeta = document.querySelector(\'meta[name*="creator"]\') || document.querySelector(\'meta[property*="creator"]\'); ' +
+    '  var hasNick = document.querySelector(\'[class*="account"], [class*="nickname"], [class*="user-name"], [class*="avatar"]\'); ' +
     '  hasAccountSignal = !!(hasMeta || hasNick); ' +
     '} catch (e) {}' +
     // 登录态 = 不是 login/signup URL + (关键词>=3 或 有明确账号信号)
@@ -92,7 +96,8 @@ function buildExtractPageInfoScript(): string {
     'var result = { nickname: "", avatar: "", platformAccountId: "", fansCount: null, followCount: null, likeCount: null };' +
     // 昵称：按优先级尝试多个选择器
     'var nickSelectors = [' +
-    '  "[class*=\"account-name\"]", "[class*=\"user-name\"]", "[class*=\"nickname\"]", ' +
+    // ⚠️ 外层用 \' 转义单引号字符串，CSS 属性选择器内部用双引号，避免引号冲突
+    '  \'[class*="account-name"]\', \'[class*="user-name"]\', \'[class*="nickname"]\', ' +
     '  ".account-name", ".user-name", ".nickname", ".user-nick"' +
     '];' +
     'for (var i = 0; i < nickSelectors.length; i++) {' +
@@ -106,7 +111,7 @@ function buildExtractPageInfoScript(): string {
     '}' +
     // 头像：img 的 src
     'var avatarSelectors = [' +
-    '  "img[class*=\"avatar\"]", "img[class*=\"img-\"]", "[class*=\"avatar\"] img",' +
+    '  \'img[class*="avatar"]\', \'img[class*="img-"]\', \'[class*="avatar"] img\',' +
     '  "img.user_avatar"' +
     '];' +
     'for (var j = 0; j < avatarSelectors.length; j++) {' +
@@ -163,61 +168,97 @@ function buildFillTitleTextScript(text: string): string {
   return (
     '(function(){' +
     'var text = ' + textJSON + ';' +
-    // 查找合适的"标题"输入框
+    // 辅助：判断是否为 ProseMirror / tiptap 富文本编辑器
     'function isProbablyProseMirror(el) {' +
     '  if (!el) return false;' +
-    '  var cls = el.getAttribute ? (el.getAttribute("class") || "") : "";' +
-    '  if (cls.indexOf("ProseMirror") !== -1 || cls.indexOf("tiptap") !== -1) return true;' +
-    '  if (el.getAttribute && el.getAttribute("data-slate-editor")) return true;' +
+    '  var cls = el.getAttribute ? (el.getAttribute(\'class\') || \'\') : \'\';' +
+    '  if (cls.indexOf(\'ProseMirror\') !== -1 || cls.indexOf(\'tiptap\') !== -1) return true;' +
+    '  if (el.getAttribute && el.getAttribute(\'data-slate-editor\')) return true;' +
     '  var parent = el.parentElement;' +
     '  if (parent && parent.getAttribute) {' +
-    '    var pcls = parent.getAttribute("class") || "";' +
-    '    if (pcls.indexOf("ProseMirror") !== -1 || pcls.indexOf("tiptap") !== -1) return true;' +
+    '    var pcls = parent.getAttribute(\'class\') || \'\';' +
+    '    if (pcls.indexOf(\'ProseMirror\') !== -1 || pcls.indexOf(\'tiptap\') !== -1) return true;' +
     '  }' +
     '  return false;' +
     '}' +
-    // 1) 优先：textarea （非 ProseMirror 父节点里的）
+    // 🔑 1) 优先：<input type="text">（小红书/抖音的标题字段最常见形式）
     'var target = null;' +
-    'var textareas = document.querySelectorAll("textarea");' +
-    'for (var i = 0; i < textareas.length; i++) {' +
-    '  var ta = textareas[i];' +
-    '  if (ta.disabled || ta.readOnly) continue;' +
-    '  if (isProbablyProseMirror(ta)) continue;' +
-    // 优先匹配带 title/标题 关键字的选择器
-    '  var name = (ta.getAttribute("name") || "").toLowerCase();' +
-    '  var id = (ta.getAttribute("id") || "").toLowerCase();' +
-    '  var place = (ta.getAttribute("placeholder") || "").toLowerCase();' +
-    '  if (name.indexOf("title") !== -1 || id.indexOf("title") !== -1 || place.indexOf("标题") !== -1 || place.indexOf("title") !== -1) {' +
-    '    target = ta; break;' +
+    'try {' +
+    // ⚠️ CSS 属性选择器：外层用 \' 转义单引号，避免与外层双引号嵌套
+    '  var titleInputs = document.querySelectorAll(\'input[type="text"]\');' +
+    '  for (var i = 0; i < titleInputs.length; i++) {' +
+    '    var inp = titleInputs[i];' +
+    '    if (inp.disabled || inp.readOnly) continue;' +
+    '    if (isProbablyProseMirror(inp)) continue;' +
+    '    var ph = (inp.getAttribute(\'placeholder\') || \'\').toLowerCase();' +
+    '    var name = (inp.getAttribute(\'name\') || \'\').toLowerCase();' +
+    '    var id = (inp.getAttribute(\'id\') || \'\').toLowerCase();' +
+    '    var aria = (inp.getAttribute(\'aria-label\') || \'\').toLowerCase();' +
+    // 精确匹配标题相关关键词
+    '    if (ph.indexOf(\'标题\') !== -1 || ph.indexOf(\'title\') !== -1 ||' +
+    '        name.indexOf(\'title\') !== -1 || id.indexOf(\'title\') !== -1 ||' +
+    '        aria.indexOf(\'标题\') !== -1 || aria.indexOf(\'title\') !== -1 ||' +
+    '        ph.indexOf(\'填写标题\') !== -1) {' +
+    '      target = inp; break;' +
+    '    }' +
+    '    if (!target) target = inp;' + // fallback to first non-empty text input
     '  }' +
-    '  if (!target) target = ta;' +
-    '}' +
+    '} catch(e) {}' +
+    // 2) 其次：textarea
     'if (!target) {' +
-    // 2) 其次：contenteditable 元素（非 ProseMirror）
-    '  var editables = document.querySelectorAll("[contenteditable=\"true\"], [contenteditable=\"\"]");' +
-    '  for (var j = 0; j < editables.length; j++) {' +
-    '    var ed = editables[j];' +
-    '    if (isProbablyProseMirror(ed)) continue;' +
-    '    var txt = (ed.innerText || ed.textContent || "").slice(0, 40);' +
-    '    if (txt.length > 200) continue;' +
-    '    var placeholder = (ed.getAttribute("data-placeholder") || ed.getAttribute("placeholder") || "").toLowerCase();' +
-    '    if (placeholder.indexOf("标题") !== -1 || placeholder.indexOf("title") !== -1) { target = ed; break; }' +
-    '    if (!target) target = ed;' +
-    '  }' +
+    '  try {' +
+    '    var textareas = document.querySelectorAll(\'textarea\');' +
+    '    for (var t = 0; t < textareas.length; t++) {' +
+    '      var ta = textareas[t];' +
+    '      if (ta.disabled || ta.readOnly) continue;' +
+    '      if (isProbablyProseMirror(ta)) continue;' +
+    '      var tph = (ta.getAttribute(\'placeholder\') || \'\').toLowerCase();' +
+    '      if (tph.indexOf(\'标题\') !== -1 || tph.indexOf(\'title\') !== -1) { target = ta; break; }' +
+    '      if (!target) target = ta;' +
+    '    }' +
+    '  } catch(e) {}' +
     '}' +
-    'if (!target) return { ok: false, reason: "no-title-target" };' +
-    // 写入：根据目标类型选择策略
+    // 3) 最后兜底：contenteditable 元素（非 ProseMirror）
+    'if (!target) {' +
+    '  try {' +
+    '    var editables = document.querySelectorAll(\'[contenteditable="true"], [contenteditable=""]\');' +
+    '    for (var j = 0; j < editables.length; j++) {' +
+    '      var ed = editables[j];' +
+    '      if (isProbablyProseMirror(ed)) continue;' +
+    '      var edph = (ed.getAttribute(\'data-placeholder\') || ed.getAttribute(\'placeholder\') || \'\').toLowerCase();' +
+    '      if (edph.indexOf(\'标题\') !== -1 || edph.indexOf(\'title\') !== -1) { target = ed; break; }' +
+    '      if (!target) target = ed;' +
+    '    }' +
+    '  } catch(e) {}' +
+    '}' +
+    // 写入逻辑
+    'if (!target) return { ok: false, reason: \'no-title-target\' };' +
     'try {' +
     '  target.focus();' +
-    '  var tag = (target.tagName || "").toLowerCase();' +
-    '  if (tag === "textarea" || tag === "input") {' +
-    '    target.value = text;' +
-    '    try { target.dispatchEvent(new Event("input", { bubbles: true })); } catch(e) {}' +
-    '    try { target.dispatchEvent(new Event("change", { bubbles: true })); } catch(e) {}' +
+    '  var tag = (target.tagName || \'\').toLowerCase();' +
+    // 🔑 input/textarea 用 execCommand 模拟原生输入，确保 React 受控组件 state 同步更新
+    '  if (tag === \'textarea\' || tag === \'input\') {' +
+    '    try {' +
+    '      document.execCommand(\'selectAll\');' +
+    '    } catch(e1) {}' +
+    '    try {' +
+    '      document.execCommand(\'delete\');' +
+    '    } catch(e2) {}' +
+    '    try {' +
+    '      document.execCommand(\'insertText\', false, text);' +
+    '    } catch(e3) {' +
+    '      target.value = text;' + // fallback: direct value assignment
+    '      try { target.dispatchEvent(new Event(\'input\', { bubbles: true })); } catch(ev) {}' +
+    '      try { target.dispatchEvent(new Event(\'change\', { bubbles: true })); } catch(ev2) {}' +
+    '    }' +
+    '    try { target.dispatchEvent(new Event(\'input\', { bubbles: true })); } catch(ev) {}' +
+    '    try { target.dispatchEvent(new Event(\'change\', { bubbles: true })); } catch(ev2) {}' +
     '  } else {' +
-    // contenteditable：清空后设置文本
-    '    target.innerText = text;' +
-    '    try { target.dispatchEvent(new Event("input", { bubbles: true })); } catch(e) {}' +
+    // contenteditable
+    '    try { document.execCommand(\'selectAll\'); } catch(e1) {}' +
+    '    try { document.execCommand(\'delete\'); } catch(e2) {}' +
+    '    try { document.execCommand(\'insertText\', false, text); } catch(e3) { target.innerText = text; }' +
+    '    try { target.dispatchEvent(new Event(\'input\', { bubbles: true })); } catch(e) {}' +
     '  }' +
     '  try { target.blur(); } catch(e) {}' +
     '  return { ok: true, tag: tag, length: text.length };' +
@@ -245,9 +286,9 @@ function buildFillContentScript(content: string): string {
     // 辅助：判断是否为 ProseMirror / tiptap
     'function isProseMirror(el) {' +
     '  if (!el || !el.getAttribute) return false;' +
-    '  var cls = el.getAttribute("class") || "";' +
-    '  if (cls.indexOf("ProseMirror") !== -1) return true;' +
-    '  if (cls.indexOf("tiptap") !== -1) return true;' +
+    '  var cls = el.getAttribute(\'class\') || \'\';' +
+    '  if (cls.indexOf(\'ProseMirror\') !== -1) return true;' +
+    '  if (cls.indexOf(\'tiptap\') !== -1) return true;' +
     '  return false;' +
     '}' +
     // 收集候选（优先 ProseMirror，其次普通 contenteditable，最后 textarea）
@@ -255,7 +296,7 @@ function buildFillContentScript(content: string): string {
     'var edTarget = null;' +
     'var taTarget = null;' +
     'try {' +
-    '  var nodes = document.querySelectorAll("[contenteditable]");' +
+    '  var nodes = document.querySelectorAll(\'[contenteditable]\');' +
     '  for (var i = 0; i < nodes.length; i++) {' +
     '    var n = nodes[i];' +
     '    if (isProseMirror(n)) { if (!pmTarget) pmTarget = n; }' +
@@ -263,23 +304,23 @@ function buildFillContentScript(content: string): string {
     '  }' +
     '} catch(e) {}' +
     'try {' +
-    '  var tas = document.querySelectorAll("textarea");' +
+    '  var tas = document.querySelectorAll(\'textarea\');' +
     '  for (var j = 0; j < tas.length; j++) {' +
-    '    if (tas[j].getAttribute && (tas[j].getAttribute("name") || "").indexOf("title") === -1) {' +
+    '    if (tas[j].getAttribute && (tas[j].getAttribute(\'name\') || \'\').indexOf(\'title\') === -1) {' +
     '      if (!taTarget) taTarget = tas[j];' +
     '    }' +
     '  }' +
     '} catch(e) {}' +
     'var target = pmTarget || edTarget || taTarget;' +
-    'if (!target) return { ok: false, reason: "no-content-target" };' +
+    'if (!target) return { ok: false, reason: \'no-content-target\' };' +
     // 写入
     'try {' +
     '  target.focus();' +
-    '  var tag = (target.tagName || "").toLowerCase();' +
-    '  if (tag === "textarea" || tag === "input") {' +
+    '  var tag = (target.tagName || \'\').toLowerCase();' +
+    '  if (tag === \'textarea\' || tag === \'input\') {' +
     '    target.value = content;' +
-    '    try { target.dispatchEvent(new Event("input", { bubbles: true })); } catch(e) {}' +
-    '    try { target.dispatchEvent(new Event("change", { bubbles: true })); } catch(e) {}' +
+    '    try { target.dispatchEvent(new Event(\'input\', { bubbles: true })); } catch(e) {}' +
+    '    try { target.dispatchEvent(new Event(\'change\', { bubbles: true })); } catch(e) {}' +
     '  } else if (pmTarget) {' +
     // ProseMirror：selectAll → delete → insertText
     '    try {' +
@@ -287,19 +328,21 @@ function buildFillContentScript(content: string): string {
     '      var range = document.createRange();' +
     '      range.selectNodeContents(pmTarget);' +
     '      window.getSelection().addRange(range);' +
-    '      try { document.execCommand("delete"); } catch(e) {}' +
-    '      try { document.execCommand("insertText", false, content); } catch(e2) { pmTarget.innerText = content; }' +
+    '      try { document.execCommand(\'delete\'); } catch(e) {}' +
+    '      try { document.execCommand(\'insertText\', false, content); } catch(e2) { pmTarget.innerText = content; }' +
     '    } catch(e) {' +
     '      pmTarget.innerText = content;' +
     '    }' +
-    '    try { pmTarget.dispatchEvent(new Event("input", { bubbles: true })); } catch(e) {}' +
+    '    try { pmTarget.dispatchEvent(new Event(\'input\', { bubbles: true })); } catch(e) {}' +
     '  } else {' +
-    // 普通 contenteditable
-    '    target.innerText = content;' +
-    '    try { target.dispatchEvent(new Event("input", { bubbles: true })); } catch(e) {}' +
+    // 普通 contenteditable：用 execCommand 触发真实输入事件，确保 React 受控组件 state 更新
+    '    try { document.execCommand(\'selectAll\'); } catch(e1) {}' +
+    '    try { document.execCommand(\'delete\'); } catch(e2) {}' +
+    '    try { document.execCommand(\'insertText\', false, content); } catch(e3) { target.innerText = content; }' +
+    '    try { target.dispatchEvent(new Event(\'input\', { bubbles: true })); } catch(e) {}' +
     '  }' +
     '  try { target.blur(); } catch(e) {}' +
-    '  return { ok: true, kind: pmTarget ? "prosemirror" : (edTarget ? "contenteditable" : "textarea"), length: content.length };' +
+    '  return { ok: true, kind: pmTarget ? \'prosemirror\' : (edTarget ? \'contenteditable\' : \'textarea\'), length: content.length };' +
     '} catch(e) {' +
     '  return { ok: false, reason: String(e && e.message || e) };' +
     '}' +
@@ -315,14 +358,15 @@ function buildFillContentScript(content: string): string {
 function buildClickPublishScript(): string {
   return (
     '(function(){' +
-    'var patterns = ["发布视频", "发布笔记", "立即发布", "发布"];' +
+    'var patterns = [\'发布视频\', \'发布笔记\', \'立即发布\', \'发布\'];' +
     // 收集候选：button / a / [role=button] / div / span
+    // ⚠️ 外层用 \' 转义单引号，避免 CSS 选择器的引号冲突
     'var candidates = [];' +
     'try {' +
-    '  var nodes = document.querySelectorAll("button, a, [role=\"button\"], div, span");' +
+    '  var nodes = document.querySelectorAll(\'button, a, [role="button"], div, span\');' +
     '  for (var i = 0; i < nodes.length; i++) {' +
     '    var n = nodes[i];' +
-    '    var txt = ((n.innerText || n.textContent || "").replace(/\\s+/g, "").trim());' +
+    '    var txt = ((n.innerText || n.textContent || \'\').replace(/\\s+/g, \'\').trim());' +
     '    if (!txt || txt.length > 20) continue;' +
     '    for (var k = 0; k < patterns.length; k++) {' +
     '      if (txt === patterns[k] || txt.indexOf(patterns[k]) !== -1) {' +
@@ -332,12 +376,12 @@ function buildClickPublishScript(): string {
     '    }' +
     '  }' +
     '} catch(e) {}' +
-    'if (candidates.length === 0) return { clicked: false, reason: "no-button" };' +
+    'if (candidates.length === 0) return { clicked: false, reason: \'no-button\' };' +
     // 再按 class 名给"publish / button"等额外加分（简单启发式）
     'for (var m = 0; m < candidates.length; m++) {' +
-    '  var cls = candidates[m].el.getAttribute ? (candidates[m].el.getAttribute("class") || "") : "";' +
-    '  if (cls.indexOf("publish") !== -1 || cls.indexOf("submit") !== -1) candidates[m].score += 50;' +
-    '  if (cls.indexOf("primary") !== -1 || cls.indexOf("btn-") !== -1) candidates[m].score += 20;' +
+    '  var cls = candidates[m].el.getAttribute ? (candidates[m].el.getAttribute(\'class\') || \'\') : \'\';' +
+    '  if (cls.indexOf(\'publish\') !== -1 || cls.indexOf(\'submit\') !== -1) candidates[m].score += 50;' +
+    '  if (cls.indexOf(\'primary\') !== -1 || cls.indexOf(\'btn-\') !== -1) candidates[m].score += 20;' +
     // 过滤不可见 / 禁用
     '  try {' +
     '    if (candidates[m].el.offsetWidth === 0 || candidates[m].el.offsetHeight === 0) candidates[m].score -= 1000;' +
@@ -347,7 +391,7 @@ function buildClickPublishScript(): string {
     'candidates.sort(function(a, b) { return b.score - a.score; });' +
     'var target = candidates[0];' +
     'try { target.el.click(); } catch(e) {}' +
-    'try { target.el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); } catch(e) {}' +
+    'try { target.el.dispatchEvent(new MouseEvent(\'click\', { bubbles: true, cancelable: true })); } catch(e) {}' +
     'return { clicked: true, text: target.text, topThree: candidates.slice(0, 3).map(function(c) { return { text: c.text, score: c.score }; }) };' +
     '})()'
   );
@@ -449,8 +493,15 @@ async function runXhsPublish(
     await sleep(1500);
 
     // 4) 检测登录态，未登录则显示窗口让用户手动登录
+    //    防御：脚本执行失败时，降级为"未检测到登录态"，进入窗口等待流程，不中断发布
     onProgress(15, '检测登录状态…');
-    const loginCheck: any = await evalJS(win, buildDetectLoggedInScript(LOGIN_KEYWORDS), '检测登录态', log);
+    let loginCheck: any = null;
+    try {
+      loginCheck = await evalJS(win, buildDetectLoggedInScript(LOGIN_KEYWORDS), '检测登录态', log);
+    } catch (scriptErr) {
+      log('warn', 'login', `登录态检测脚本执行失败，降级为显示窗口等待: ${scriptErr instanceof Error ? scriptErr.message : String(scriptErr)}`);
+      loginCheck = { loggedIn: false };
+    }
     if (!loginCheck || !loginCheck.loggedIn) {
       log('warn', 'login', '未检测到登录态，显示窗口，等待用户登录…');
       onProgress(20, '请在打开的窗口中完成登录（最长等待 120 秒）');
@@ -503,7 +554,8 @@ async function runXhsPublish(
         'var targets = ["图文", "图片", "上传图文"];' +
         'var found = null;' +
         'try {' +
-        '  var nodes = document.querySelectorAll("button, a, [role=\"tab\"], [role=\"button\"], div, span");' +
+        // ⚠️ 外层用 \' 转义单引号，CSS 选择器内部用双引号
+        '  var nodes = document.querySelectorAll(\'button, a, [role="tab"], [role="button"], div, span\');' +
         '  for (var i = 0; i < nodes.length; i++) {' +
         '    var txt = ((nodes[i].innerText || nodes[i].textContent || "").replace(/\\s+/g, "").trim());' +
         '    for (var k = 0; k < targets.length; k++) {' +
@@ -550,25 +602,59 @@ async function runXhsPublish(
 
     // 8) 填充标题（先标题再正文）
     onProgress(65, '填写标题…');
-    const titleText = truncate(request.title || '', TITLE_LIMIT);
+    const originalTitle = request.title || '';
+    const titleText = truncate(originalTitle, TITLE_LIMIT);
+    if (originalTitle.length > TITLE_LIMIT) {
+      log('warn', 'fill-title', `标题过长，已从 ${originalTitle.length} 字截断为 ${TITLE_LIMIT} 字: "${titleText}"`);
+    } else {
+      log('info', 'fill-title', `标题长度: ${titleText.length}/${TITLE_LIMIT} 字`);
+    }
     const titleResult: any = await evalJS(win, buildFillTitleTextScript(titleText), '填写标题', log);
     log('info', 'fill-title', `标题填写结果: ${JSON.stringify(titleResult)}`);
     await sleep(500);
 
     // 9) 填充正文（含话题）
     onProgress(70, '填写正文…');
-    const contentText = truncate(buildContentText(request.content || '', request.tags), CONTENT_LIMIT);
+    const fullContent = buildContentText(request.content || '', request.tags);
+    const contentText = truncate(fullContent, CONTENT_LIMIT);
+    if (fullContent.length > CONTENT_LIMIT) {
+      log('warn', 'fill-content', `正文过长，已从 ${fullContent.length} 字截断为 ${CONTENT_LIMIT} 字`);
+    } else {
+      log('info', 'fill-content', `正文长度: ${contentText.length}/${CONTENT_LIMIT} 字`);
+    }
     const contentResult: any = await evalJS(win, buildFillContentScript(contentText), '填写正文', log);
     log('info', 'fill-content', `正文填写结果: ${JSON.stringify(contentResult)}`);
     await sleep(800);
 
-    // 10) 点击"发布"按钮
+    // 10) 点击"发布"按钮 —— 🔑 使用 CDP 穿透 closed shadow DOM（小红书发布按钮是自定义 web component）
+    //    先尝试 JS 点击（处理 light DOM 中的按钮），失败后用 CDP 鼠标合成事件（可穿透 shadow DOM）
     onProgress(85, '点击发布按钮…');
+    let clicked = false;
     const clickResult: any = await evalJS(win, buildClickPublishScript(), '点击发布', log);
-    log('info', 'click-publish', `发布按钮点击结果: ${JSON.stringify(clickResult)}`);
-    if (!clickResult || !clickResult.clicked) {
+    log('info', 'click-publish', `JS 点击结果: ${JSON.stringify(clickResult)}`);
+    clicked = !!(clickResult && clickResult.clicked);
+
+    // 🔑 无论 JS 点击是否成功，都尝试 CDP 穿透点击（closed shadow DOM 的按钮只能通过 CDP 点击）
+    //    CDP 会合成真实鼠标事件（mouseMoved → mousePressed → mouseReleased），坐标从 DOM.getBoxModel 计算
+    try {
+      const cdpOk = await cdpClickPublishButton(win, log, [
+        '发布笔记', '发布视频', '立即发布', '发布作品', '确认发布', '发布', 'publish', 'confirm',
+      ]);
+      if (cdpOk) {
+        log('info', 'click-publish', '✅ CDP 穿透式点击成功');
+        clicked = true;
+      } else {
+        log('warn', 'click-publish', 'CDP 点击返回 false，尝试继续轮询发布结果');
+      }
+    } catch (cdpErr) {
+      log('warn', 'click-publish', `CDP 点击异常: ${cdpErr instanceof Error ? cdpErr.message : String(cdpErr)}`);
+    }
+
+    if (!clicked) {
+      log('warn', 'click-publish', `所有点击方式均未命中发布按钮`);
       return makeFailedResult(accountId, 'xiaohongshu', '未找到发布按钮或点击失败', startedAt);
     }
+    await sleep(1200);
 
     // 11) 等待发布成功 / 失败（轮询最多 60 秒）
     onProgress(92, '等待发布结果…');
