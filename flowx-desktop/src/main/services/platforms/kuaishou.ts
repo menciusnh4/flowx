@@ -5,7 +5,17 @@ import type {
   LoginCheckResult,
   ProgressCallback,
 } from './types';
-import { runStandardPublish } from './shared';
+import {
+  sleep,
+  makePublishLogger,
+  makePublishWindow,
+  attachNavigationTracker,
+  evalJS,
+  makeFailedResult,
+  uploadViaCDP,
+  waitForUploadComplete,
+  buildPageStructureProbe,
+} from './shared';
 import { registerPlatform } from './registry';
 import type {
   PlatformMeta,
@@ -16,20 +26,32 @@ import type {
 } from '../../../types';
 
 /**
- * 快手平台适配器
+ * 快手平台适配器（完全独立实现，不依赖 runStandardPublish / buildFillTitle 等平台特定脚本）。
  *
  * 架构：
- *   - detectLoggedIn：检查 URL + body 关键词
- *   - extractPageInfo：直接 DOM 查询 + 统计
- *   - publishVideo/publishImage：委托给 runStandardPublish
+ *   - detectLoggedIn / extractPageInfo：保留原有 DOM 查询逻辑（无外部依赖）
+ *   - publishVideo / publishImage：在 kuaishou.ts 内部实现完整发布流程
+ *     1. 打开窗口 + 导航跟踪
+ *     2. 加载对应发布 URL（视频 / 图文）
+ *     3. 等待页面稳定
+ *     4. 检测登录状态
+ *     5. 图文模式：必要时点击"上传图文"tab
+ *     6. 上传素材（uploadViaCDP，已接受 contentType 参数）
+ *     7. 等待上传完成（waitForUploadComplete）
+ *     8. 填写标题/内容/标签（自制脚本 + 字数截断）
+ *     9. 点击发布按钮（自制脚本）
+ *     10. 等待"发布成功"（URL 变为 manage 开头 或 文本出现"发布成功"）
+ *     11. 返回结果
  *
- * 页面结构（已知：
- *   - 账号信息区：div.header-info-card
- *     - img.user-image (头像
- *     - .user-name (昵称
- *     - .user-kwai-id (快手号
- *     - .user-cnt > .user-cnt__item (粉丝/关注/获赞)
- *   - 统计项文本格式：" 2<span>粉丝</span>" → textContent.trim() = "2粉丝"
+ * 页面结构要点：
+ *   - 视频发布 URL：https://cp.kuaishou.com/article/publish/video
+ *   - 图文发布 URL：https://cp.kuaishou.com/article/publish/video?tabType=2
+ *   - 标题：contenteditable 元素（视频模式独有，图文无独立标题）
+ *   - 正文：contenteditable 元素，placeholder 含 "添加合适的话题和描述"
+ *   - 发布按钮：div 带类名 _button-primary_ / _button_3a3lq_，文本含"发布"
+ *   - 字数限制：标题 80，正文/描述 500
+ *   - 标签限制：最多 4 个（图文与视频一致）
+ *   - 页面没有 Shadow DOM，不需要 pierce 处理
  */
 
 const meta: PlatformMeta = {
@@ -71,13 +93,36 @@ const meta: PlatformMeta = {
   loginKeywords: ['创作中心', '发布作品', '作品管理', '粉丝', '数据分析', '个人中心', '发布视频'],
 };
 
-/**
- * 登录检测：
- */
+// ========================= 登录检测 =========================
+
 async function detectLoggedIn(win: BrowserWindow): Promise<LoginCheckResult> {
   try {
     const info: any = await win.webContents.executeJavaScript(
-      `\n      (function () {\n        var bodyText = document.body ? (document.body.innerText || '') : '';\n        var curUrl = location.href;\n        var keywords = ${JSON.stringify(meta.loginKeywords)};\n        var matched = [];\n        var isLoginPage = /login|passport|redirectReason|signin|401|signup|sso|captcha/i.test(curUrl);\n        var nickSels = ${JSON.stringify(meta.nicknameSelectors)};\n        var hasAccountEl = false;\n        var rawNick = '';\n        for (var i = 0; i < nickSels.length; i++) {\n          var el = document.querySelector(nickSels[i]);\n          if (el && el.textContent && el.textContent.trim() && el.textContent.trim().length > 0) {\n            hasAccountEl = true;\n            rawNick = el.textContent.trim();\n            break;\n          }\n        }\n        for (var j = 0; j < keywords.length; j++) {\n          if (bodyText.indexOf(keywords[j]) !== -1) matched.push(keywords[j]);\n        }\n        var loggedIn = !isLoginPage && (hasAccountEl || matched.length >= 3);\n        return { loggedIn: loggedIn, matched: matched, title: document.title, url: curUrl, isLoginPage: isLoginPage, hasAccountEl: hasAccountEl, rawNick: rawNick };\n      })();\n    `,
+      `
+      (function () {
+        var bodyText = document.body ? (document.body.innerText || '') : '';
+        var curUrl = location.href;
+        var keywords = ${JSON.stringify(meta.loginKeywords)};
+        var matched = [];
+        var isLoginPage = /login|passport|redirectReason|signin|401|signup|sso|captcha/i.test(curUrl);
+        var nickSels = ${JSON.stringify(meta.nicknameSelectors)};
+        var hasAccountEl = false;
+        var rawNick = '';
+        for (var i = 0; i < nickSels.length; i++) {
+          var el = document.querySelector(nickSels[i]);
+          if (el && el.textContent && el.textContent.trim() && el.textContent.trim().length > 0) {
+            hasAccountEl = true;
+            rawNick = el.textContent.trim();
+            break;
+          }
+        }
+        for (var j = 0; j < keywords.length; j++) {
+          if (bodyText.indexOf(keywords[j]) !== -1) matched.push(keywords[j]);
+        }
+        var loggedIn = !isLoginPage && (hasAccountEl || matched.length >= 3);
+        return { loggedIn: loggedIn, matched: matched, title: document.title, url: curUrl, isLoginPage: isLoginPage, hasAccountEl: hasAccountEl, rawNick: rawNick };
+      })();
+    `,
     );
     return {
       loggedIn: info.loggedIn,
@@ -90,24 +135,113 @@ async function detectLoggedIn(win: BrowserWindow): Promise<LoginCheckResult> {
   }
 }
 
-/**
- * 从页面中提取账号信息
- *
- * 策略（完全同步的脚本，不使用 Promise 等异步结构
- * 关键点：不使用 setTimeout 或 async 的元素：
- *   - 第一步：在 document.body 里查询
- *   - 扫 .el-popover / .user-info-popper / .header-info-card
- *   - 每个 user-cnt__item 文本解析
- *   - 从 cookie 中解析 user_id
- *   - 最后把结果带回
- */
+// ========================= 账号信息提取 =========================
+
 async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo> {
-  const result: any = await win.webContents.executeJavaScript(
-    `(function () {\n      var r = { nickname: '', avatar: '', platformAccountId: '', fansCount: null, followCount: null, likeCount: null };\n      var debug = { samples: [], hit: 0, errors: [], cookieUserId: null };\n\n      function parseCount(text) {\n        try {\n          var clean = (text || '').trim().replace(/[,\\s]/g, '');\n          var pm = clean.match(/^(\\d+(?:\\.\\d+)?)([万wWkK千])?$/);\n          if (!pm) return null;\n          var n = parseFloat(pm[1]);\n          if (pm[2]) {\n            if (/[万wW]/.test(pm[2])) n *= 10000;\n            else if (/[千kK]/.test(pm[2])) n *= 1000;\n          }\n          return Math.round(n);\n        } catch (e) { return null; }\n      }\n\n      // 处理单个元素：从文本中解析统计信息\n      function tryExtractItem(el) {\n        if (!el || !el.textContent) return;\n        var txt = el.textContent.trim();\n        if (!txt || txt.length > 40) return;\n        if (debug.samples.length < 10) debug.samples.push(txt.replace(/\\s+/g, ' '));\n        var lab = txt.match(/(粉丝|关注|获赞|点赞)/);\n        var num = txt.match(/(\\d+(?:\\.\\d+)?[万wWkK千]?)/);\n        if (!lab || !num) return;\n        var nv = parseCount(num[1]);\n        if (nv === null || nv < 0) return;\n        if (lab[1] === '粉丝' && r.fansCount === null) r.fansCount = nv;\n        else if (lab[1] === '关注' && r.followCount === null) r.followCount = nv;\n        else if ((lab[1] === '获赞' || lab[1] === '点赞') && r.likeCount === null) r.likeCount = nv;\n      }\n\n      // 第一步：在整个 document 中查询\n      try {\n        // 最直接的方式：直接查 user-cnt__item\n        var directItems = document.querySelectorAll('[class*=\"user-cnt__item\"], [class*=\"user_cnt__item\"]');\n        for (var di = 0; di < directItems.length; di++) {\n          tryExtractItem(directItems[di]);\n        }\n        // 兜底：再查 header-info-card / user-cnt / el-popover\n        var containers = document.querySelectorAll('.header-info-card, [class*=\"user-cnt\"], [class*=\"el-popover\"], .user-info-popper, [class*=\"user-info-popper\"]');\n        for (var ci = 0; ci < containers.length; ci++) {\n          var containerItems = containers[ci].querySelectorAll('div, span, p');\n          for (var ci2 = 0; ci2 < containerItems.length; ci2++) {\n            tryExtractItem(containerItems[ci2]);\n          }\n        }\n        // 最后兜底：全页所有 div/span\n        if (r.fansCount === null || r.followCount === null || r.likeCount === null) {\n          var fallback = document.querySelectorAll('div, span');\n          for (var fi = 0; fi < fallback.length; fi++) {\n            tryExtractItem(fallback[fi]);\n            if (r.fansCount !== null && r.followCount !== null && r.likeCount !== null) break;\n          }\n        }\n      } catch (e) { debug.errors.push('extract:' + (e && e.message)); }\n\n      debug.hit = (r.fansCount !== null ? 1 : 0) + (r.followCount !== null ? 1 : 0) + (r.likeCount !== null ? 1 : 0);\n\n      // 第二步：昵称 / 头像 / 快手号\n      try {\n        var nickEl = document.querySelector('.user-name, [class*=\"user-name\"], [class*=\"nickname\"]');\n        if (nickEl && nickEl.textContent) r.nickname = nickEl.textContent.trim();\n      } catch (e) { debug.errors.push('nick:' + e.message); }\n\n      try {\n        var avEl = document.querySelector('img.user-image, [class*=\"user-image\"] img, [class*=\"avatar\"] img, img[class*=\"img-\"]');\n        if (avEl && avEl.getAttribute) {\n          var src = avEl.getAttribute('src') || '';\n          if (/^https?:\\/\\//.test(src)) r.avatar = src;\n        }\n      } catch (e) { debug.errors.push('avatar:' + e.message); }\n\n      // 快手号：尝试 cookie 解析\n      try {\n        var pairs = (document.cookie || '').split(';');\n        for (var ci = 0; ci < pairs.length; ci++) {\n          var kv = (pairs[ci] || '').trim();\n          var eq = kv.indexOf('=');\n          if (eq < 1) continue;\n          var cname = decodeURIComponent(kv.substring(0, eq)).trim().toLowerCase();\n          var cval = kv.substring(eq + 1);\n          try { cval = decodeURIComponent(cval); } catch (_) { }\n          if ((cname === 'user_id' || cname === 'kuaishou_id' || cname === 'kwai_id' || cname === 'uid' || cname === 'uid_key')\n              && cval && /^[A-Za-z0-9_\\-]+$/.test(cval.trim())) {\n            r.platformAccountId = cval.trim();\n            debug.cookieUserId = cname;\n            break;\n          }\n        }\n      } catch (e) { debug.errors.push('cookie:' + e.message); }\n\n      r._debug = debug;\n      return r;\n    })();`,
-  ).catch((e: Error) => {
-    console.warn('[kuaishou] extractPageInfo failed', e.message);
-    return {} as any;
-  });
+  const result: any = await win.webContents
+    .executeJavaScript(
+      `(function () {
+      var r = { nickname: '', avatar: '', platformAccountId: '', fansCount: null, followCount: null, likeCount: null };
+      var debug = { samples: [], hit: 0, errors: [], cookieUserId: null };
+
+      function parseCount(text) {
+        try {
+          var clean = (text || '').trim().replace(/[,\\s]/g, '');
+          var pm = clean.match(/^(\\d+(?:\\.\\d+)?)([万wWkK千])?$/);
+          if (!pm) return null;
+          var n = parseFloat(pm[1]);
+          if (pm[2]) {
+            if (/[万wW]/.test(pm[2])) n *= 10000;
+            else if (/[千kK]/.test(pm[2])) n *= 1000;
+          }
+          return Math.round(n);
+        } catch (e) { return null; }
+      }
+
+      // 处理单个元素：从文本中解析统计信息
+      function tryExtractItem(el) {
+        if (!el || !el.textContent) return;
+        var txt = el.textContent.trim();
+        if (!txt || txt.length > 40) return;
+        if (debug.samples.length < 10) debug.samples.push(txt.replace(/\\s+/g, ' '));
+        var lab = txt.match(/(粉丝|关注|获赞|点赞)/);
+        var num = txt.match(/(\\d+(?:\\.\\d+)?[万wWkK千]?)/);
+        if (!lab || !num) return;
+        var nv = parseCount(num[1]);
+        if (nv === null || nv < 0) return;
+        if (lab[1] === '粉丝' && r.fansCount === null) r.fansCount = nv;
+        else if (lab[1] === '关注' && r.followCount === null) r.followCount = nv;
+        else if ((lab[1] === '获赞' || lab[1] === '点赞') && r.likeCount === null) r.likeCount = nv;
+      }
+
+      // 第一步：在整个 document 中查询
+      try {
+        var directItems = document.querySelectorAll('[class*="user-cnt__item"], [class*="user_cnt__item"]');
+        for (var di = 0; di < directItems.length; di++) {
+          tryExtractItem(directItems[di]);
+        }
+        var containers = document.querySelectorAll('.header-info-card, [class*="user-cnt"], [class*="el-popover"], .user-info-popper, [class*="user-info-popper"]');
+        for (var ci = 0; ci < containers.length; ci++) {
+          var subs = containers[ci].querySelectorAll('div, span, li, a');
+          for (var si = 0; si < subs.length; si++) {
+            tryExtractItem(subs[si]);
+          }
+        }
+      } catch (e) { debug.errors.push(String(e)); }
+
+      // 第二步：提取昵称
+      try {
+        var nickSels = ${JSON.stringify(meta.nicknameSelectors)};
+        for (var ni = 0; ni < nickSels.length; ni++) {
+          var nEl = document.querySelector(nickSels[ni]);
+          if (nEl && nEl.textContent && nEl.textContent.trim()) {
+            r.nickname = nEl.textContent.trim().split(/\\s|\\n|\\r/)[0];
+            if (r.nickname.length > 0) break;
+          }
+        }
+      } catch (e) { debug.errors.push('nick:' + String(e)); }
+
+      // 第三步：头像
+      try {
+        var avaSels = ${JSON.stringify(meta.avatarSelectors)};
+        for (var ai = 0; ai < avaSels.length; ai++) {
+          var aEl = document.querySelector(avaSels[ai]);
+          if (aEl) {
+            var src = aEl.getAttribute && aEl.getAttribute('src');
+            if (!src && aEl.tagName && aEl.tagName.toLowerCase() !== 'img') {
+              var inner = aEl.querySelector && aEl.querySelector('img');
+              src = inner ? inner.getAttribute('src') : null;
+            }
+            if (src) { r.avatar = src; break; }
+          }
+        }
+      } catch (e) { debug.errors.push('ava:' + String(e)); }
+
+      // 第四步：从 cookie 解析 user_id / kuaiShouId
+      try {
+        var cookieStr = document.cookie || '';
+        var uidMatch = cookieStr.match(/(?:userId|user_id|kuaiShouId|ks_id)=([^;&\\s]+)/i);
+        if (uidMatch) {
+          debug.cookieUserId = uidMatch[1];
+          r.platformAccountId = uidMatch[1];
+        }
+      } catch (e) { debug.errors.push('cookie:' + String(e)); }
+
+      // 第五步：从 URL 提取 id（兜底）
+      try {
+        var urlText = location.href || '';
+        var urlMatch = urlText.match(/(?:userId|profileId|kuaiShouId)=([^&\\s]+)/i);
+        if (urlMatch && !r.platformAccountId) r.platformAccountId = urlMatch[1];
+      } catch (e) { /* ignore */ }
+
+      r._debug = debug;
+      return r;
+    })();`,
+    )
+    .catch((e: Error) => {
+      console.warn('[kuaishou] extractPageInfo failed', e.message);
+      return {} as any;
+    });
 
   return {
     nickname: result.nickname || '',
@@ -120,93 +254,88 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
   } as ExtractedAccountInfo & { _debug?: Record<string, unknown> };
 }
 
-/**
- * 发布视频 — contentType === 'video'
- */
-async function publishVideo(
-  accountId: string,
-  request: PublishRequest,
-  onProgress: ProgressCallback,
-): Promise<PublishItemProgress> {
-  return runStandardPublish(accountId, request, onProgress, {
-    platform: 'kuaishou',
-    meta: { publishUrl: meta.publishUrl, homeUrl: meta.homeUrl },
-    detectLoggedIn: (win) => detectLoggedIn(win),
-    publishKeywords: ['发布作品', '立即发布', '发布', '确认发布'],
-    enableConfirmStep: false,
-    enablePostClickVerify: true,
-    fillWaitMs: 1500,
-    contentLimits: { title: 80, content: 500 },
-    contentType: 'video',
-  });
+// ========================= 工具：文本截断 / 标签拼接 =========================
+
+const TITLE_MAX = 80;
+const CONTENT_MAX = 500;
+const TAG_MAX = 4;
+
+/** 截取字符串，按 UTF-16 code unit，末尾加 "..." */
+function truncate(text: string, max: number): string {
+  if (!text) return '';
+  if (text.length <= max) return text;
+  return text.slice(0, max - 1).trimEnd() + '…';
+}
+
+/** 格式化 tag 列表：加 "#" 前缀、去重、截断数量 */
+function buildTagsString(tags: string[] | undefined): string {
+  if (!tags || tags.length === 0) return '';
+  const cleaned = tags
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0)
+    .map((t) => (t.startsWith('#') ? t : `#${t}`));
+  const deduped = Array.from(new Set(cleaned));
+  const limited = deduped.slice(0, TAG_MAX);
+  return limited.join(' ');
 }
 
 /**
- * [快手专用] 图文 tab 切换 — 点击页面上的"上传图文"按钮。
- *
- * 快手视频发布页上有三个并列按钮："上传视频 | 上传图文 | 上传全景视频"。
- * 通用 switchContentTypeTab 脚本匹配不到，因为：
- *   - 按钮可能在 shadow DOM 或特定容器内
- *   - 文本"上传图文"可能被拆分成多个节点或包含特殊字符
- *
- * 策略（多层 fallback）：
- *   1. 精确匹配文本为"上传图文"的 <button> / <a> / div
- *   2. 包含"图文"关键词的可点击元素（排除"视频"）
- *   3. 通过 CSS 类名匹配（tab / switch / upload 等前缀）
- *   4. fallback：尝试直接导航到图文 URL
+ * 组装要写入内容字段的文本：[标题] + [正文] + [标签]（按字数限制截断）。
+ * 对于图文模式，skipTitle=true，表示"标题并入内容"，内容里保留完整文本。
  */
-async function kuaishouTabSwitcher(
+function buildContentText(
+  title: string | undefined,
+  content: string | undefined,
+  tags: string[] | undefined,
+  skipTitle: boolean,
+): string {
+  const titleText = (title || '').trim();
+  const contentText = (content || '').trim();
+  const tagsText = buildTagsString(tags);
+
+  // 标题字段独占（视频模式）：标题单独填入 title 输入框，不受 content 限制
+  if (!skipTitle) {
+    // 内容字段由 content + tags 组成，总长度 <= CONTENT_MAX
+    const base = contentText;
+    if (!tagsText) return truncate(base, CONTENT_MAX);
+    const combined = base ? `${base}\n${tagsText}` : tagsText;
+    return truncate(combined, CONTENT_MAX);
+  }
+
+  // skipTitle=true：把 title + content + tags 全部合并进内容字段，总长 <= CONTENT_MAX
+  const parts: string[] = [];
+  if (titleText) parts.push(titleText);
+  if (contentText) parts.push(contentText);
+  const base = parts.join('\n');
+  if (!tagsText) return truncate(base, CONTENT_MAX);
+  const combined = base ? `${base}\n${tagsText}` : tagsText;
+  return truncate(combined, CONTENT_MAX);
+}
+
+// ========================= 快手平台专用脚本 =========================
+
+/**
+ * [快手专用] 切换到图文 tab。
+ *
+ * 页面默认在视频页，图文必须点击"上传图文"按钮或进入 tabType=2 URL。
+ * 策略：
+ *   1. 查找文本精确匹配"上传图文"或包含"图文"关键词的可点击元素
+ *   2. 若无法点击，直接 navigate 到 tabType=2 URL
+ */
+async function switchToImageTab(
   win: BrowserWindow,
-  contentType: ContentType,
   log: (level: 'info' | 'warn' | 'error', stage: string, message: string, data?: Record<string, unknown>) => void,
 ): Promise<boolean> {
-  // 视频类型：不需要切换
-  if (!contentType || contentType === 'video') return true;
-
-  log('info', 'tab', `[kuaishou] 执行平台专用图文 tab 切换…`);
+  log('info', 'tab', '尝试点击图文 tab 按钮…');
 
   const script = `
     (function () {
-      // 递归收集 root（主文档 + shadow DOM + iframe）
       var roots = [document];
-      function collectShadow(root) {
-        try {
-          if (!root || !root.querySelectorAll) return;
-          var all = root.querySelectorAll('*');
-          for (var i = 0; i < all.length; i++) {
-            try {
-              if (all[i].shadowRoot) {
-                roots.push(all[i].shadowRoot);
-                collectShadow(all[i].shadowRoot);
-              }
-            } catch (e) {}
-          }
-        } catch (e) {}
-      }
-      function collectIframes(root) {
-        try {
-          var ifs = root.querySelectorAll('iframe');
-          for (var i = 0; i < ifs.length; i++) {
-            try {
-              var idoc = ifs[i].contentDocument || (ifs[i].contentWindow && ifs[i].contentWindow.document);
-              if (idoc) {
-                roots.push(idoc);
-                collectShadow(idoc);
-              }
-            } catch (e) {}
-          }
-        } catch (e) {}
-      }
-      collectShadow(document);
-      collectIframes(document);
-
       var candidates = [];
       for (var ri = 0; ri < roots.length; ri++) {
         var root = roots[ri];
         if (!root || !root.querySelectorAll) continue;
-
-        // 1. 搜索 button / a / div / span 中的文本精确匹配
-        var tags = ['button', 'a', 'div', 'span', 'li', 'p'];
+        var tags = ['button', 'a', 'div', 'span', 'li'];
         for (var ti = 0; ti < tags.length; ti++) {
           var els = root.querySelectorAll(tags[ti]);
           for (var ei = 0; ei < els.length; ei++) {
@@ -214,80 +343,41 @@ async function kuaishouTabSwitcher(
             try {
               var txt = (el.innerText || el.textContent || '').trim();
               if (!txt || txt.length > 40) continue;
-
-              // 计分
               var score = 0;
-              var isExact = txt === '上传图文';
-              var hasTuwen = txt.indexOf('图文') !== -1;
-              var hasImage = txt.indexOf('图片') !== -1 || txt.indexOf('相册') !== -1;
-              var hasVideo = txt.indexOf('视频') !== -1;
-
-              if (isExact) score += 2000;
-              else if (hasTuwen && !hasVideo) score += 1000;
-              else if (hasImage && !hasVideo) score += 500;
+              if (txt === '上传图文') score += 2000;
+              else if (txt.indexOf('图文') !== -1 && txt.indexOf('视频') === -1) score += 1000;
+              else if (txt.indexOf('图片') !== -1 && txt.indexOf('视频') === -1) score += 500;
               if (score === 0) continue;
-
-              // tag 加分
               if (tags[ti] === 'button') score += 300;
               else if (tags[ti] === 'a') score += 200;
-
-              // 可点击性检测
-              var cls = el.getAttribute && el.getAttribute('class') || '';
-              if (el.onclick || /cursor-pointer|pointer|clickable|tab|upload/i.test(cls)) score += 100;
-
-              // 尺寸过滤
               try {
                 if ((el.offsetWidth || 0) < 20 || (el.offsetHeight || 0) < 15) continue;
                 if ((el.offsetWidth || 0) > 1200 || (el.offsetHeight || 0) > 300) continue;
               } catch (eSz) {}
-
+              var cls = el.getAttribute && el.getAttribute('class') || '';
               candidates.push({ el: el, score: score, text: txt.slice(0, 40), tag: tags[ti], cls: (cls || '').slice(0, 60) });
             } catch (e) {}
           }
         }
-
-        // 2. 搜索 [role="tab"] 或含 tab 类的元素
+        // 额外：[role="tab"] 或 tab 类名
         try {
           var roleTabs = root.querySelectorAll('[role="tab"], [class*="tab-"], [class*="Tab"]');
           for (var ri2 = 0; ri2 < roleTabs.length; ri2++) {
             var rt = roleTabs[ri2];
             try {
               var txt2 = (rt.innerText || rt.textContent || '').trim();
-              if (!txt2 || txt2.length > 40) continue;
-              var hasT = txt2.indexOf('图文') !== -1;
-              var hasV = txt2.indexOf('视频') !== -1;
-              if (hasT && !hasV) {
-                candidates.push({ el: rt, score: 800, text: txt2.slice(0, 40), tag: 'role-tab', cls: (rt.getAttribute && rt.getAttribute('class') || '').slice(0, 60) });
+              if (txt2 && txt2.indexOf('图文') !== -1 && txt2.indexOf('视频') === -1) {
+                candidates.push({ el: rt, score: 800, text: txt2.slice(0, 40), tag: 'role-tab', cls: '' });
               }
             } catch (e2) {}
           }
         } catch (e) {}
-
-        // 3. 搜索 <a> 链接，匹配 URL 中含 article / image
-        try {
-          var links = root.querySelectorAll('a');
-          for (var li = 0; li < links.length; li++) {
-            var lnk = links[li];
-            try {
-              var href = lnk.getAttribute && lnk.getAttribute('href') || '';
-              var ltxt = (lnk.innerText || lnk.textContent || '').trim();
-              if (/publish.*article|publish.*image|article.*publish/i.test(href) || (ltxt && ltxt.indexOf('图文') !== -1 && ltxt.indexOf('视频') === -1)) {
-                candidates.push({ el: lnk, score: 600, text: ltxt.slice(0, 40) || href.slice(0, 40), tag: 'link', cls: href.slice(0, 60) });
-              }
-            } catch (e3) {}
-          }
-        } catch (e) {}
       }
-
-      if (candidates.length === 0) {
-        return { clicked: false, reason: 'no-candidate', roots: roots.length };
-      }
-
+      if (candidates.length === 0) return { clicked: false, reason: 'no-candidate' };
       candidates.sort(function (a, b) { return b.score - a.score; });
       var top = candidates[0];
-      try {
-        top.el.click();
-      } catch (e) {
+      try { top.el.click(); }
+      catch (e) {
         try {
           var evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
           top.el.dispatchEvent(evt);
@@ -306,71 +396,515 @@ async function kuaishouTabSwitcher(
     const val: any = await win.webContents.executeJavaScript(script).catch(() => null);
     if (val && val.clicked) {
       log('info', 'tab', `✅ 已切换到图文（匹配="${val.text}" score=${val.score}）`);
-      // 导航到图文页面后需要等待加载完成
-      await new Promise((r) => setTimeout(r, 2000));
+      await sleep(2000);
       return true;
     }
-    log('warn', 'tab', `[kuaishou] 专用脚本未找到图文按钮（${JSON.stringify(val).slice(0, 200)}），尝试 URL fallback…`);
-
-    // fallback：直接把 URL 从 /video 改成 /article（如果当前 URL 是视频页面）
-    try {
-      const currentUrl = win.webContents.getURL();
-      if (/\/article\/publish\/video/i.test(currentUrl)) {
-        const imageUrl = currentUrl.replace(/\/article\/publish\/video.*/i, '/article/publish/article');
-        log('info', 'tab', `[kuaishou] URL fallback: ${imageUrl}`);
-        await win.loadURL(imageUrl);
-        await new Promise((r) => setTimeout(r, 2500));
-        return true;
-      }
-    } catch (eNav) {
-      log('warn', 'tab', `[kuaishou] URL fallback 失败: ${(eNav as Error).message}`);
-    }
-    return false;
+    log('warn', 'tab', `未找到图文按钮（${JSON.stringify(val).slice(0, 200)}），尝试 URL fallback…`);
   } catch (e) {
-    log('warn', 'tab', `[kuaishou] 图文切换异常: ${(e as Error).message}`);
+    log('warn', 'tab', `图文切换异常: ${(e as Error).message}`);
+  }
+
+  // URL fallback
+  try {
+    const imageUrl = 'https://cp.kuaishou.com/article/publish/video?tabType=2';
+    log('info', 'tab', `URL fallback: ${imageUrl}`);
+    await win.loadURL(imageUrl);
+    await sleep(2500);
+    return true;
+  } catch (eNav) {
+    log('warn', 'tab', `URL fallback 失败: ${(eNav as Error).message}`);
     return false;
   }
 }
 
 /**
- * 发布图文 — contentType === 'image'
+ * [快手专用] 向 contenteditable 元素写入文本。
+ * 策略：
+ *   1. 查找所有 contenteditable != 'false' 的元素
+ *   2. 根据关键字区分：placeholder 含"标题"/"title" 或 "话题和描述"/"描述"
+ *   3. 先用 focus + 清空，再用 document.execCommand('insertText') 写入（触发 React 事件）
  *
- * 快手视频和图文发布页在不同 URL（或通过按钮切换）。
- * 这里通过专用 tabSwitcher 确保进入图文发布模式。
+ * @param kind  'title' | 'content'
  */
+function buildFillContenteditableScript(kind: 'title' | 'content', text: string): string {
+  const json = JSON.stringify(text);
+  const isTitle = kind === 'title';
+  const placeholderKeyword = isTitle
+    ? // 标题：placeholder 含 "标题" 或 title 属性
+      `(placeholder && (placeholder.indexOf('标题') !== -1 || placeholder.toLowerCase().indexOf('title') !== -1))`
+    : // 正文/描述：placeholder 含 "话题和描述" 或 "描述"
+      `(placeholder && (placeholder.indexOf('话题和描述') !== -1 || placeholder.indexOf('添加合适的话题') !== -1 || placeholder.indexOf('描述') !== -1 || placeholder.indexOf('说点什么') !== -1))`;
+
+  // 标题元素可能没有 placeholder，而是纯 contenteditable。需要给两种模式一个可靠的 fallback。
+  // - 视频发布页：通常有两个 contenteditable，一个是"标题"（较短的那一个），另一个是描述
+  // - 图文发布页：只有一个 contenteditable（描述），skipTitle=true
+  // 策略：先匹配 placeholder；若无匹配，按元素出现顺序：第一个 = title，第二个 = content
+  const fallbackClause = isTitle
+    ? `(index === 0 && all.length > 1)` // 仅当存在多个 contenteditable 时，第一个当作 title
+    : `(index === all.length - 1 || (index === 0 && all.length === 1))`; // content 为最后一个 或 唯一的一个
+
+  return `
+    (function () {
+      var text = ${json};
+      var all = [];
+      try {
+        var nodes = document.querySelectorAll('[contenteditable]');
+        for (var i = 0; i < nodes.length; i++) {
+          var n = nodes[i];
+          var ce = n.getAttribute && n.getAttribute('contenteditable');
+          if (ce === 'false' || ce === null) continue;
+          all.push(n);
+        }
+      } catch (e) { return { ok: false, msg: 'query-failed: ' + String(e) }; }
+      if (all.length === 0) return { ok: false, msg: 'no-contenteditable-found' };
+
+      // 优先用 placeholder 关键字匹配
+      var target = null;
+      var matchedIdx = -1;
+      for (var j = 0; j < all.length; j++) {
+        try {
+          var placeholder = all[j].getAttribute && all[j].getAttribute('placeholder') || '';
+          var titleAttr = all[j].getAttribute && all[j].getAttribute('title') || '';
+          if (${placeholderKeyword}) { target = all[j]; matchedIdx = j; break; }
+        } catch (e) {}
+      }
+      // fallback：按位置猜测
+      if (!target) {
+        for (var k = 0; k < all.length; k++) {
+          var index = k;
+          if (${fallbackClause}) { target = all[k]; matchedIdx = k; break; }
+        }
+      }
+      if (!target) {
+        return { ok: false, kind: '${kind}', msg: 'no-match', candidates: all.length };
+      }
+      try {
+        target.focus();
+        target.innerHTML = '';
+        if (text && text.length > 0) {
+          try {
+            // insertText 能正确触发 React/Vue 的 input 事件
+            var ok = document.execCommand('insertText', false, text);
+            if (!ok) {
+              // 降级：直接设置 textContent，再派发 input 事件
+              target.textContent = text;
+              try {
+                var ev = document.createEvent('Event');
+                ev.initEvent('input', true, true);
+                target.dispatchEvent(ev);
+              } catch (evErr) {}
+            }
+          } catch (ec) {
+            target.textContent = text;
+            try {
+              var ev2 = document.createEvent('Event');
+              ev2.initEvent('input', true, true);
+              target.dispatchEvent(ev2);
+            } catch (evErr2) {}
+          }
+        }
+        // 让页面有时间响应
+        target.blur();
+        return { ok: true, kind: '${kind}', index: matchedIdx, length: text.length };
+      } catch (e) {
+        return { ok: false, kind: '${kind}', msg: String(e) };
+      }
+    })();
+  `;
+}
+
+/** [快手专用] 构建"点击发布按钮"脚本。
+ *  按钮：div 带类名 _button-primary_ 或 _button_3a3lq_，文本含"发布"。
+ *  页面可能出现多个（例如：二次确认窗口），需要跳过 disabled 的按钮。
+ */
+function buildClickPublishButtonScript(): string {
+  return `
+    (function () {
+      var candidates = [];
+      try {
+        var tags = ['button', 'div', 'a', 'span'];
+        for (var ti = 0; ti < tags.length; ti++) {
+          var els = document.getElementsByTagName(tags[ti]);
+          for (var ei = 0; ei < els.length; ei++) {
+            var el = els[ei];
+            var txt = (el.innerText || el.textContent || '').trim();
+            if (!txt || txt.indexOf('发布') === -1) continue;
+            if (txt.indexOf('发布作品管理') !== -1) continue;
+            var cls = el.getAttribute && el.getAttribute('class') || '';
+            if (cls.indexOf('_button-primary_') === -1 && cls.indexOf('_button_3a3lq_') === -1) {
+              // 放宽：允许包含"button-primary"或文本精确为"发布"/"立即发布"
+              if (cls.indexOf('button-primary') === -1 && !(txt === '发布' || txt === '立即发布')) {
+                continue;
+              }
+            }
+            try {
+              if ((el.offsetWidth || 0) < 10 || (el.offsetHeight || 0) < 10) continue;
+            } catch (eSz) {}
+            // disabled 检测
+            try {
+              if (el.disabled) continue;
+              if (el.getAttribute && el.getAttribute('aria-disabled') === 'true') continue;
+              var st = window.getComputedStyle(el, null);
+              if (st && (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity || '1') < 0.4)) continue;
+            } catch (eSt) {}
+            var score = 0;
+            if (cls.indexOf('_button-primary_') !== -1 || cls.indexOf('_button_3a3lq_') !== -1) score += 2000;
+            if (txt === '发布') score += 800;
+            if (txt === '立即发布') score += 600;
+            if (txt.indexOf('作品') !== -1) score -= 300;
+            candidates.push({ el: el, score: score, text: txt.slice(0, 40), cls: (cls || '').slice(0, 80) });
+          }
+        }
+      } catch (e) {
+        return { clicked: false, msg: 'query-exception: ' + String(e) };
+      }
+      if (candidates.length === 0) return { clicked: false, msg: 'no-button' };
+      candidates.sort(function (a, b) { return b.score - a.score; });
+      var top = candidates[0];
+      try { top.el.click(); }
+      catch (e) {
+        try {
+          var evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+          top.el.dispatchEvent(evt);
+        } catch (e2) {
+          return { clicked: false, msg: 'click-failed', text: top.text };
+        }
+      }
+      var top3 = candidates.slice(0, 3).map(function (c) { return { text: c.text, score: c.score, cls: c.cls }; });
+      return { clicked: true, text: top.text, score: top.score, candidates: top3 };
+    })();
+  `;
+}
+
+// ========================= 核心发布流程 =========================
+
+async function runKuaishouPublish(
+  accountId: string,
+  request: PublishRequest,
+  onProgress: ProgressCallback,
+  contentType: ContentType,
+): Promise<PublishItemProgress> {
+  const startedAt = Date.now();
+  const log = makePublishLogger({ accountId, platform: 'kuaishou' });
+  const isImage = contentType === 'image' || contentType === 'article';
+  const skipTitle = isImage; // 图文没有独立标题字段
+
+  const publishUrl = isImage
+    ? 'https://cp.kuaishou.com/article/publish/video?tabType=2'
+    : 'https://cp.kuaishou.com/article/publish/video';
+
+  const title = `快手${isImage ? '图文' : '视频'}发布 - ${accountId}`;
+  let win: BrowserWindow | null = null;
+  let tracker: ReturnType<typeof attachNavigationTracker> | null = null;
+
+  try {
+    // ---- 步骤 1：创建窗口 + 导航跟踪 ----
+    log('info', 'init', `初始化发布窗口 (url=${publishUrl})`);
+    onProgress(2, '初始化窗口…');
+    win = makePublishWindow(accountId, title);
+    tracker = attachNavigationTracker(win, log);
+
+    // ---- 步骤 2：加载发布 URL ----
+    onProgress(5, '加载发布页面…');
+    log('info', 'load', `加载 URL: ${publishUrl}`);
+    await win.loadURL(publishUrl);
+
+    // ---- 步骤 3：等待页面稳定 ----
+    onProgress(10, '等待页面稳定…');
+    await tracker.waitForStable(1500, 15000);
+    await sleep(1500);
+
+    // ---- 步骤 4：检测登录状态 ----
+    onProgress(15, '检测登录状态…');
+    const loginInfo = await detectLoggedIn(win);
+    if (!loginInfo.loggedIn) {
+      log('warn', 'login', `未检测到登录状态，url=${loginInfo.url}`);
+      // 让用户手动登录；给 60 秒窗口，之后再检查一次
+      win.show();
+      onProgress(15, '请在窗口中登录快手账号…');
+      log('info', 'login', '显示窗口等待用户登录（最多 120 秒）…');
+      const loginDeadline = Date.now() + 120_000;
+      let loggedIn = false;
+      while (Date.now() < loginDeadline) {
+        await sleep(3000);
+        if (win.isDestroyed()) break;
+        const recheck = await detectLoggedIn(win).catch(() => null as any);
+        if (recheck && recheck.loggedIn) {
+          loggedIn = true;
+          break;
+        }
+      }
+      if (!loggedIn) {
+        return makeFailedResult(accountId, 'kuaishou', '登录超时或未登录，请先在快手登录', startedAt);
+      }
+      log('info', 'login', '✅ 登录成功，继续发布流程');
+      // 登录后可能发生了重定向，重新导航到发布 URL 并等待稳定
+      await win.loadURL(publishUrl);
+      await tracker.waitForStable(1500, 15000);
+      await sleep(1500);
+    } else {
+      log('info', 'login', `✅ 已登录 (url=${loginInfo.url.slice(0, 80)})`);
+    }
+
+    // ---- 步骤 5：图文模式 tab 切换 ----
+    if (isImage) {
+      onProgress(18, '切换到图文发布页…');
+      const currentUrl = win.webContents.getURL();
+      // 若是默认视频 URL，尝试点击 tab 或重新进入图文 URL
+      if (!/tabType=2/i.test(currentUrl)) {
+        const switched = await switchToImageTab(win, log);
+        if (!switched) {
+          log('warn', 'tab', '图文 tab 切换失败，尝试直接 navigate 到图文 URL');
+          await win.loadURL('https://cp.kuaishou.com/article/publish/video?tabType=2');
+          await tracker.waitForStable(1500, 15000);
+          await sleep(1500);
+        }
+      }
+    }
+
+    // ---- 步骤 6：上传素材 ----
+    const mediaFiles = request.mediaFiles && request.mediaFiles.length > 0 ? request.mediaFiles : [];
+    if (mediaFiles.length === 0) {
+      return makeFailedResult(accountId, 'kuaishou', '未提供任何媒体文件（视频/图片）', startedAt);
+    }
+
+    onProgress(25, `开始上传 ${mediaFiles.length} 个${isImage ? '图片' : '视频'}…`);
+    const uploadOk = await uploadViaCDP(win, mediaFiles, log, contentType);
+    if (!uploadOk) {
+      return makeFailedResult(accountId, 'kuaishou', '素材上传失败（CDP 注入未返回成功）', startedAt);
+    }
+
+    // ---- 步骤 7：等待上传完成 ----
+    onProgress(40, '等待上传完成…');
+    const uploadResult = await waitForUploadComplete(win, log, onProgress, 300_000, tracker);
+    if (!uploadResult.ready) {
+      log('warn', 'upload', `上传完成检测失败: ${uploadResult.finalStatus}`);
+      // 软失败：继续往下走（有些平台不会在 DOM 给出明显"完成"信号）
+    }
+    onProgress(60, '上传完成，准备填写内容…');
+    await sleep(1500);
+
+    // ---- 步骤 8：填写标题 / 内容 / 标签 ----
+    const contentText = buildContentText(request.title, request.content, request.tags, skipTitle);
+    const titleText = skipTitle ? '' : truncate((request.title || '').trim(), TITLE_MAX);
+
+    log('info', 'fill', `准备写入：title="${titleText.slice(0, 40)}" (len=${titleText.length}), contentLen=${contentText.length}`);
+
+    if (titleText) {
+      const script = buildFillContenteditableScript('title', titleText);
+      const res: any = await evalJS(win, script, 'fill-title', log).catch(() => null);
+      if (!res || !res.ok) {
+        log('warn', 'fill', `标题写入失败: ${JSON.stringify(res).slice(0, 200)}`);
+      } else {
+        log('info', 'fill', `✅ 标题已写入 (index=${res.index})`);
+      }
+      await sleep(800);
+    }
+
+    if (contentText) {
+      const script = buildFillContenteditableScript('content', contentText);
+      const res: any = await evalJS(win, script, 'fill-content', log).catch(() => null);
+      if (!res || !res.ok) {
+        log('warn', 'fill', `内容写入失败: ${JSON.stringify(res).slice(0, 200)}`);
+      } else {
+        log('info', 'fill', `✅ 内容已写入 (index=${res.index})`);
+      }
+      await sleep(1500);
+    }
+
+    // ---- 步骤 9：点击发布按钮 ----
+    onProgress(75, '点击发布按钮…');
+    const clickScript = buildClickPublishButtonScript();
+    const clickRes: any = await evalJS(win, clickScript, 'click-publish', log).catch(() => null);
+    if (!clickRes || !clickRes.clicked) {
+      log('warn', 'publish', `发布按钮点击失败: ${JSON.stringify(clickRes).slice(0, 200)}`);
+      // 兜底：用页面结构探测，便于排错
+      const probe: any = await evalJS(win, buildPageStructureProbe(), 'probe', log).catch(() => null);
+      log('warn', 'publish', `页面结构探测: ${JSON.stringify(probe).slice(0, 400)}`);
+      return makeFailedResult(accountId, 'kuaishou', '未找到可点击的"发布"按钮', startedAt);
+    }
+    log('info', 'publish', `✅ 发布按钮已点击 (text="${clickRes.text}" score=${clickRes.score})`);
+    onProgress(85, '发布中，等待结果页…');
+
+    // ---- 步骤 10：等待"发布成功"（更灵敏的检测逻辑）----
+    // 策略：轮询 180 秒，检测以下成功信号：
+    //   a) URL 变化：从 /publish/ 跳转到 /manage/ 或 /list/ 或 作品管理 页
+    //   b) 页面文本含："发布成功"、"已发布"、"发布完成"、"发表成功"、"已提交"、"作品创建成功"、"作品已发布"、"创建成功"
+    //   c) 发布按钮状态变化：按钮变成 disabled 或 文本变成"发布中"/"已发布"
+    //   d) 检测确认弹窗：点击发布后可能需要二次确认
+    // 失败信号：页面文本含"失败"/"违规"/"不符合"/"无法发布"
+    const initialUrl = win.webContents.getURL();
+    const successDeadline = Date.now() + 180_000;
+    let lastUrl = initialUrl;
+    let lastText = '';
+    let lastButtonState: any = null;
+    let confirmationClicked = false;
+    log('info', 'done', `开始轮询发布结果（初始 URL=${initialUrl.slice(0, 80)}，最长 180 秒）`);
+
+    while (Date.now() < successDeadline) {
+      if (win.isDestroyed()) break;
+      try {
+        const check: any = await win.webContents
+          .executeJavaScript(`
+            (function () {
+              var result = {
+                url: location.href,
+                title: document.title,
+                body: (document.body ? (document.body.innerText || '') : '').slice(0, 600),
+                urlChanged: false,
+                buttonDisabled: false,
+                buttonText: '',
+                hasConfirmation: false,
+              };
+              result.urlChanged = (location.href !== '${initialUrl.replace(/'/g, "\\'").replace(/\n/g, '')}');
+              // 检测发布按钮状态
+              try {
+                var allTags = ['button', 'div', 'a'];
+                for (var ti = 0; ti < allTags.length; ti++) {
+                  var els = document.getElementsByTagName(allTags[ti]);
+                  for (var ei = 0; ei < els.length; ei++) {
+                    var el = els[ei];
+                    var txt = (el.innerText || el.textContent || '').trim();
+                    if (!txt || txt.indexOf('发布') === -1) continue;
+                    var cls = (el.getAttribute && el.getAttribute('class')) || '';
+                    if (cls.indexOf('_button-primary_') === -1 && cls.indexOf('_button_3a3lq_') === -1) continue;
+                    result.buttonText = txt.slice(0, 40);
+                    result.buttonDisabled = !!(el.disabled || (el.getAttribute && el.getAttribute('aria-disabled') === 'true'));
+                    try {
+                      var st = window.getComputedStyle(el, null);
+                      if (st && (parseFloat(st.opacity || '1') < 0.5 || st.visibility === 'hidden')) result.buttonDisabled = true;
+                    } catch (eSt) {}
+                    break;
+                  }
+                  if (result.buttonText) break;
+                }
+              } catch (eBtn) {}
+              // 检测确认弹窗
+              try {
+                var confirmTexts = ['确认发布', '确认', '确定发布', '立即发布', '发布作品'];
+                for (var ci = 0; ci < confirmTexts.length; ci++) {
+                  var confirmElements = document.querySelectorAll('button, div, a, span');
+                  for (var cj = 0; cj < confirmElements.length; cj++) {
+                    var cel = confirmElements[cj];
+                    var ctxt = (cel.innerText || cel.textContent || '').trim();
+                    if (ctxt === confirmTexts[ci] || ctxt.indexOf(confirmTexts[ci]) !== -1) {
+                      var ccls = (cel.getAttribute && cel.getAttribute('class')) || '';
+                      try {
+                        var cst = window.getComputedStyle(cel, null);
+                        if (!cst || cst.display === 'none' || cst.visibility === 'hidden') continue;
+                        if ((cel.offsetWidth || 0) < 10 || (cel.offsetHeight || 0) < 10) continue;
+                      } catch (eSz) {}
+                      if (ccls.indexOf('_button-primary_') !== -1 || ccls.indexOf('_button_3a3lq_') !== -1) {
+                        result.hasConfirmation = true;
+                        cel.click();
+                        break;
+                      }
+                    }
+                  }
+                  if (result.hasConfirmation) break;
+                }
+              } catch (eConfirm) {}
+              return result;
+            })();
+          `)
+          .catch(() => null);
+
+        if (check) {
+          lastUrl = check.url || '';
+          lastText = (check.body || '') + ' | ' + (check.title || '');
+          lastButtonState = { buttonText: check.buttonText, buttonDisabled: check.buttonDisabled };
+
+          // 信号 a：URL 变化（跳转到作品管理/列表）
+          const urlOk = /\/article\/manage|\/manage\b|works\/list|\/content|\/overview|作品管理|内容管理|我的作品/i.test(lastUrl);
+          const urlChanged = check.urlChanged && !/publish/.test(lastUrl);
+
+          // 信号 b：页面文本成功信号
+          const textOk = /发布成功|已发布|发布完成|发表成功|已提交|作品创建成功|作品已发布|创建成功|作品发表成功|发布已完成/i.test(lastText);
+
+          // 信号 c：按钮状态变化（disabled 或 文本变成发布中/已发布）
+          const buttonOk = check.buttonDisabled || /发布中|正在发布|已发布|发布成功/i.test(check.buttonText || '');
+
+          // 信号 d：确认弹窗
+          if (check.hasConfirmation && !confirmationClicked) {
+            confirmationClicked = true;
+            log('info', 'done', `检测到确认弹窗，已自动点击确认`);
+          }
+
+          // 失败信号
+          const textFail = /发布失败|不符合要求|违规|发布失败|无法发布|出错|参数不合法|失败/i.test(lastText);
+
+          if (urlOk || textOk || buttonOk || urlChanged) {
+            const reason = [urlOk && 'url-ok', textOk && 'text-success', buttonOk && 'button-disabled', urlChanged && 'url-changed'].filter(Boolean).join(',');
+            log('info', 'done', `✅ 发布成功 (reason=${reason}, url=${lastUrl.slice(0, 120)})`);
+            onProgress(100, '发布成功');
+            return {
+              accountId,
+              platform: 'kuaishou',
+              status: 'success',
+              progress: 100,
+              message: `发布成功`,
+              url: lastUrl,
+              startedAt,
+              finishedAt: Date.now(),
+            } as PublishItemProgress;
+          }
+          if (textFail) {
+            log('warn', 'done', `页面提示发布失败: ${lastText.slice(0, 200)}`);
+            return makeFailedResult(accountId, 'kuaishou', `页面提示失败`, startedAt);
+          }
+        }
+      } catch { /* ignore transient errors */ }
+      await sleep(3000);
+    }
+
+    log('warn', 'done', `等待发布成功超时（180 秒），最后 url=${lastUrl.slice(0, 120)}, button=${JSON.stringify(lastButtonState)}`);
+    return makeFailedResult(accountId, 'kuaishou', `等待发布结果超时`, startedAt);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log('error', 'exception', `发布流程异常: ${msg}`);
+    return makeFailedResult(accountId, 'kuaishou', msg, startedAt);
+  } finally {
+    if (tracker) {
+      try { tracker.dispose(); } catch { /* ignore */ }
+    }
+    if (win && !win.isDestroyed()) {
+      // 短暂停留让用户看到结果页，之后关闭
+      setTimeout(() => {
+        try { if (win && !win.isDestroyed()) win.destroy(); } catch { /* ignore */ }
+      }, 2000);
+    }
+  }
+}
+
+// ========================= 对外接口 =========================
+
+async function publishVideo(
+  accountId: string,
+  request: PublishRequest,
+  onProgress: ProgressCallback,
+): Promise<PublishItemProgress> {
+  return runKuaishouPublish(accountId, request, onProgress, 'video');
+}
+
 async function publishImage(
   accountId: string,
   request: PublishRequest,
   onProgress: ProgressCallback,
 ): Promise<PublishItemProgress> {
-  return runStandardPublish(accountId, request, onProgress, {
-    platform: 'kuaishou',
-    meta: { publishUrl: meta.publishUrl, homeUrl: meta.homeUrl },
-    detectLoggedIn: (win) => detectLoggedIn(win),
-    publishKeywords: ['发布作品', '发布', '立即发布', '确认发布'],
-    enableConfirmStep: false,
-    enablePostClickVerify: true,
-    fillWaitMs: 1500,
-    contentLimits: { title: 80, content: 500 },
-    contentType: 'image',
-    // 🔑 快手专用：图文发布必须切换到图文页面（tab 切换 + URL fallback 双重保险）
-    tabSwitcher: kuaishouTabSwitcher,
-  });
+  return runKuaishouPublish(accountId, request, onProgress, 'image');
 }
 
-/**
- * 兼容接口（不区分内容类型，默认视频
- * @deprecated 请使用 publishVideo 或 publishImage
- */
+/** 兼容接口：根据提供的文件类型自动选择视频或图文发布 */
 async function publish(
   accountId: string,
   request: PublishRequest,
   onProgress: ProgressCallback,
 ): Promise<PublishItemProgress> {
-  const hasImageOnly = (request.mediaFiles || []).every((f) =>
-    /\.(jpg|jpeg|png|gif|webp|bmp|svg)$/i.test(f),
-  );
-  if (hasImageOnly || request.contentType === 'image') {
+  const files = request.mediaFiles || [];
+  const hasImageOnly =
+    files.length > 0 &&
+    files.every((f) => /\.(jpg|jpeg|png|gif|webp|bmp|svg)$/i.test(f));
+  if (request.contentType === 'image' || hasImageOnly) {
     return publishImage(accountId, request, onProgress);
   }
   return publishVideo(accountId, request, onProgress);

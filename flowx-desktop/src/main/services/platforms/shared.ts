@@ -168,7 +168,7 @@ export function makePublishWindow(accountId: string, title: string): BrowserWind
     minHeight: 600,
     title,
     autoHideMenuBar: true,
-    show: false,
+    show: true,
     webPreferences: {
       partition: `persist:account_${accountId}`,
       contextIsolation: true,
@@ -443,7 +443,9 @@ export async function uploadViaCDP(
       await win.webContents.debugger.attach('1.3');
     } catch { /* 可能已 attached */ }
 
-    // 统一工具：用指定 nodeId / objectId 注入文件
+    // 统一工具：用指定 nodeId / objectId 注入文件，并触发 change/input 事件
+    // 关键修复：DOM.setFileInputFiles 只设置 files 属性，不触发 change 事件
+    // 现代框架（React/Vue）监听 change/input 事件才能检测到文件选择
     const tryInjectFiles = async (nodeId: number | undefined, objectId: string | undefined, source: string): Promise<boolean> => {
       try {
         const params: Record<string, unknown> = { files: files };
@@ -458,6 +460,60 @@ export async function uploadViaCDP(
         }
         await win.webContents.debugger.sendCommand('DOM.setFileInputFiles', params);
         log('info', 'upload', `✅ [${source}] DOM.setFileInputFiles 返回成功`);
+
+        // 🔑 触发 change 和 input 事件（让页面 JS/框架检测到文件变化）
+        try {
+          log('info', 'upload', `[${source}] 触发 change/input 事件…`);
+          const evtScript = `
+            (function () {
+              try {
+                var inputs = document.querySelectorAll('input[type="file"]');
+                // 同时递归遍历 shadow roots
+                function getShadowInputs(root) {
+                  if (!root) return [];
+                  var results = [];
+                  try {
+                    var localInputs = root.querySelectorAll && root.querySelectorAll('input[type="file"]');
+                    if (localInputs) for (var i = 0; i < localInputs.length; i++) results.push(localInputs[i]);
+                    var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+                    for (var j = 0; j < all.length; j++) {
+                      try {
+                        if (all[j].shadowRoot) {
+                          var srInputs = getShadowInputs(all[j].shadowRoot);
+                          for (var k = 0; k < srInputs.length; k++) results.push(srInputs[k]);
+                        }
+                      } catch (e) {}
+                    }
+                  } catch (e) {}
+                  return results;
+                }
+                var allFileInputs = [];
+                for (var i2 = 0; i2 < inputs.length; i2++) allFileInputs.push(inputs[i2]);
+                var shadowInputs = getShadowInputs(document.documentElement);
+                for (var j2 = 0; j2 < shadowInputs.length; j2++) allFileInputs.push(shadowInputs[j2]);
+                // 对所有有文件的 input 触发事件
+                var triggered = 0;
+                for (var m = 0; m < allFileInputs.length; m++) {
+                  var fi = allFileInputs[m];
+                  if (fi.files && fi.files.length > 0) {
+                    try { fi.dispatchEvent(new Event('change', { bubbles: true })); } catch (e1) {}
+                    try { fi.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
+                    triggered++;
+                  }
+                }
+                return { triggered: triggered, total: allFileInputs.length };
+              } catch (e) { return { error: String(e) }; }
+            })();
+          `;
+          const evtRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+            expression: evtScript, returnByValue: true,
+          }).catch(() => null);
+          const evtVal = evtRes && evtRes.result && evtRes.result.value ? evtRes.result.value : null;
+          log('info', 'upload', `[${source}] 事件触发结果: ${evtVal ? JSON.stringify(evtVal).slice(0, 150) : 'unknown'}`);
+        } catch (evtErr) {
+          log('warn', 'upload', `[${source}] 事件触发异常: ${(evtErr as Error).message}`);
+        }
+
         await sleep(1500);
         return true;
       } catch (e) {
@@ -477,6 +533,19 @@ export async function uploadViaCDP(
         (function () {
           var isImageMode = ${isImage ? 'true' : 'false'};
           var candidates = [];
+          // 判断元素是否在 aria-hidden=true 的区域内（如 ant-tabs-tabpane 非活动 tab）
+          function isHiddenByAria(el) {
+            try {
+              var cur = el;
+              while (cur && cur !== document.body) {
+                if (cur.getAttribute && cur.getAttribute('aria-hidden') === 'true') return true;
+                var st = window.getComputedStyle(cur, null);
+                if (st && (st.display === 'none' || st.visibility === 'hidden')) return true;
+                cur = cur.parentNode;
+              }
+              return false;
+            } catch (e) { return false; }
+          }
           // 判断是否真的可交互
           function isInteractive(el) {
             try {
@@ -496,7 +565,7 @@ export async function uploadViaCDP(
             var classBtns = document.querySelectorAll('[class*="_upload-btn"], [class*="upload-btn"]');
             for (var ci = 0; ci < classBtns.length; ci++) {
               var cb = classBtns[ci];
-              if (cb && cb.offsetWidth >= 20 && cb.offsetHeight >= 20) {
+              if (cb && cb.offsetWidth >= 20 && cb.offsetHeight >= 20 && !isHiddenByAria(cb)) {
                 var cbtxt = (cb.innerText || cb.textContent || '').trim();
                 // 图文模式下，如果文本含"视频"关键词，降分；如果含"图文/图片"关键词，大幅加分
                 var sc = 1000;
@@ -539,7 +608,7 @@ export async function uploadViaCDP(
                 else if (txt.indexOf('视频') !== -1 && txt.indexOf('图文') === -1) score += 450;
                 else if (txt === '上传') score += 300;
               }
-              if (score > 0 && buttons[ti].offsetWidth >= 20 && buttons[ti].offsetHeight >= 20) {
+              if (score > 0 && buttons[ti].offsetWidth >= 20 && buttons[ti].offsetHeight >= 20 && !isHiddenByAria(buttons[ti])) {
                 // 原生可点击元素额外加分
                 if (isNativeClickable) score += 200;
                 candidates.push({ el: buttons[ti], score: score, reason: 'text-match', text: txt });
@@ -583,21 +652,44 @@ export async function uploadViaCDP(
         walk(docResult.root);
         log('info', 'upload', `[B1] 遍历 ${allNodes.length} 个节点，查找 type=file 的 input…`);
 
-        let foundFileNodes = 0;
+        // 🔑 按 contentType 智能匹配正确的 file input（避免图文上传到视频tabpan2而非视频tab1）
+        const isImageMode2 = contentType === 'image' || contentType === 'article';
+        const scoredNodes: Array<{ nodeId: number; accept: string; score: number }> = [];
         for (const n of allNodes) {
           if (!n || !n.attributes) continue;
           const nn = (n.nodeName || '').toLowerCase();
           if (nn !== 'input') continue;
-          for (let i = 0; i < n.attributes.length; i += 2) {
-            if (n.attributes[i] === 'type' && n.attributes[i + 1] === 'file') {
-              foundFileNodes++;
-              if (await tryInjectFiles(n.nodeId, undefined, `B1-node${n.nodeId}`)) return true;
-              break;
-            }
+          let hasFile = false;
+          let acc = '';
+          for (let i2 = 0; i2 < n.attributes.length; i2 += 2) {
+            const attrName = n.attributes[i2];
+            const attrVal = n.attributes[i2 + 1];
+            if (attrName === 'type' && attrVal === 'file') hasFile = true;
+            else if (attrName === 'accept') acc = attrVal || '';
           }
+          if (!hasFile) continue;
+          let score = 100;
+          if (isImageMode2) {
+            // 图文 mode：优先 accept 含 image/png / image/jpg 等
+            if (/image\/(png|jpeg|jpg|webp)/i.test(acc)) score += 3000;
+            else if (/image\//i.test(acc)) score += 2000;
+            else if (/video\//i.test(acc)) score -= 2000; // 明确排除视频 input
+          } else {
+            // 视频 mode：优先 accept 含 video/*
+            if (/video\//i.test(acc)) score += 3000;
+            else if (/image\//i.test(acc)) score -= 2000;
+          }
+          scoredNodes.push({ nodeId: n.nodeId, accept: acc, score });
         }
-        if (foundFileNodes > 0) {
-          log('warn', 'upload', `[B1] 找到 ${foundFileNodes} 个 file input，但均注入失败`);
+        if (scoredNodes.length > 0) {
+          scoredNodes.sort((a, b) => b.score - a.score);
+          const topInfo = scoredNodes.slice(0,5).map(function(s){return 'node'+s.nodeId+':'+(s.accept||'').slice(0,30)+':'+s.score;}).join(', ');
+          log('info', 'upload', '[B1] 找到 ' + scoredNodes.length + ' 个 file input，按优先级排序: ' + topInfo);
+          for (const sn of scoredNodes) {
+            if (sn.score < 0) continue;
+            if (await tryInjectFiles(sn.nodeId, undefined, 'B1-node' + sn.nodeId)) return true;
+          }
+          log('warn', 'upload', `[B1] 所有 file input 均注入失败`);
         } else {
           log('warn', 'upload', `[B1] 未找到 file input 节点`);
         }
@@ -606,19 +698,24 @@ export async function uploadViaCDP(
       log('warn', 'upload', `[B1] 异常: ${(err as Error).message}`);
     }
 
-    // 策略 2：DOM.querySelector 主文档根
+    // 策略 2：DOM.querySelector 主文档根（按 contentType 精准选择 accept 属性）
     try {
-      log('info', 'upload', `[B2] DOM.querySelector 搜索 file input…`);
+      const isImage3 = contentType === 'image' || contentType === 'article';
+      const accSelector = isImage3
+        ? 'input[type="file"][accept*="image"]'
+        : 'input[type="file"][accept*="video"]';
+      log('info', 'upload', `[B2] DOM.querySelector 搜索 file input (${isImage3 ? 'image' : 'video'}模式)…`);
       const docResult2: any = await win.webContents.debugger.sendCommand('DOM.getDocument', { depth: 1, pierce: true }).catch(() => null);
       if (docResult2 && docResult2.root && docResult2.root.nodeId !== undefined) {
+        // 优先：精确匹配 accept
         const qsResult: any = await win.webContents.debugger.sendCommand('DOM.querySelector', {
           nodeId: docResult2.root.nodeId,
-          selector: 'input[type="file"]',
+          selector: accSelector,
         }).catch(() => null);
         if (qsResult && qsResult.nodeId !== undefined && qsResult.nodeId !== 0) {
-          if (await tryInjectFiles(qsResult.nodeId, undefined, 'B2-querySelector')) return true;
+          if (await tryInjectFiles(qsResult.nodeId, undefined, 'B2-querySelector-precise')) return true;
         }
-        // 再试 querySelectorAll
+        // 兜底：通用 input[type=file]
         const qsaResult: any = await win.webContents.debugger.sendCommand('DOM.querySelectorAll', {
           nodeId: docResult2.root.nodeId,
           selector: 'input[type="file"]',
@@ -634,11 +731,14 @@ export async function uploadViaCDP(
       log('warn', 'upload', `[B2] 异常: ${(err as Error).message}`);
     }
 
-    // 策略 3：Runtime.evaluate 返回元素 objectId
+    // 策略 3：Runtime.evaluate 返回元素 objectId（按 contentType 选择正确 file input）
     try {
-      log('info', 'upload', `[B3] Runtime.evaluate 获取 file input 的 objectId…`);
-      // 脚本：直接 return 元素（不包对象），否则返回 null
-      const script = `(function(){var el=document.querySelector('input[type=file]');if(!el){var all=document.querySelectorAll('iframe');for(var i=0;i<all.length;i++){try{var idoc=all[i].contentDocument||(all[i].contentWindow&&all[i].contentWindow.document);if(idoc){var iel=idoc.querySelector('input[type=file]');if(iel){el=iel;break;}}}catch(e){}}}return el||null;})();`;
+      const isImage4 = contentType === 'image' || contentType === 'article';
+      const selector4 = isImage4
+        ? 'input[type="file"][accept*="image"]'
+        : 'input[type="file"][accept*="video"]';
+      log('info', 'upload', `[B3] Runtime.evaluate 获取 file input (${isImage4 ? 'image' : 'video'}模式)…`);
+      const script = '(function(){var el=document.querySelector("' + selector4 + '");if(!el){el=document.querySelector("input[type=file]");}if(!el){var all=document.querySelectorAll("iframe");for(var i=0;i<all.length;i++){try{var idoc=all[i].contentDocument||(all[i].contentWindow&&all[i].contentWindow.document);if(idoc){var iel=idoc.querySelector("' + selector4 + '");if(iel){el=iel;break;}if(!el){iel=idoc.querySelector("input[type=file]");if(iel)el=iel;}}}catch(e){}}}return el||null;})();';
       const evalResult: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
         expression: script,
         returnByValue: false,
@@ -1229,8 +1329,8 @@ export async function waitForUploadComplete(
         } catch (e) {}
       }
 
-      // 3) 状态判断（v7：contenteditable / 标题输入框 是最高优先级 → 一旦出现就视为 ready；
-      //     uploadingMatch 只作为上传未完成的辅助判断，不再阻断 ready）
+      // 3) 状态判断（v8：uploadingMatch 具有最高阻断优先级；
+      //     只要页面明确显示"上传中/处理中"，即使有编辑元素也应等待上传完成）
       var hasEditField = (textareaList.length + ceList.length + textInputList.length) > 0;
       var hasContenteditable = ceList.length > 0;
       var hasThumb = thumbCount > 0;
@@ -1244,8 +1344,12 @@ export async function waitForUploadComplete(
       var processingMatch = /处理中|转码中|解析中|processing/i.test(bodyText);
 
       var readyStatus = 'waiting';
-      if (hasContenteditable) {
-        // 最高优先：出现 contenteditable（快手/小红书的标题/描述输入区）→ ready
+      if (uploadingMatch) {
+        // 🔑 最高优先级阻断：页面明确在上传中 → 必须等待，否则点击"发布"会报错
+        // （即使 contenteditable 已经出现也不能放行：上传中的素材无法发布）
+        readyStatus = 'uploading';
+      } else if (hasContenteditable) {
+        // 有 contenteditable（快手/小红书的标题/描述输入区）→ ready
         readyStatus = 'ready';
       } else if (bodyHasTitleRe.test(bodyText)) {
         // 正文含"标题/作品描述/描述"关键词 → 进入编辑页面
@@ -1255,9 +1359,6 @@ export async function waitForUploadComplete(
         readyStatus = 'ready';
       } else if (hasTextarea) {
         readyStatus = 'ready';
-      } else if (uploadingMatch) {
-        // 只有在"没有编辑元素且正文明确包含上传中信号"时才判定 uploading
-        readyStatus = 'uploading';
       } else if (hasEditField) {
         readyStatus = 'ready';
       }
@@ -1531,7 +1632,7 @@ export function buildFillTitle(title: string): string {
         var d = roots[di].doc;
         if (!d || !d.querySelectorAll) continue;
 
-        // 1) textarea
+        // 1) textarea（textarea 也可能是内容描述区，不应用话题过滤）
         try {
           var tareas = d.querySelectorAll('textarea');
           for (var i = 0; i < tareas.length; i++) {
@@ -1541,7 +1642,8 @@ export function buildFillTitle(title: string): string {
             var aria = (el.getAttribute('aria-label') || '').toLowerCase();
             var lbl = tryGetLabel(el, d);
             var combinedText = [ph, aria, lbl].join(' ');
-            if (/选择|类型|下拉|选项|search|搜索|话题|tag|标签|分类/i.test(combinedText)) continue;
+            // 🔑 修复：textarea 不应用话题关键词过滤（可能是内容描述区）
+            if (/选择|类型|下拉|选项|search|搜索|分类/i.test(combinedText)) continue;
             candidates.push({
               el: el, tag: 'textarea', score: scoreElement(el, 'textarea', combinedText, true),
               text: combinedText.slice(0, 80),
@@ -1562,6 +1664,7 @@ export function buildFillTitle(title: string): string {
             var aria2 = (el2.getAttribute('aria-label') || '').toLowerCase();
             var lbl2 = tryGetLabel(el2, d);
             var combined2 = [ph2, aria2, lbl2].join(' ');
+            // 🔑 input 元素保留话题过滤：独立的话题输入框通常是 <input>
             if (/选择|类型|下拉|选项|search|搜索|话题|tag|标签|分类/i.test(combined2)) continue;
             candidates.push({
               el: el2, tag: 'input', score: scoreElement(el2, 'input', combined2, true),
@@ -1573,15 +1676,24 @@ export function buildFillTitle(title: string): string {
 
         // 3) contenteditable（快手标题通常是这个 — 优先；shadow DOM 内也可命中）
         try {
-          var ces = d.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"]');
+          // 🔑 修复：同时检测带值和不带值的 contenteditable（与 buildFillContent 保持一致）
+          var ces = d.querySelectorAll('[contenteditable]');
+          var seenTitleCE = {};
           for (var k = 0; k < ces.length; k++) {
             var el3 = ces[k];
+            var ceVal = (el3.getAttribute && el3.getAttribute('contenteditable')) || '';
+            if (ceVal === 'false') continue;
             if ((el3.offsetWidth || 0) === 0 && (el3.offsetHeight || 0) === 0) continue;
+            var tKey = String(k) + '_' + el3.tagName;
+            if (seenTitleCE[tKey]) continue;
+            seenTitleCE[tKey] = 1;
             var aria3 = (el3.getAttribute('aria-label') || '').toLowerCase();
             var ph3 = (el3.getAttribute('placeholder') || '').toLowerCase();
             var lbl3 = tryGetLabel(el3, d);
             var combined3 = [aria3, ph3, lbl3].join(' ');
-            if (/选择|类型|下拉|选项|search|搜索|话题|tag|标签|分类/i.test(combined3)) continue;
+            // 🔑 修复：contenteditable 不应用话题关键词过滤！
+            //    正文编辑器的 placeholder 可能含"添加合适的话题和描述..."
+            if (combined3.length > 2 && /选择|类型|下拉|选项|search|搜索|分类/i.test(combined3)) continue;
             candidates.push({
               el: el3, tag: 'contenteditable', score: scoreElement(el3, 'contenteditable', combined3, true),
               text: combined3.slice(0, 80),
@@ -1783,6 +1895,7 @@ export function buildFillContent(content: string): string {
       }
 
       // 遍历所有 root 收集可编辑元素
+      var debugCE = 0, debugTA = 0, debugInput = 0;
       for (var di = 0; di < roots.length; di++) {
         var d = roots[di].doc;
         if (!d || !d.querySelectorAll) continue;
@@ -1793,13 +1906,26 @@ export function buildFillContent(content: string): string {
           for (var i = 0; i < tareas.length; i++) {
             if ((tareas[i].offsetWidth || 0) === 0 && (tareas[i].offsetHeight || 0) === 0) continue;
             allEls.push({ el: tareas[i], tag: 'textarea' });
+            debugTA++;
           }
         } catch (e) {}
         try {
-          var ces = d.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"]');
-          for (var k = 0; k < ces.length; k++) {
-            if ((ces[k].offsetWidth || 0) === 0 && (ces[k].offsetHeight || 0) === 0) continue;
-            allEls.push({ el: ces[k], tag: 'contenteditable' });
+          // 🔑 修复：同时检测带值和不带值的 contenteditable（快手等平台可能用 <div contenteditable> 而不是 contenteditable="true"）
+          var cesRaw = d.querySelectorAll('[contenteditable]');
+          var seenCE = {};
+          for (var ck = 0; ck < cesRaw.length; ck++) {
+            try {
+              var cEl = cesRaw[ck];
+              var cVal = (cEl.getAttribute && cEl.getAttribute('contenteditable')) || '';
+              // 只接受可编辑的 true/""/plaintext-only，排除 "false"
+              if (cVal === 'false') continue;
+              if ((cEl.offsetWidth || 0) === 0 && (cEl.offsetHeight || 0) === 0) continue;
+              var cKey = String(ck) + '_' + cEl.tagName;
+              if (seenCE[cKey]) continue;
+              seenCE[cKey] = 1;
+              allEls.push({ el: cEl, tag: 'contenteditable' });
+              debugCE++;
+            } catch (eCE) {}
           }
         } catch (e) {}
         try {
@@ -1809,6 +1935,7 @@ export function buildFillContent(content: string): string {
             if (itype === 'file' || itype === 'hidden' || itype === 'checkbox' || itype === 'radio' || itype === 'search' || itype === 'submit' || itype === 'button') continue;
             if ((allInps[j].offsetWidth || 0) === 0 && (allInps[j].offsetHeight || 0) === 0) continue;
             allEls.push({ el: allInps[j], tag: 'input' });
+            debugInput++;
           }
         } catch (e) {}
 
@@ -1820,11 +1947,18 @@ export function buildFillContent(content: string): string {
           var aria = (elx.getAttribute('aria-label') || '').toLowerCase();
           var lbl = tryGetLabel(elx, d);
           var combined = [ph, aria, lbl].join(' ');
-          // 跳过：标题相关元素
-          if (/标题|作品标题|作品名称|视频标题|title|标题栏|标题内容|填写标题|添加标题|作品名|会有更多赞/i.test(combined)) continue;
-          // 跳过：选择类/下拉/分类/话题/搜索/地点
-          if (/选择|类型|下拉|选项|search|搜索|话题|\\btag\\b|标签|分类|地点|位置|\\bwhere\\b/i.test(combined)) continue;
-          if (val.length > 0 && /话题|tags|tag|#/i.test(combined)) continue;
+          var tagName = allEls[m].tag; // contenteditable / textarea / input
+          var isCE = tagName === 'contenteditable';
+          var isTA = tagName === 'textarea';
+          // 跳过：标题相关元素（只在 combined 非空时才应用过滤，避免空元素被误杀）
+          // 🔑 关键修复：contenteditable / textarea 不应用标题关键词过滤
+          //    contenteditable 是正文编辑器（快手/小红书），即使 placeholder 含 "标题" 也应该填写内容
+          if (!isCE && !isTA && combined.length > 2 && /标题|作品标题|作品名称|视频标题|title|标题栏|标题内容|填写标题|添加标题|作品名|会有更多赞/i.test(combined)) continue;
+          // 跳过：选择类/下拉/分类/话题/搜索/地点（仅对 input 元素应用）
+          // 🔑 关键修复：contenteditable / textarea 不应用话题关键词过滤！
+          //    快手案例：placeholder="添加合适的话题和描述，作品能获得更多推荐～" 含"话题"两字被误杀
+          if (!isCE && !isTA && combined.length > 2 && /选择|类型|下拉|选项|search|搜索|话题|\\btag\\b|标签|分类|地点|位置|\\bwhere\\b/i.test(combined)) continue;
+          if (val.length > 0 && !isCE && !isTA && combined.length > 2 && /话题|tags|tag|#/i.test(combined)) continue;
 
           // 🔑 修正 ProseMirror 编辑器的 hasContent 判断：
           // ProseMirror 空状态结构为 <p class="is-empty"><br></p>，innerText 可能为空串或换行
@@ -1867,6 +2001,9 @@ export function buildFillContent(content: string): string {
         rootCount: roots.length,
         mainRoot: 0,
         shadowRoot: 0,
+        ceFound: debugCE,
+        textareaFound: debugTA,
+        inputFound: debugInput,
         totalCands: candidates.length,
         top5: [],
         target: null,
@@ -2457,8 +2594,20 @@ export interface StandardPublishConfig {
     title?: number;
     content?: number;
   };
+  /**
+   * 平台标签数量限制（按"个数"计算，每个 #标签 算 1 个）。
+   *  - 快手：最多 4 个标签（超出会被平台拒绝并提示"标签最多四个"）
+   *  - 小红书：最多 10 个话题
+   *  - 抖音：最多 5 个话题（保守值，具体以平台为准）
+   * 若提供，在拼接正文前会自动按此限制截断多余标签并输出警告日志。
+   */
+  tagLimits?: {
+    max?: number;
+  };
   /** 本次发布的内容类型：video / image / article */
   contentType?: ContentType;
+  /** 是否跳过标题填写：true = 不填写标题（快手图文发布页面没有独立标题字段） */
+  skipTitle?: boolean;
 
   // ============== 平台策略钩子（可选，未提供时用通用 fallback） ==============
   /**
@@ -2561,9 +2710,17 @@ export async function runStandardPublish(
     onProgress(75, '填写标题与正文…');
     // ===== 字数限制处理（开始） =====
     const limits = config.contentLimits;
+    const tagLimits = config.tagLimits;
     let finalTitle = request.title || '';
+    // ===== 标签数量限制（开始） =====
+    let effectiveTags = (request.tags || []).slice();
+    if (tagLimits && typeof tagLimits.max === 'number' && effectiveTags.length > tagLimits.max) {
+      log('warn', 'limits', `标签超出限制 (${effectiveTags.length} > ${tagLimits.max})，已截断（${config.platform} 对标签数量有严格限制）`);
+      effectiveTags = effectiveTags.slice(0, tagLimits.max);
+    }
+    // ===== 标签数量限制（结束） =====
     let finalContent = (request.content || '') +
-      (request.tags && request.tags.length ? '\n' + request.tags.map((t) => `#${t}`).join(' ') : '');
+      (effectiveTags.length ? '\n' + effectiveTags.map((t) => `#${t}`).join(' ') : '');
 
     if (limits && typeof limits.title === 'number' && finalTitle.length > limits.title) {
       log('warn', 'limits', `标题超出限制 (${finalTitle.length} > ${limits.title})，已截断`);
@@ -2575,9 +2732,12 @@ export async function runStandardPublish(
     }
     // ===== 字数限制处理（结束） =====
 
-    if (finalTitle) {
+    // 🔑 策略：按 skipTitle 配置决定是否填写标题
+    if (!config.skipTitle && finalTitle) {
       try { await evalJS(win, buildFillTitle(finalTitle), 'fill-title', log); }
       catch (e) { log('warn', 'fill', `标题填写异常: ${(e as Error).message}`); }
+    } else if (config.skipTitle) {
+      log('info', 'fill', `跳过标题填写（skipTitle=true）`);
     }
     if (finalContent.trim().length > 0) {
       try { await evalJS(win, buildFillContent(finalContent), 'fill-content', log); }
