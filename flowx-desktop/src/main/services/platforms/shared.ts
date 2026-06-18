@@ -699,6 +699,7 @@ export async function uploadViaCDP(
     }
 
     // 策略 2：DOM.querySelector 主文档根（按 contentType 精准选择 accept 属性）
+    // 🔑 关键修复：兜底 querySelectorAll 也按 contentType 过滤，避免图片注入到 video input
     try {
       const isImage3 = contentType === 'image' || contentType === 'article';
       const accSelector = isImage3
@@ -715,15 +716,37 @@ export async function uploadViaCDP(
         if (qsResult && qsResult.nodeId !== undefined && qsResult.nodeId !== 0) {
           if (await tryInjectFiles(qsResult.nodeId, undefined, 'B2-querySelector-precise')) return true;
         }
-        // 兜底：通用 input[type=file]
+        // 兜底：获取所有 input[type=file]，但要先按 accept 属性过滤
         const qsaResult: any = await win.webContents.debugger.sendCommand('DOM.querySelectorAll', {
           nodeId: docResult2.root.nodeId,
           selector: 'input[type="file"]',
         }).catch(() => null);
         if (qsaResult && qsaResult.nodeIds && qsaResult.nodeIds.length > 0) {
-          log('info', 'upload', `[B2] querySelectorAll 找到 ${qsaResult.nodeIds.length} 个 file input`);
+          log('info', 'upload', `[B2] querySelectorAll 找到 ${qsaResult.nodeIds.length} 个 file input，按 contentType 过滤…`);
+          // 获取每个 node 的 accept 属性，再决定是否注入
           for (const nid of qsaResult.nodeIds) {
-            if (await tryInjectFiles(nid, undefined, `B2-qsa-node${nid}`)) return true;
+            try {
+              const attrRes: any = await win.webContents.debugger.sendCommand('DOM.getAttributes', { nodeId: nid }).catch(() => null);
+              let acceptVal = '';
+              if (attrRes && attrRes.attributes) {
+                const attrs: string[] = attrRes.attributes;
+                for (let ai = 0; ai < attrs.length; ai += 2) {
+                  if (attrs[ai] === 'accept') { acceptVal = attrs[ai + 1] || ''; break; }
+                }
+              }
+              // 按 contentType 过滤：图文模式跳过 video accept，视频模式跳过 image accept
+              const isVideoAccept = /video\//i.test(acceptVal) || /\.mp4|\.mov|\.flv/i.test(acceptVal);
+              const isImageAccept = /image\//i.test(acceptVal) || /\.jpg|\.jpeg|\.png|\.webp|\.gif/i.test(acceptVal);
+              if (isImage3 && isVideoAccept && !isImageAccept) {
+                log('info', 'upload', `[B2] 跳过视频 input node${nid} (accept=${acceptVal.slice(0, 40)})`);
+                continue;
+              }
+              if (!isImage3 && isImageAccept && !isVideoAccept) {
+                log('info', 'upload', `[B2] 跳过图片 input node${nid} (accept=${acceptVal.slice(0, 40)})`);
+                continue;
+              }
+              if (await tryInjectFiles(nid, undefined, `B2-qsa-node${nid}`)) return true;
+            } catch { /* 单个 node 失败不影响其他 */ }
           }
         }
       }
@@ -731,14 +754,15 @@ export async function uploadViaCDP(
       log('warn', 'upload', `[B2] 异常: ${(err as Error).message}`);
     }
 
-    // 策略 3：Runtime.evaluate 返回元素 objectId（按 contentType 选择正确 file input）
+    // 策略 3：Runtime.evaluate 返回元素 objectId（严格按 contentType 选择，不降级到任意 input）
     try {
       const isImage4 = contentType === 'image' || contentType === 'article';
       const selector4 = isImage4
         ? 'input[type="file"][accept*="image"]'
         : 'input[type="file"][accept*="video"]';
       log('info', 'upload', `[B3] Runtime.evaluate 获取 file input (${isImage4 ? 'image' : 'video'}模式)…`);
-      const script = '(function(){var el=document.querySelector("' + selector4 + '");if(!el){el=document.querySelector("input[type=file]");}if(!el){var all=document.querySelectorAll("iframe");for(var i=0;i<all.length;i++){try{var idoc=all[i].contentDocument||(all[i].contentWindow&&all[i].contentWindow.document);if(idoc){var iel=idoc.querySelector("' + selector4 + '");if(iel){el=iel;break;}if(!el){iel=idoc.querySelector("input[type=file]");if(iel)el=iel;}}}catch(e){}}}return el||null;})();';
+      // 🔑 修复：不降级到任意 input[type=file]，只找精确匹配 accept 的 input
+      const script = '(function(){var el=document.querySelector("' + selector4 + '");if(!el){var all=document.querySelectorAll("iframe");for(var i=0;i<all.length;i++){try{var idoc=all[i].contentDocument||(all[i].contentWindow&&all[i].contentWindow.document);if(idoc){var iel=idoc.querySelector("' + selector4 + '");if(iel){el=iel;break;}}}catch(e){}}}return el||null;})();';
       const evalResult: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
         expression: script,
         returnByValue: false,
