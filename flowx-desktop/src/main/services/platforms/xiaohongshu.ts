@@ -513,15 +513,21 @@ function buildPublishResultProbeScript(): string {
     'var hitFail = [];' +
     'for (var i = 0; i < successKeywords.length; i++) if (bodyText.indexOf(successKeywords[i]) !== -1) hitSuccess.push(successKeywords[i]);' +
     'for (var j = 0; j < failKeywords.length; j++) if (bodyText.indexOf(failKeywords[j]) !== -1) hitFail.push(failKeywords[j]);' +
-    // URL 变化（从 publish 跳转到 home 或作品列表）
+    // URL 变化检测（图文/视频发布：从 publish 页跳走）
     'var leftPublish = url.indexOf("/publish/publish") === -1 && url.indexOf("publish") === -1;' +
+    // 🔑 文章发布特有成功状态：
+    //   - /publish/success  → 发布成功页（长文发布专用）
+    //   - /publish/publish?published=true  → 发布后回调到发布页
+    //   - URL 包含 "success" 且在 /publish/ 目录下
+    'var isArticleSuccess = url.indexOf("/publish/success") !== -1 || url.indexOf("published=true") !== -1 || (url.indexOf("success") !== -1 && url.indexOf("/publish/") !== -1);' +
     'return {' +
     '  url: url,' +
-    '  success: hitSuccess.length > 0 || (leftPublish && hitFail.length === 0),' +
+    '  success: hitSuccess.length > 0 || isArticleSuccess || (leftPublish && hitFail.length === 0),' +
     '  failed: hitFail.length > 0,' +
     '  hitSuccess: hitSuccess,' +
     '  hitFail: hitFail,' +
-    '  leftPublish: leftPublish' +
+    '  leftPublish: leftPublish,' +
+    '  isArticleSuccess: isArticleSuccess' +
     '};' +
     '})()'
   );
@@ -931,7 +937,220 @@ async function publishArticle(
       log('info', 'login', '已登录，继续发布流程');
     }
 
-    onProgress(30, '已登录，准备上传/填写内容…');
+    onProgress(30, '已登录，准备进入文章编辑器…');
+
+    // 🔑 关键修复 v3：`target=article` 页面加载后默认显示视频发布界面
+    //    真实流程（根据用户提供的 HTML）：
+    //      1) 页面加载：显示视频发布界面（含"发布笔记"按钮）
+    //      2) 可能需要点击"写长文"切换到文章模式
+    //      3) 点击红色按钮 "✏️ 新的创作" 进入编辑器
+    //    重要教训：cdpClickPublishButton 对"新的创作"关键词匹配过于宽松（会误点"发布笔记"）
+    //             本次修复完全弃用 CDP 点击进入编辑器，改用纯 JS DOM 精准点击 <button class="new-btn">
+    //    HTML 参考（来自实际页面）：
+    //      <button ... class="d-button ... custom-button bg-red new-btn">
+    //        <span class="center"><svg>✏️</svg> 新的创作</span>
+    //      </button>
+    try {
+      // ========== Step 1: 检查是否已在编辑器（跳过整个流程） ==========
+      const alreadyEditor: any = await evalJS(
+        win,
+        `(function(){
+          var hasEd = false, hasTitle = false;
+          try {
+            var all = document.body ? document.body.querySelectorAll('input, textarea, [contenteditable="true"], [contenteditable=""]') : [];
+            for (var i = 0; i < all.length; i++) {
+              var ce = all[i].getAttribute && all[i].getAttribute('contenteditable');
+              if (ce === 'true' || ce === '' ) hasEd = true;
+              var ph = (all[i].getAttribute && all[i].getAttribute('placeholder')) || '';
+              if (/标题|title/.test(ph)) hasTitle = true;
+              if (hasEd && hasTitle) break;
+            }
+          } catch(e) {}
+          return { hasEd: hasEd, hasTitle: hasTitle, url: location.href };
+        })()`,
+        '文章-编辑器检测',
+        log,
+      ).catch(() => ({ hasEd: false, hasTitle: false, url: '' }));
+
+      if (alreadyEditor?.hasEd || alreadyEditor?.hasTitle) {
+        log('info', 'enter-editor', `✅ 已在编辑器，跳过入口点击 (url=${alreadyEditor.url})`);
+        onProgress(50, '已在编辑器，开始填写内容…');
+      } else {
+        // ========== Step 2: 纯 JS 精准点击（避免 cdpClickPublishButton 误点"发布笔记"） ==========
+        const originalUrl = win.webContents.getURL();
+        log('info', 'enter-editor', `不在编辑器，寻找并点击进入文章模式 (url=${originalUrl})`);
+
+        // 优先：直接点击带 "新的创作" 文本的 button（它就是 class="new-btn" 的红色按钮）
+        // 备选：点击 "写长文" / "写文章" / "文章" 等切换按钮（它可能需要先切换页面模式）
+        const enterEditorResult: any = await evalJS(
+          win,
+          `(function(){
+            // 查找并点击"新的创作"按钮（从 HTML 看它是 <button>，class 含 "new-btn" / "bg-red" / "d-button"）
+            function findAndClick(pattern, strict) {
+              // 策略 A: CSS class 直接命中（最可靠）
+              try {
+                var byClass = document.querySelector('button.new-btn, button.bg-red, button[class*="new-btn"], button[class*="custom-button"]');
+                if (byClass) {
+                  var txt = (byClass.innerText || byClass.textContent || '').trim();
+                  if (!strict || pattern.test(txt)) {
+                    byClass.click();
+                    return { method: 'class-selector', text: txt.slice(0, 20), clicked: true };
+                  }
+                }
+              } catch(e) {}
+
+              // 策略 B: 遍历 button/a，文本严格匹配 pattern
+              try {
+                var tags = document.querySelectorAll('button, a, [role="button"]');
+                var best = null;
+                for (var i = 0; i < tags.length; i++) {
+                  var t = (tags[i].innerText || tags[i].textContent || '').trim();
+                  if (!t) continue;
+                  if (pattern.test(t)) {
+                    best = tags[i];
+                    break;
+                  }
+                }
+                if (best) {
+                  best.click();
+                  return { method: 'text-match', text: (best.innerText||'').trim().slice(0, 20), clicked: true };
+                }
+              } catch(e) {}
+
+              // 策略 C: 深搜所有 DOM 节点文本（处理嵌套 span/div 的情况）
+              try {
+                var allEl = document.body ? document.body.querySelectorAll('*') : [];
+                for (var k = 0; k < allEl.length; k++) {
+                  var t2 = (allEl[k].innerText || allEl[k].textContent || '').trim();
+                  if (t2 && pattern.test(t2) && t2.replace(/\\s+/g,'').length <= 20) {
+                    // 必须是可点击元素（含 button/a/role=button 或有 click 监听）
+                    var p = allEl[k];
+                    while (p && p.nodeType === 1) {
+                      var tn = (p.tagName || '').toLowerCase();
+                      var role = (p.getAttribute && p.getAttribute('role')) || '';
+                      var cls2 = (p.getAttribute && p.getAttribute('class')) || '';
+                      if (tn === 'button' || tn === 'a' || role === 'button' || role === 'link' || /btn|button|clickable|cursor-pointer/.test(cls2)) {
+                        p.click();
+                        return { method: 'deep-search', text: t2.slice(0, 20), clicked: true };
+                      }
+                      p = p.parentElement;
+                    }
+                  }
+                }
+              } catch(e) {}
+
+              return { clicked: false };
+            }
+
+            // 第 1 轮：找 "新的创作"（直接进入编辑器）
+            var r1 = findAndClick(/新的创作|新创作|✨.*创作/, true);
+            if (r1.clicked) return r1;
+
+            // 第 2 轮：没找到可能需要先切换到文章模式，点击"写长文"等
+            var r2 = findAndClick(/写长文|写文章|长文|新建文章/, true);
+            if (r2.clicked) return r2;
+
+            // 第 3 轮：兜底，点击页面中任意"创作"字样按钮
+            var r3 = findAndClick(/创作/, false);
+            if (r3.clicked) return r3;
+
+            return { clicked: false };
+          })()`,
+          '文章-点击进入编辑器',
+          log,
+        ).catch(() => ({ clicked: false }));
+
+        log('info', 'enter-editor', `JS 点击结果: ${JSON.stringify(enterEditorResult)}`);
+
+        if (!enterEditorResult.clicked) {
+          log('warn', 'enter-editor', '❌ JS 未找到可点击的入口按钮');
+          return makeFailedResult(
+            accountId,
+            'xiaohongshu',
+            '未能进入文章编辑器：页面中未找到"新的创作"或"写长文"按钮，请手动检查页面',
+            startedAt,
+          );
+        }
+
+        // 点击后等待页面导航 + 渲染（新的创作 按钮可能触发 JS 路由跳转）
+        onProgress(40, '等待编辑器加载…');
+        await tracker.waitForStable(2000, 15000);
+        await sleep(2000);
+
+        // ========== Step 3: 二次检查 —— 如果点击了"写长文"，可能还需要再点一次"新的创作" ==========
+        const afterClick: any = await evalJS(
+          win,
+          `(function(){
+            var hasEd = false, hasTitle = false, newBtnExists = false, stillOnVideoPage = false;
+            try {
+              var all = document.body ? document.body.querySelectorAll('input, textarea, [contenteditable="true"], [contenteditable=""]') : [];
+              for (var i = 0; i < all.length; i++) {
+                var ce = all[i].getAttribute && all[i].getAttribute('contenteditable');
+                if (ce === 'true' || ce === '' ) hasEd = true;
+                var ph = (all[i].getAttribute && all[i].getAttribute('placeholder')) || '';
+                if (/标题|title/.test(ph)) hasTitle = true;
+                if (hasEd && hasTitle) break;
+              }
+            } catch(e) {}
+            // 检查"新的创作"按钮是否在点击后出现
+            try {
+              var btns = document.querySelectorAll('button, a, [role="button"]');
+              for (var j = 0; j < btns.length; j++) {
+                var t = (btns[j].innerText || btns[j].textContent || '').trim();
+                if (/新的创作/.test(t)) { newBtnExists = true; break; }
+              }
+            } catch(e) {}
+            return { hasEd: hasEd, hasTitle: hasTitle, newBtnExists: newBtnExists, url: location.href };
+          })()`,
+          '文章-点击后状态检查',
+          log,
+        ).catch(() => ({ hasEd: false, hasTitle: false, newBtnExists: false, url: '' }));
+        log('info', 'enter-editor', `点击后检查: ${JSON.stringify(afterClick)}`);
+
+        if (afterClick?.hasEd || afterClick?.hasTitle) {
+          log('info', 'enter-editor', '✅ 一次点击已进入编辑器');
+        } else if (afterClick?.newBtnExists) {
+          // 页面切换到了文章管理页，"新的创作"按钮出现，再点一次
+          log('info', 'enter-editor', '检测到"新的创作"已出现，第二次点击进入编辑器');
+          onProgress(43, '进入编辑器…');
+          const secondClick: any = await evalJS(
+            win,
+            `(function(){
+              // 直接找 class 匹配或文本匹配的 button
+              var byClass = document.querySelector('button.new-btn, button.bg-red, button[class*="new-btn"], button[class*="custom-button"]');
+              if (byClass) { byClass.click(); return { method:'class', text:(byClass.innerText||'').trim().slice(0,20), clicked:true }; }
+              var tags = document.querySelectorAll('button, a, [role="button"]');
+              for (var i = 0; i < tags.length; i++) {
+                var t = (tags[i].innerText || tags[i].textContent || '').trim();
+                if (/新的创作/.test(t)) { tags[i].click(); return { method:'text', text:t.slice(0,20), clicked:true }; }
+              }
+              return { clicked: false };
+            })()`,
+            '文章-二次点击新的创作',
+            log,
+          ).catch(() => ({ clicked: false }));
+          log('info', 'enter-editor', `二次点击结果: ${JSON.stringify(secondClick)}`);
+          if (!secondClick.clicked) {
+            return makeFailedResult(accountId, 'xiaohongshu', '点击"新的创作"后进入文章管理页，但无法再次点击进入编辑器', startedAt);
+          }
+          await tracker.waitForStable(2000, 15000);
+          await sleep(2000);
+        } else {
+          log('warn', 'enter-editor', `点击后未进入编辑器，也未发现"新的创作"按钮 (url=${afterClick?.url})`);
+          return makeFailedResult(accountId, 'xiaohongshu', '进入文章编辑器失败：页面结构与预期不符', startedAt);
+        }
+
+        onProgress(50, '已进入编辑器，准备填写内容…');
+      }
+    } catch (enterErr) {
+      log('warn', 'enter-editor', `异常: ${enterErr instanceof Error ? enterErr.message : String(enterErr)}`);
+      return makeFailedResult(
+        accountId,
+        'xiaohongshu',
+        `进入编辑器失败: ${enterErr instanceof Error ? enterErr.message : String(enterErr)}`,
+        startedAt,
+      );
+    }
 
     // 5) 上传用户提供的素材（如有）
     const files = request.mediaFiles || [];
@@ -983,31 +1202,189 @@ async function publishArticle(
     log('info', 'fill-content', `正文填写结果: ${JSON.stringify(contentRes)}`);
     await sleep(800);
 
-    // 8) 点击发布按钮（JS click + CDP 穿透 shadow DOM）
-    onProgress(88, '点击发布按钮…');
-    let clicked = false;
-    const clickResult: any = await evalJS(win, buildClickPublishScript(), '文章-点击发布', log).catch(() => null);
-    log('info', 'click-publish', `JS 点击结果: ${JSON.stringify(clickResult)}`);
-    clicked = !!(clickResult && clickResult.clicked);
+    // 8) 文章发布：点击底部 "next-btn" 红色按钮 2-3 次（文本动态变化）
+    //    🔑 关键洞察（来自实际页面 HTML）：
+    //      - 文章编辑页底部有一个按钮：<button class="d-button ... custom-button bg-red next-btn">
+    //      - 这个按钮的文本动态变化：第1次 = "一键排版" → 第2次 = "下一步" → 第3次可能 = "发布"
+    //      - 页脚结构：<div class="footer new-ui-footer"> ... <button class="next-btn">一键排版/下一步</button>
+    //      - 同时页面左上角有一个"发布笔记"按钮（div，44x44，score=7500），必须 100% 避免点击它
+    //    策略：
+    //      A. 首选：直接 querySelector('button.next-btn') / 'button.bg-red' 精确匹配 + click()
+    //      B. 每次点击后等待按钮文本变化（或超时），再点下一次
+    //      C. 全程不使用通用的 cdpClickPublishButton（它会误点"发布笔记"）
+    onProgress(70, '点击：一键排版…');
 
-    try {
-      const cdpOk = await cdpClickPublishButton(win, log, [
-        '发布笔记', '发布文章', '立即发布', '发布作品', '确认发布', '发布', 'publish', 'confirm',
-      ]);
-      if (cdpOk) {
-        log('info', 'click-publish', '✅ CDP 穿透式点击成功');
-        clicked = true;
-      } else {
-        log('warn', 'click-publish', 'CDP 点击返回 false，继续轮询发布结果');
+    // 帮助函数：精准点击底部红色按钮（by CSS class）。最多轮询 10 秒等待按钮出现
+    // 🔑 关键：点击"一键排版"后页面会重新渲染，"下一步"按钮需要几秒才出现
+    //          轮询逻辑放在 Node.js 侧（更可靠，避免浏览器 JS 的事件循环问题）
+    async function clickNextBtn(expectedHint: string): Promise<{ ok: boolean; text: string; reason?: string; attempts?: number }> {
+      const MAX_ATTEMPTS = 10;  // 最多 10 次，每次 1 秒
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const res: any = await evalJS(
+          win as BrowserWindow,
+          `(function(){
+            // 🔒 只看 <button> 元素，不碰 div/a
+            var blacklist = /发布笔记|暂存离开|保存草稿|返回/;
+            var validText = /一键排版|智能排版|排版|下一步|发布作品|发布文章|立即发布|发布|继续|完成|next|publish/i;
+            var prioritySelectors = [
+              'button.next-btn','button.submit','button.bg-red',
+              'button[class*="next-btn"]','button[class*="submit"]',
+              'button[class*="custom-button"]','button[class*="d-button"]',
+            ];
+            var seen = new Set();
+            for (var s = 0; s < prioritySelectors.length; s++) {
+              try {
+                var nodes = document.querySelectorAll(prioritySelectors[s]);
+                for (var n = 0; n < nodes.length; n++) {
+                  var nd = nodes[n];
+                  var t = (nd.innerText || nd.textContent || '').trim().replace(/\s+/g, ' ');
+                  if (!t || t.length > 40) continue;
+                  if (seen.has(t)) continue;
+                  seen.add(t);
+                  if (blacklist.test(t)) continue;
+                  if (!validText.test(t)) continue;
+                  try { nd.click(); return { ok: true, text: t.slice(0,20) }; } catch(e) {}
+                  try { var evt = new MouseEvent('click', { bubbles:true, cancelable:true, view:window });
+                         nd.dispatchEvent(evt); return { ok:true, text:t.slice(0,20), method:'dispatch'}; } catch(e2) {}
+                }
+              } catch(e) {}
+            }
+            // 兜底：遍历所有 button
+            try {
+              var allBtns = document.querySelectorAll('button');
+              for (var b = 0; b < allBtns.length; b++) {
+                var bt = (allBtns[b].innerText || allBtns[b].textContent || '').trim().replace(/\\s+/g, ' ');
+                if (!bt || bt.length > 40) continue;
+                if (blacklist.test(bt)) continue;
+                if (!validText.test(bt)) continue;
+                allBtns[b].click();
+                return { ok: true, text: bt.slice(0, 20) };
+              }
+            } catch(e) {}
+            return { ok: false, text: '', reason: 'no-button' };
+          })()`,
+          `文章-${expectedHint}`,
+          log,
+        ).catch(() => ({ ok: false, text: '', reason: 'eval-error' }));
+
+        if (res && res.ok) {
+          return { ok: true, text: res.text, attempts: attempt };
+        }
+
+        // 最后一次也没找到 → 用 CDP 穿透 shadow DOM 作为兜底
+        // 🔑 小红书最后一页的"发布"按钮可能在 web component / shadow DOM 中，JS querySelector 无法访问
+        if (attempt === MAX_ATTEMPTS) {
+          log('warn', 'article-publish', `⚠️ ${expectedHint} 按钮在 ${MAX_ATTEMPTS} 次 JS 尝试后仍未找到，改用 CDP 穿透式点击`);
+          let cdpKeywords: string[];
+          if (/排版/i.test(expectedHint)) cdpKeywords = ['一键排版', '智能排版', '排版'];
+          else if (/下一步|继续|next/i.test(expectedHint)) cdpKeywords = ['下一步', '继续', 'next'];
+          else cdpKeywords = ['发布作品', '发布文章', '立即发布', '发布', 'publish', 'confirm'];
+          try {
+            const cdpOk = await cdpClickPublishButton(win, log, cdpKeywords);
+            if (cdpOk) return { ok: true, text: `CDP:${expectedHint}`, attempts: MAX_ATTEMPTS };
+          } catch (cdpErr) {
+            log('warn', 'article-publish', `CDP 点击异常: ${cdpErr instanceof Error ? cdpErr.message : String(cdpErr)}`);
+          }
+          return { ok: false, text: '', reason: 'timeout-cdp-failed', attempts: MAX_ATTEMPTS };
+        }
+
+        // 等待 1 秒后再试
+        log('info', 'article-publish', `  [第${attempt}/${MAX_ATTEMPTS}] 未找到"${expectedHint}"按钮，1 秒后重试`);
+        await sleep(1000);
       }
-    } catch (cdpErr) {
-      log('warn', 'click-publish', `CDP 点击异常: ${cdpErr instanceof Error ? cdpErr.message : String(cdpErr)}`);
+      return { ok: false, text: '', reason: 'timeout', attempts: MAX_ATTEMPTS };
     }
 
-    if (!clicked) {
-      log('warn', 'click-publish', `所有点击方式均未命中发布按钮`);
-      return makeFailedResult(accountId, 'xiaohongshu', '未找到发布按钮或点击失败', startedAt);
+    // 帮助函数：读取当前按钮文本（用于判断流程是否继续）
+    async function readNextBtnText(): Promise<string> {
+      const res: any = await evalJS(
+        win as BrowserWindow,
+        `(function(){
+          // 与 clickNextBtn 相同的选择器和过滤逻辑
+          var sel = ['button.next-btn','button.submit','button.bg-red','button[class*="next-btn"]','button[class*="submit"]','button[class*="custom-button"]','button[class*="d-button"]'];
+          var blacklist = /发布笔记|暂存离开|保存草稿|返回/;
+          var validText = /一键排版|智能排版|排版|下一步|发布作品|发布文章|立即发布|发布|继续|完成|next|publish/i;
+          var seen2 = new Set();
+          for (var s = 0; s < sel.length; s++) {
+            try {
+              var nodes = document.querySelectorAll(sel[s]);
+              for (var n = 0; n < nodes.length; n++) {
+                var nd = nodes[n];
+                var t = (nd.innerText || nd.textContent || '').trim().replace(/\\s+/g, ' ');
+                if (!t || t.length > 40) continue;
+                if (seen2.has(t)) continue;
+                seen2.add(t);
+                if (blacklist.test(t)) continue;
+                if (!validText.test(t)) continue;
+                return t.slice(0, 20);
+              }
+            } catch(e) {}
+          }
+          // 兜底遍历所有 button
+          try {
+            var allBtns = document.querySelectorAll('button');
+            for (var b = 0; b < allBtns.length; b++) {
+              var bt = (allBtns[b].innerText || allBtns[b].textContent || '').trim().replace(/\\s+/g, ' ');
+              if (!bt || bt.length > 40) continue;
+              if (blacklist.test(bt)) continue;
+              if (validText.test(bt)) return bt.slice(0, 20);
+            }
+          } catch(e) {}
+          return '';
+        })()`,
+        '文章-按钮文本',
+        log,
+      ).catch(() => '');
+      return res || '';
     }
+
+    let publishFlowOk = true;
+    const totalClicks = 3;
+
+    for (let clickN = 1; clickN <= totalClicks && publishFlowOk; clickN++) {
+      const stepLabel = clickN === 1 ? '一键排版' : (clickN === 2 ? '下一步' : '发布');
+      onProgress(70 + clickN * 6, `点击：${stepLabel}（第 ${clickN}/${totalClicks} 步）…`);
+
+      // 🔑 直接尝试点击当前步骤的按钮。不依赖 readNextBtnText 的返回值来判断是否继续。
+      //   理由：排版后按钮可能在 shadow DOM / iframe 中，普通 DOM 查询可能返回空。
+      //   但 clickNextBtn 会遍历所有 <button> 元素，真实点击按钮比判断"按钮是否存在"更靠谱。
+      const clickRes = await clickNextBtn(stepLabel);
+      log('info', 'article-publish', `点击 #${clickN} [${stepLabel}] → ${JSON.stringify(clickRes)}`);
+
+      if (!clickRes.ok) {
+        // 第 1 次点击失败：页面结构变化，明确失败
+        if (clickN === 1) {
+          log('warn', 'article-publish', `❌ 第 1 次点击失败（无法找到"一键排版"按钮）`);
+          publishFlowOk = false;
+          break;
+        }
+        // 第 2-3 次点击失败：可能已到最后页面/按钮不存在，视为流程完成
+        log('info', 'article-publish', `ℹ️ 第 ${clickN} 次点击未找到按钮，视为流程已完成`);
+        break;
+      }
+
+      // 步骤间等待：让排版 / 导航 / 接口调用完成
+      const waitMs = clickN === 1 ? 5000 : 3500;
+      await tracker.waitForStable(1500, 15000);
+      await sleep(waitMs);
+
+      // 🔒 只用 URL 跳转来判断流程是否已结束（更可靠）
+      const currentUrl = win.webContents.getURL();
+      if (!/publish|editor/i.test(currentUrl)) {
+        log('info', 'article-publish', `✅ URL 已跳转到非发布页面: ${currentUrl}`);
+        break;
+      }
+
+      // 调试辅助：读取按钮文本（仅供日志，不影响流程逻辑）
+      const debugText = await readNextBtnText();
+      log('info', 'article-publish', `点击 #${clickN} 后 [调试] 按钮文本: "${debugText}", 当前 URL: ${currentUrl}`);
+    }
+
+    if (!publishFlowOk) {
+      return makeFailedResult(accountId, 'xiaohongshu', '文章发布流程失败：无法找到/点击底部红色按钮', startedAt);
+    }
+
+    log('info', 'article-publish', `✅ 文章发布多步点击流程完成（${totalClicks} 步）`);
     await sleep(1200);
 
     // 9) 等待发布结果（60 秒超时）
@@ -1141,6 +1518,7 @@ const meta: PlatformMeta = {
   contentTypes: ['video', 'image', 'article'],
   capabilities: { publishVideo: true, publishImage: true, publishArticle: true } as AccountCapabilities,
   contentLimits: { title: TITLE_LIMIT, content: CONTENT_LIMIT },
+  articleLimits: { title: 64 },
   nicknameSelectors: [
     '.account-name',
     '.user-name',

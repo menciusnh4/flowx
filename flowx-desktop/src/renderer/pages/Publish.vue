@@ -83,58 +83,68 @@ const currentAccounts = computed(() => {
 })
 
 // ======== 内容限制（按平台汇总，取最小值当限制 ========
+//  - 文章（article）：从 meta.articleLimits.content 读取（抖音 8000，小红书不限）
+//  - 图文/视频（image/video）：从 meta.contentLimits.content 读取
 const platformContentLimit = computed(() => {
   const ids = getSelectedIds()
-  if (ids.length === 0) return { min: 1000, platforms: [] }
+  const isArticle = contentType.value === 'article'
+  if (ids.length === 0) {
+    // 未选账号时：文章默认不限制（用一个很大的数字占位），图文/视频默认 1000
+    return { min: isArticle ? 100000 : 1000, platforms: [] }
+  }
   const limits = new Set<number>()
   const plats: Array<{ platform: string; limit: number }> = []
   for (const id of ids) {
     const a = accountStore.accounts.find((x) => x.id === id)
     if (!a) continue
     const meta = accountStore.platforms.find((p) => p.key === a.platform)
-    if (meta && typeof meta.contentLimits?.content) {
-      limits.add(meta.contentLimits.content)
-      plats.push({ platform: a.platform, limit: meta.contentLimits.content })
+    if (!meta) continue
+    if (isArticle) {
+      // 文章发布：从 articleLimits 读取
+      if (typeof meta.articleLimits?.content === 'number') {
+        limits.add(meta.articleLimits.content)
+        plats.push({ platform: a.platform, limit: meta.articleLimits.content })
+      }
+      // 若没有 articleLimits.content（如小红书），表示该平台不限制正文字数 → 不加入集合
+    } else {
+      // 图文/视频发布：从 contentLimits 读取
+      if (typeof meta.contentLimits?.content === 'number') {
+        limits.add(meta.contentLimits.content)
+        plats.push({ platform: a.platform, limit: meta.contentLimits.content })
+      }
     }
   }
-  // 若没有限制数据，默认 1000 字（小红书/抖音默认值）
-  if (limits.size === 0) return { min: 1000, platforms: [] }
+  // 若没有限制数据：文章模式返回大数（不限制），否则默认 1000
+  if (limits.size === 0) return { min: isArticle ? 100000 : 1000, platforms: plats }
   return { min: Math.min(...limits.values()), platforms: plats }
 })
 // ======== 标题限制（按内容类型区分）=======
-//  - 文章（article）：抖音 30 字 / 小红书 64 字（取最小值用于前端提示）
-//  - 图文（image）：小红书 20 字 / 抖音 80 字
-//  - 视频（video）：抖音 80 字 / 快手 80 字
+//  - 文章（article）：从 meta.articleLimits.title 读取（抖音 30，小红书 64）
+//  - 图文（image）：从 meta.contentLimits.title 读取（小红书 20）
+//  - 视频（video）：从 meta.contentLimits.title 读取
 const titleMaxLength = computed(() => {
-  if (contentType.value === 'article') {
-    const ids = getSelectedIds()
-    if (ids.length === 0) return 64
-    // 取所选平台中最小的标题限制
-    let min = Infinity
-    for (const id of ids) {
-      const a = accountStore.accounts.find((x) => x.id === id)
-      if (!a) continue
-      if (a.platform === 'douyin') min = Math.min(min, 30)
-      else if (a.platform === 'xiaohongshu') min = Math.min(min, 64)
-      else if (a.platform === 'kuaishou') min = Math.min(min, 80)
-    }
-    return Number.isFinite(min) ? min : 64
+  const ids = getSelectedIds()
+  const isArticle = contentType.value === 'article'
+  if (ids.length === 0) {
+    return isArticle ? 64 : 80
   }
-  if (contentType.value === 'image') {
-    const ids = getSelectedIds()
-    if (ids.length === 0) return 80
-    let min = Infinity
-    for (const id of ids) {
-      const a = accountStore.accounts.find((x) => x.id === id)
-      if (!a) continue
-      if (a.platform === 'xiaohongshu') min = Math.min(min, 20)
-      else if (a.platform === 'douyin') min = Math.min(min, 80)
-      else if (a.platform === 'kuaishou') min = Math.min(min, 80)
+  let min = Infinity
+  for (const id of ids) {
+    const a = accountStore.accounts.find((x) => x.id === id)
+    if (!a) continue
+    const meta = accountStore.platforms.find((p) => p.key === a.platform)
+    if (!meta) continue
+    let limit: number | undefined
+    if (isArticle) {
+      limit = meta.articleLimits?.title
+    } else {
+      limit = meta.contentLimits?.title
     }
-    return Number.isFinite(min) ? min : 80
+    if (typeof limit === 'number') {
+      min = Math.min(min, limit)
+    }
   }
-  // video 默认 80
-  return 80
+  return Number.isFinite(min) ? min : isArticle ? 64 : 80
 })
 const titlePlaceholder = computed(() => {
   if (contentType.value === 'article') {
@@ -444,7 +454,16 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
           <div class="content-limit-tag">
             {{ (() => {
               const meta = accountStore.platforms.find(p => p.key === a.platform);
-              return meta?.contentLimits?.content ? `正文最多 ${meta.contentLimits.content} 字` : '';
+              if (!meta) return '';
+              if (contentType === 'article') {
+                const t = meta.articleLimits?.title;
+                const c = meta.articleLimits?.content;
+                if (typeof t === 'number' && typeof c === 'number') return `标题${t}字 / 正文${c}字`;
+                if (typeof t === 'number') return `标题${t}字 / 正文不限`;
+                if (typeof c === 'number') return `正文最多 ${c} 字`;
+                return '字数不限';
+              }
+              return meta.contentLimits?.content ? `正文最多 ${meta.contentLimits.content} 字` : '';
             })() }}
           </div>
           <div v-if="selectedIds[a.id]" class="selected-mark">✓</div>

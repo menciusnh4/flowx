@@ -36,6 +36,13 @@ export interface PlatformMeta {
     /** 正文/描述最大字符数（超出将被截断，默认不限制） */
     content?: number;
   };
+  /** 文章发布的字数限制（独立于图文/视频） */
+  articleLimits?: {
+    /** 文章标题最大字符数（超出将被截断，默认不限制） */
+    title?: number;
+    /** 文章正文最大字符数（undefined 表示不限制，超出将被截断） */
+    content?: number;
+  };
 }
 
 /** 内容类型 */
