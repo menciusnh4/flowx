@@ -65,7 +65,12 @@ coverage/
 release/
 out/
 packages/
-build/
+build/*
+!build/icon.png
+!build/icon-256.png
+!build/icon-source.jpg
+!build/icon.ico
+!build/icon.icns
 
 # FlowX 应用本地数据（发布历史、账号缓存等，不含在仓库中）
 flowx-data/

@@ -23,7 +23,6 @@ extraResources:
     to: .
 win:
   target: nsis
-  icon: build/icon.ico
   artifactName: "${productName}-${version}-setup.${ext}"
   signAndEditExecutable: false
 nsis:
@@ -34,11 +33,9 @@ nsis:
   shortcutName: FlowX
 mac:
   target: dmg
-  icon: build/icon.icns
   category: public.app-category.productivity
 linux:
   target: AppImage
-  icon: build/icon.png
 publish:
   provider: generic
   url: "https://update.flowx.com/${os}/"
