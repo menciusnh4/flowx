@@ -174,6 +174,12 @@ const kuaishouSelected = computed(() => {
   return accountStore.accounts.some((a) => ids.includes(a.id) && a.platform === 'kuaishou')
 })
 
+// 文章模式下是否选中了抖音账号（用于封面必填校验）
+const hasDouyinAccount = computed(() => {
+  const ids = getSelectedIds()
+  return accountStore.accounts.some((a) => ids.includes(a.id) && a.platform === 'douyin')
+})
+
 // ============ 文件操作 ============
 async function pickMediaFiles() {
   console.log('[Publish.vue] pickMediaFiles start')
@@ -208,6 +214,26 @@ async function pickCover() {
   }
 }
 
+// 文章模式：选择封面图片（支持多选，第一张为封面，其余为正文插图）
+async function pickArticleCover() {
+  console.log('[Publish.vue] pickArticleCover start')
+  try {
+    const r = await electronApi.openFileDialog({
+      mode: 'files',
+      filters: [{ name: '图片', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'] }],
+    })
+    console.log('[Publish.vue] pickArticleCover raw=', r)
+    if (r && !r.canceled && r.filePaths && r.filePaths.length > 0) {
+      mediaFiles.value = [...mediaFiles.value, ...r.filePaths]
+      console.log('[Publish.vue] pickArticleCover -> ', mediaFiles.value.length, 'files')
+      ElMessage.success(`已添加 ${r.filePaths.length} 张图片`)
+    }
+  } catch (e) {
+    console.error('[Publish.vue] pickArticleCover error', e)
+    ElMessage.error('选择图片失败')
+  }
+}
+
 // ============ 提交 ============
 async function submitPublish() {
   console.log('[Publish.vue] submitPublish clicked')
@@ -226,6 +252,13 @@ async function submitPublish() {
   if (contentType.value !== 'article' && mediaFiles.value.length === 0) {
     ElMessage.warning('请上传素材文件')
     console.warn('[Publish.vue] no media files, abort')
+    return
+  }
+
+  // 文章模式 + 抖音账号：封面为必填项
+  if (contentType.value === 'article' && hasDouyinAccount.value && mediaFiles.value.length === 0) {
+    ElMessage.warning('抖音文章发布必须上传封面图片')
+    console.warn('[Publish.vue] douyin article requires cover image, abort')
     return
   }
 
@@ -388,6 +421,23 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
           <div class="file-list" v-if="mediaFiles.length > 0">
             <div v-for="(f, idx) in mediaFiles" :key="idx" class="file-item">
               <span class="file-name">{{ f }}</span>
+              <el-button size="small" type="danger" link @click="removeMediaFile(f)">删除</el-button>
+            </div>
+          </div>
+        </el-form-item>
+
+        <!-- 文章模式：封面图片上传（抖音必填） -->
+        <el-form-item v-if="contentType === 'article'" label="封面">
+          <el-button @click="pickArticleCover">选择封面图片</el-button>
+          <span v-if="mediaFiles.length > 0" style="margin-left:8px; color:#909399; font-size:12px;">
+            已选择 {{ mediaFiles.length }} 张图片（第 1 张作为封面）
+          </span>
+          <div class="article-cover-hint" v-if="hasDouyinAccount">
+            <span style="color:#F56C6C;">⚠️ 已选抖音账号：封面为必填项</span>
+          </div>
+          <div class="file-list" v-if="mediaFiles.length > 0">
+            <div v-for="(f, idx) in mediaFiles" :key="idx" class="file-item">
+              <span class="file-name">{{ idx === 0 ? '📌 封面：' : '' }}{{ f }}</span>
               <el-button size="small" type="danger" link @click="removeMediaFile(f)">删除</el-button>
             </div>
           </div>

@@ -1,4 +1,6 @@
 import type { BrowserWindow } from 'electron';
+import * as fs from 'fs';
+import * as path from 'path';
 import type { PlatformAdapter, ExtractedAccountInfo, LoginCheckResult, ProgressCallback } from './types';
 import { sleep, makePublishLogger, makePublishWindow, attachNavigationTracker, evalJS, makeFailedResult, uploadViaCDP, waitForUploadComplete, buildPageStructureProbe } from './shared';
 import { registerPlatform } from './registry';
@@ -432,6 +434,2439 @@ function buildClickPublishScript(): string {
   })();`;
 }
 
+// === 抖音文章封面上传（专门处理封面上传区域，区别于正文图片上传）
+// 抖音文章发布需要单独上传封面，流程：
+//   1. 立即滚动到封面设置区域
+//   2. 等待滚动完成，重新获取坐标
+//   3. CDP 真实鼠标点击 → 弹出文件选择对话框
+//   4. 选择图片后 → 弹出裁剪确认弹窗
+//   5. 点击"完成"按钮确认封面
+// 🔑 多重上传策略：
+//   方案A：CDP 鼠标真实点击 + Page.handleFileChooser 拦截对话框
+//   方案B：CDP Frame 操作跨域 iframe 内的 file input
+//   方案C：直接查找并设置 file input（含 iframe + shadow DOM）
+// === 抖音文章封面上传（FileChooser 拦截优先版）
+// 核心思路：
+//   1. 滚动到封面区域
+//   2. 🔴 先启用 FileChooser 拦截（最可靠的方案）
+//   3. 点击 .cover-Uudq5y.clickable 元素（真正的点击目标）
+//   4. 等待 fileChooserOpened 事件 → 自动填充文件
+//   5. 兜底：DOM.setFileInputFiles 等方式
+//   6. 点击裁剪弹窗"完成"按钮
+//   7. 验证上传结果
+async function uploadArticleCover(
+  win: BrowserWindow,
+  coverFile: string,
+  log: (level: any, stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  log('info', 'cover-upload', '开始上传文章封面: ' + coverFile);
+  
+  try {
+    try {
+      await win.webContents.debugger.attach('1.3');
+    } catch { /* 可能已 attached */ }
+    
+    // ============================================
+    // 步骤1：滚动到封面设置区域
+    // ============================================
+    log('info', 'cover-upload', '[1/5] 滚动到封面设置区域…');
+    
+    const scrollOk = await scrollToCoverSection(win, log);
+    if (!scrollOk) {
+      log('warn', 'cover-upload', '滚动到封面区域失败，继续尝试…');
+    }
+    
+    // ============================================
+    // 步骤2：读取文件并注入超级 patch（DataTransfer 直接设文件）
+    // ============================================
+    log('info', 'cover-upload', '[2/5] 注入文件上传 patch…');
+    
+    // 读取封面文件为 base64
+    const fileBuffer = fs.readFileSync(coverFile);
+    const base64Data = fileBuffer.toString('base64');
+    const fileName = path.basename(coverFile);
+    
+    // 推断 MIME 类型
+    const ext = path.extname(coverFile).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+      '.png': 'image/png', '.gif': 'image/gif',
+      '.webp': 'image/webp', '.bmp': 'image/bmp',
+    };
+    const mimeType = mimeMap[ext] || 'image/png';
+    
+    log('info', 'cover-upload', '  封面文件: ' + fileName + 
+        ' (' + (fileBuffer.length / 1024).toFixed(1) + 'KB, ' + mimeType + ')');
+    
+    // 构建超级 patch 脚本（直接在 JS 层面设置文件，不弹对话框）
+    const superPatchScript = buildSuperCoverPatchScript(base64Data, fileName, mimeType);
+    
+    // 启用 Page 域 + 拦截文件选择对话框（防止对话框弹出）
+    let pageEnabled = false;
+    try {
+      await win.webContents.debugger.sendCommand('Page.enable');
+      pageEnabled = true;
+      log('info', 'cover-upload', '  ✅ Page.enable 成功');
+      
+      // 启用文件选择对话框拦截 - 对话框不会弹出，我们通过JS设置文件
+      try {
+        await win.webContents.debugger.sendCommand('Page.setInterceptFileChooserDialog', {
+          enabled: true,
+        });
+        log('info', 'cover-upload', '  ✅ FileChooser 拦截已启用（对话框不会弹出）');
+      } catch (interceptErr) {
+        log('info', 'cover-upload', '  FileChooser 拦截启用失败: ' + (interceptErr as Error).message);
+      }
+    } catch (pageErr) {
+      log('warn', 'cover-upload', '  Page.enable 失败: ' + (pageErr as Error).message);
+    }
+    
+    // 启用 Runtime 域
+    let runtimeEnabled = false;
+    const frameContextMap = new Map<string, number>();
+    
+    try {
+      await win.webContents.debugger.sendCommand('Runtime.enable');
+      runtimeEnabled = true;
+      log('info', 'cover-upload', '  ✅ Runtime.enable 成功');
+    } catch (rtErr) {
+      log('warn', 'cover-upload', '  Runtime.enable 失败: ' + (rtErr as Error).message);
+    }
+    
+    // 如果 Runtime 启用成功，监听新 frame/context 创建并注入 patch
+    let ctxHandler: ((...args: any[]) => void) | null = null;
+    if (runtimeEnabled) {
+      ctxHandler = async (_event: any, _method: string, params: any) => {
+        if (_method === 'Runtime.executionContextCreated') {
+          const ctx = params.context;
+          if (ctx && ctx.id && ctx.auxData && ctx.auxData.frameId) {
+            frameContextMap.set(ctx.auxData.frameId, ctx.id);
+            log('info', 'cover-upload', '    [Runtime] 新 context: frameId=' + ctx.auxData.frameId.slice(0, 16) + '...');
+            
+            // 立即注入 patch
+            try {
+              await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+                expression: superPatchScript,
+                contextId: ctx.id,
+                returnByValue: true,
+              });
+            } catch { /* ignore */ }
+          }
+        }
+      };
+      win.webContents.debugger.on('message', ctxHandler);
+    }
+    
+    // 在主文档注入 patch
+    let patchedFrames = 0;
+    try {
+      const mainRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+        expression: superPatchScript,
+        returnByValue: true,
+      });
+      const mainVal = mainRes?.result?.value;
+      if (mainVal && (mainVal.patched || mainVal.alreadyPatched)) {
+        patchedFrames++;
+        log('info', 'cover-upload', '  ✅ 主文档 patch 注入成功');
+      }
+    } catch (mainErr) {
+      log('info', 'cover-upload', '  主文档 patch: ' + (mainErr as Error).message);
+    }
+    
+    // 尝试在所有 iframe 中注入 patch（通过 Page.getFrameTree）
+    try {
+      const frameTree: any = await win.webContents.debugger.sendCommand('Page.getFrameTree').catch(() => null);
+      if (frameTree && frameTree.frameTree) {
+        const childFrames: Array<{ id: string; url: string }> = [];
+        const collect = (node: any) => {
+          if (node.frame && node.frame.id !== frameTree.frameTree.frame.id) {
+            childFrames.push({ id: node.frame.id, url: node.frame.url || '' });
+          }
+          if (node.childFrames) node.childFrames.forEach(collect);
+        };
+        collect(frameTree.frameTree);
+        
+        log('info', 'cover-upload', '  检测到 ' + childFrames.length + ' 个子 frame');
+        
+        for (const cf of childFrames) {
+          try {
+            // 创建隔离世界来注入 patch
+            const isoRes: any = await win.webContents.debugger.sendCommand('Page.createIsolatedWorld', {
+              frameId: cf.id,
+              worldName: 'flowx-cover-' + Date.now(),
+              grantUniversalAccess: true,
+            }).catch(() => null);
+            
+            if (isoRes && isoRes.executionContextId) {
+              await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+                expression: superPatchScript,
+                contextId: isoRes.executionContextId,
+                returnByValue: true,
+              });
+              patchedFrames++;
+              log('info', 'cover-upload', '  ✅ frame ' + cf.url.slice(0, 40) + ' patch 成功');
+            }
+          } catch (fErr) {
+            // 跨域 iframe 可能无法注入，忽略
+          }
+        }
+      }
+    } catch (ftErr) {
+      log('info', 'cover-upload', '  Frame 遍历: ' + (ftErr as Error).message);
+    }
+    
+    // 等待 patch 生效
+    await sleep(500);
+    log('info', 'cover-upload', '  Patch 注入完成，共 ' + patchedFrames + ' 个 frame');
+    
+    // ============================================
+    // 步骤3：点击封面区域（patch 会拦截 click 并直接设置文件）
+    // ============================================
+    log('info', 'cover-upload', '[3/5] 点击封面上传区域…');
+    
+    const clickOk = await clickCoverAreaV2(win, log);
+    if (!clickOk) {
+      log('warn', 'cover-upload', '  ⚠️ 点击封面区域失败');
+    }
+    
+    // ============================================
+    // 步骤4：轮询检查文件是否设置成功，CDP兜底
+    // ============================================
+    log('info', 'cover-upload', '[4/5] 等待文件设置…');
+    
+    let fileSet = false;
+    let cdpAttempted = false;
+    
+    for (let attempt = 0; attempt < 40 && !fileSet; attempt++) {
+      await sleep(200);
+      
+      const checkScript = `
+        (function() {
+          // 检查 JS 层面是否成功
+          if (window.__flowxCoverFileSet) {
+            return { fileSet: true, via: 'js-patch', setTime: window.__flowxCoverFileSetTime || 0 };
+          }
+          
+          // 检查是否有 input 已经有文件了（可能页面自己处理了）
+          var inputs = document.querySelectorAll('input[type="file"]');
+          for (var i = 0; i < inputs.length; i++) {
+            if (inputs[i].files && inputs[i].files.length > 0) {
+              window.__flowxCoverFileSet = true;
+              return { fileSet: true, via: 'existing-input', inputCount: inputs.length };
+            }
+          }
+          
+          return {
+            fileSet: false,
+            inputClickCount: window.__flowxInputClickCount || 0,
+            pickerCalled: window.__flowxPickerCalled || false,
+            inputCount: inputs.length,
+            error: window.__flowxCoverError || null,
+          };
+        })();
+      `;
+      
+      try {
+        const checkRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+          expression: checkScript,
+          returnByValue: true,
+        });
+        const checkVal = checkRes?.result?.value;
+        
+        if (checkVal && checkVal.fileSet) {
+          log('info', 'cover-upload', '  ✅ 文件已成功设置（第' + (attempt + 1) + '次检测，via=' + checkVal.via + '）');
+          fileSet = true;
+          break;
+        }
+        
+        if (checkVal && checkVal.error) {
+          log('info', 'cover-upload', '  ⚠️ Patch 报错: ' + checkVal.error);
+        }
+        
+        // 每5次打印一次状态
+        if (attempt % 5 === 4) {
+          log('info', 'cover-upload', '    状态: inputClick=' + (checkVal?.inputClickCount || 0) + 
+              ', pickerCalled=' + (checkVal?.pickerCalled || false) +
+              ', inputCount=' + (checkVal?.inputCount || 0));
+        }
+        
+        // 第15次检测（约3秒后）如果还没成功，尝试CDP兜底方案
+        if (attempt === 14 && !cdpAttempted) {
+          cdpAttempted = true;
+          log('info', 'cover-upload', '  JS patch 未成功，尝试 CDP 兜底方案…');
+          
+          try {
+            // CDP方案：通过DOM.getDocument查找所有file input，然后用DOM.setFileInputFiles
+            const docResult: any = await win.webContents.debugger.sendCommand('DOM.getDocument', {
+              depth: -1,
+              pierce: true,
+            }).catch(() => null);
+            
+            if (docResult && docResult.root) {
+              const allNodes: any[] = [];
+              const walk = (n: any) => {
+                if (!n) return;
+                allNodes.push(n);
+                if (n.children) n.children.forEach(walk);
+                if (n.shadowRoots) n.shadowRoots.forEach(walk);
+                if (n.templateContent) walk(n.templateContent);
+                if (n.contentDocument) walk(n.contentDocument);
+              };
+              walk(docResult.root);
+              
+              // 查找所有file input，优先选择accept含image的
+              const fileInputs: Array<{ nodeId: number; accept: string; score: number }> = [];
+              for (const n of allNodes) {
+                if (!n || !n.attributes) continue;
+                const nodeName = (n.nodeName || '').toLowerCase();
+                if (nodeName !== 'input') continue;
+                
+                let isFile = false;
+                let accept = '';
+                for (let i = 0; i < n.attributes.length; i += 2) {
+                  if (n.attributes[i] === 'type' && n.attributes[i + 1] === 'file') isFile = true;
+                  if (n.attributes[i] === 'accept') accept = n.attributes[i + 1] || '';
+                }
+                
+                if (isFile) {
+                  let score = 0;
+                  if (/image\//i.test(accept) || accept === '') score += 100;
+                  fileInputs.push({ nodeId: n.nodeId, accept: accept, score: score });
+                }
+              }
+              
+              log('info', 'cover-upload', '    CDP 找到 ' + fileInputs.length + ' 个 file input');
+              
+              if (fileInputs.length > 0) {
+                fileInputs.sort((a, b) => b.score - a.score);
+                const target = fileInputs[0];
+                
+                try {
+                  await win.webContents.debugger.sendCommand('DOM.setFileInputFiles', {
+                    nodeId: target.nodeId,
+                    files: [coverFile],
+                  });
+                  log('info', 'cover-upload', '    ✅ CDP DOM.setFileInputFiles 成功（nodeId=' + target.nodeId + '）');
+                  
+                  // 触发change事件
+                  await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+                    expression: `
+                      (function() {
+                        var inputs = document.querySelectorAll('input[type="file"]');
+                        for (var i = 0; i < inputs.length; i++) {
+                          if (inputs[i].files && inputs[i].files.length > 0) {
+                            inputs[i].dispatchEvent(new Event('input', { bubbles: true }));
+                            inputs[i].dispatchEvent(new Event('change', { bubbles: true }));
+                          }
+                        }
+                        return true;
+                      })();
+                    `,
+                    returnByValue: true,
+                  });
+                  
+                  fileSet = true;
+                } catch (setErr) {
+                  log('info', 'cover-upload', '    CDP 设置失败: ' + (setErr as Error).message);
+                }
+              }
+            }
+          } catch (cdpErr) {
+            log('info', 'cover-upload', '    CDP 兜底异常: ' + (cdpErr as Error).message);
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    
+    // 清理 context 监听器
+    if (ctxHandler) {
+      win.webContents.debugger.off('message', ctxHandler);
+    }
+    
+    if (!fileSet) {
+      log('warn', 'cover-upload', '  ⚠️ 未检测到文件设置标记，尝试继续等待上传…');
+    }
+    
+    // ============================================
+    // 步骤5：等待上传完成 + 点击"完成"
+    // ============================================
+    log('info', 'cover-upload', '[5/5] 等待上传并点击完成…');
+    
+    // 先按Escape键关闭可能弹出的文件选择对话框
+    try {
+      await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        key: 'Escape',
+        code: 'Escape',
+        windowsVirtualKeyCode: 27,
+      });
+      await sleep(50);
+      await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: 'Escape',
+        code: 'Escape',
+        windowsVirtualKeyCode: 27,
+      });
+      log('info', 'cover-upload', '  已发送 Escape 键关闭可能的对话框');
+    } catch (escErr) {
+      log('info', 'cover-upload', '  Escape 键发送失败: ' + (escErr as Error).message);
+    }
+    
+    await sleep(500);
+    
+    // 等待上传并多次尝试点击"完成"按钮
+    let completeClicked = false;
+    for (let clickAttempt = 0; clickAttempt < 10; clickAttempt++) {
+      await sleep(800);
+      
+      // 检查是否有"完成"按钮
+      const clickCompleteScript = buildClickCompleteScript();
+      const completeRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+        expression: clickCompleteScript, returnByValue: true,
+      }).catch(() => null);
+      
+      const completeVal = completeRes?.result?.value;
+      
+      if (completeVal && completeVal.clicked) {
+        log('info', 'cover-upload', '  ✅ 已点击"完成"按钮（尝试' + (clickAttempt + 1) + '次）');
+        completeClicked = true;
+        await sleep(1000);
+        
+        // 点击后再按一次Escape，关闭可能残留的弹窗
+        try {
+          await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+            type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27,
+          });
+          await sleep(50);
+          await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+            type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27,
+          });
+        } catch { /* ignore */ }
+        
+        break;
+      }
+      
+      // 没找到按钮，检查是否已经显示"编辑封面"（说明上传已完成，可能没有裁剪弹窗）
+      if (clickAttempt >= 3) {
+        const quickVerify = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+          expression: `
+            (function() {
+              var spans = document.querySelectorAll('span');
+              for (var i = 0; i < spans.length; i++) {
+                if ((spans[i].innerText || '').trim() === '编辑封面') return true;
+              }
+              var cover = document.querySelector('.cover-Uudq5y');
+              if (cover) {
+                var style = cover.getAttribute('style') || '';
+                if (style.indexOf('background-image') !== -1) return true;
+              }
+              return false;
+            })();
+          `,
+          returnByValue: true,
+        }).catch(() => null);
+        
+        if (quickVerify?.result?.value) {
+          log('info', 'cover-upload', '  封面已就绪（无裁剪弹窗）');
+          completeClicked = true;
+          break;
+        }
+      }
+    }
+    
+    if (!completeClicked) {
+      log('info', 'cover-upload', '  未找到"完成"按钮（可能无裁剪弹窗或已自动完成）');
+    }
+    
+    // 最后再按几次Escape确保所有弹窗都关闭
+    for (let escI = 0; escI < 3; escI++) {
+      try {
+        await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27,
+        });
+        await sleep(30);
+        await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27,
+        });
+        await sleep(100);
+      } catch { /* ignore */ }
+    }
+    
+    await sleep(500);
+    
+    // 验证封面是否上传成功
+    log('info', 'cover-upload', '验证封面上传结果…');
+    const verifyOk = await verifyCoverUploaded(win, log);
+    
+    if (verifyOk) {
+      log('info', 'cover-upload', '✅ 封面上传验证成功');
+      return true;
+    } else {
+      log('warn', 'cover-upload', '⚠️ 封面上传验证未通过，但继续发布流程');
+      return true; // 即使验证未通过也继续，避免阻塞发布
+    }
+    
+  } catch (err) {
+    log('error', 'cover-upload', '封面上传异常: ' + (err instanceof Error ? err.message : String(err)));
+    return false;
+  }
+}
+
+// === 辅助：滚动到封面设置区域（CDP 鼠标滚轮 + scrollIntoView 双保险）
+async function scrollToCoverSection(
+  win: BrowserWindow,
+  log: (level: any, stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  // 先尝试 scrollIntoView
+  const scrollScript = `
+    (function () {
+      var selectors = [
+        '.mycard-c48v6G',
+        '.content-upload-ksKds3',
+        '[class*="mycard"]',
+        '[class*="cover-upload"]',
+      ];
+      for (var s = 0; s < selectors.length; s++) {
+        try {
+          var el = document.querySelector(selectors[s]);
+          if (el) {
+            var rect = el.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              el.scrollIntoView({ behavior: 'auto', block: 'center' });
+              var r2 = el.getBoundingClientRect();
+              return {
+                found: true,
+                selector: selectors[s],
+                top: Math.round(r2.top),
+                left: Math.round(r2.left),
+                width: Math.round(r2.width),
+                height: Math.round(r2.height),
+                text: (el.innerText || '').slice(0, 40),
+              };
+            }
+          }
+        } catch (e) {}
+      }
+      // 文本匹配兜底
+      var allDivs = document.querySelectorAll('div, span');
+      for (var i = 0; i < allDivs.length; i++) {
+        var txt = (allDivs[i].innerText || '').trim();
+        if (txt.indexOf('点击上传封面图') !== -1 && txt.length < 100) {
+          var p = allDivs[i];
+          for (var d = 0; d < 8; d++) {
+            if (p.parentElement) {
+              p = p.parentElement;
+              var pr = p.getBoundingClientRect();
+              if (pr.width > 50 && pr.height > 30) {
+                p.scrollIntoView({ behavior: 'auto', block: 'center' });
+                var pr2 = p.getBoundingClientRect();
+                return {
+                  found: true,
+                  selector: 'text-match',
+                  top: Math.round(pr2.top),
+                  left: Math.round(pr2.left),
+                  width: Math.round(pr2.width),
+                  height: Math.round(pr2.height),
+                  text: txt.slice(0, 40),
+                };
+              }
+            }
+          }
+        }
+      }
+      return { found: false, reason: 'no-cover-section' };
+    })();
+  `;
+  
+  const scrollRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+    expression: scrollScript, returnByValue: true,
+  }).catch(() => null);
+  
+  const scrollVal = scrollRes?.result?.value;
+  log('info', 'cover-upload', '  scrollIntoView 结果: ' + (scrollVal ? JSON.stringify(scrollVal).slice(0, 200) : 'unknown'));
+  
+  if (!scrollVal || !scrollVal.found) {
+    return false;
+  }
+  
+  // 等待滚动完成
+  await sleep(500);
+  
+  // 检查元素是否在视口内，如果不在，用 CDP 鼠标滚轮辅助滚动
+  const checkVisibleScript = `
+    (function () {
+      var selectors = ['.mycard-c48v6G', '.content-upload-ksKds3', '[class*="mycard"]'];
+      for (var s = 0; s < selectors.length; s++) {
+        try {
+          var el = document.querySelector(selectors[s]);
+          if (el) {
+            var rect = el.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              var visible = rect.top >= 0 && rect.bottom <= window.innerHeight;
+              return {
+                visible: visible,
+                top: Math.round(rect.top),
+                bottom: Math.round(rect.bottom),
+                vh: window.innerHeight,
+                x: Math.round(rect.left + rect.width / 2),
+                y: Math.round(rect.top + rect.height / 2),
+              };
+            }
+          }
+        } catch (e) {}
+      }
+      return { visible: false, reason: 'not-found' };
+    })();
+  `;
+  
+  const visRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+    expression: checkVisibleScript, returnByValue: true,
+  }).catch(() => null);
+  
+  const visVal = visRes?.result?.value;
+  
+  if (visVal && visVal.visible) {
+    log('info', 'cover-upload', '  ✅ 封面区域已在视口内');
+    return true;
+  }
+  
+  // 如果不在视口内，尝试 CDP 鼠标滚轮滚动
+  log('info', 'cover-upload', '  封面区域不在视口内，尝试 CDP 鼠标滚轮滚动…');
+  
+  const viewportH = visVal?.vh || 800;
+  const elementTop = visVal?.top || 500;
+  
+  // 计算需要滚动的距离
+  const scrollDistance = elementTop > 0 ? elementTop - viewportH * 0.3 : elementTop;
+  
+  try {
+    // 发送鼠标滚轮事件（在视口中心位置滚动）
+    await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
+      type: 'mouseWheel',
+      x: Math.round(viewportH * 0.5),
+      y: Math.round(viewportH * 0.5),
+      deltaX: 0,
+      deltaY: scrollDistance,
+      wheelTicksX: 0,
+      wheelTicksY: Math.round(scrollDistance / 100),
+      accelerationRatioX: 0,
+      accelerationRatioY: 1,
+      hasPreciseScrollingDeltas: true,
+      canScroll: true,
+    });
+    
+    await sleep(500);
+    
+    // 再次检查
+    const visRes2: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+      expression: checkVisibleScript, returnByValue: true,
+    }).catch(() => null);
+    
+    const visVal2 = visRes2?.result?.value;
+    
+    if (visVal2 && visVal2.visible) {
+      log('info', 'cover-upload', '  ✅ CDP 滚轮滚动后，封面区域已在视口内');
+      return true;
+    }
+    
+    // 再尝试 PageDown 键
+    log('info', 'cover-upload', '  尝试 PageDown 键滚动…');
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      windowsVirtualKeyCode: 34,
+      code: 'PageDown',
+      key: 'PageDown',
+    });
+    await sleep(50);
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      windowsVirtualKeyCode: 34,
+      code: 'PageDown',
+      key: 'PageDown',
+    });
+    await sleep(500);
+    
+    return true; // 不管怎样，继续尝试
+  } catch (scrollErr) {
+    log('warn', 'cover-upload', '  CDP 滚动异常: ' + (scrollErr as Error).message);
+    return false;
+  }
+}
+
+// === 辅助：点击封面区域（用 CDP 真实鼠标事件）
+async function clickCoverArea(
+  win: BrowserWindow,
+  log: (level: any, stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  // 获取封面元素坐标
+  const getCoordsScript = `
+    (function () {
+      var selectors = [
+        '.mycard-c48v6G',
+        '.content-upload-ksKds3',
+        '.cover-Uudq5y',
+        '[class*="mycard"]',
+        '[class*="cover-upload"]',
+      ];
+      
+      for (var s = 0; s < selectors.length; s++) {
+        try {
+          var el = document.querySelector(selectors[s]);
+          if (el) {
+            var rect = el.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              return {
+                found: true,
+                selector: selectors[s],
+                x: Math.round(rect.left + rect.width / 2),
+                y: Math.round(rect.top + rect.height / 2),
+                x20: Math.round(rect.left + rect.width * 0.2),
+                x80: Math.round(rect.left + rect.width * 0.8),
+                y20: Math.round(rect.top + rect.height * 0.2),
+                y80: Math.round(rect.top + rect.height * 0.8),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+                text: (el.innerText || '').slice(0, 40),
+                cls: (el.className || '').slice(0, 60)
+              };
+            }
+          }
+        } catch (e) {}
+      }
+      
+      // 文本匹配兜底
+      var allDivs = document.querySelectorAll('div, span');
+      for (var i = 0; i < allDivs.length; i++) {
+        var txt = (allDivs[i].innerText || '').trim();
+        if (txt.indexOf('点击上传封面图') !== -1 && txt.length < 100) {
+          var p = allDivs[i];
+          for (var d = 0; d < 8; d++) {
+            if (p.parentElement) {
+              p = p.parentElement;
+              var pr = p.getBoundingClientRect();
+              if (pr.width > 50 && pr.height > 30) {
+                return {
+                  found: true,
+                  selector: 'text-match',
+                  x: Math.round(pr.left + pr.width / 2),
+                  y: Math.round(pr.top + pr.height / 2),
+                  x20: Math.round(pr.left + pr.width * 0.2),
+                  x80: Math.round(pr.left + pr.width * 0.8),
+                  y20: Math.round(pr.top + pr.height * 0.2),
+                  y80: Math.round(pr.top + pr.height * 0.8),
+                  width: Math.round(pr.width),
+                  height: Math.round(pr.height),
+                  text: txt.slice(0, 40),
+                };
+              }
+            }
+          }
+        }
+      }
+      
+      return { found: false, reason: 'no-click-target' };
+    })();
+  `;
+  
+  const coordsRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+    expression: getCoordsScript, returnByValue: true,
+  }).catch(() => null);
+  
+  const coordsVal = coordsRes?.result?.value;
+  log('info', 'cover-upload', '  点击坐标: ' + (coordsVal ? JSON.stringify(coordsVal).slice(0, 250) : 'unknown'));
+  
+  if (!coordsVal || !coordsVal.found) {
+    return false;
+  }
+  
+  // 尝试多个点击位置
+  const clickPoints = [
+    { x: coordsVal.x, y: coordsVal.y, desc: '中心' },
+    { x: coordsVal.x20, y: coordsVal.y20, desc: '左上' },
+    { x: coordsVal.x80, y: coordsVal.y80, desc: '右下' },
+    { x: coordsVal.x, y: coordsVal.y20, desc: '上中' },
+  ];
+  
+  for (let i = 0; i < clickPoints.length; i++) {
+    const pt = clickPoints[i];
+    log('info', 'cover-upload', '    尝试点击 ' + pt.desc + ' (' + pt.x + ', ' + pt.y + ')');
+    
+    try {
+      // 鼠标移动到目标位置
+      await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
+        type: 'mouseMoved', x: pt.x, y: pt.y,
+      });
+      await sleep(60);
+      
+      // 鼠标按下
+      await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
+        type: 'mousePressed', x: pt.x, y: pt.y, button: 'left', clickCount: 1,
+      });
+      await sleep(100);
+      
+      // 鼠标释放
+      await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
+        type: 'mouseReleased', x: pt.x, y: pt.y, button: 'left', clickCount: 1,
+      });
+      
+      await sleep(300);
+      
+      // 点击成功（至少我们发出了点击事件）
+      log('info', 'cover-upload', '    ✅ ' + pt.desc + ' 点击已发送');
+      return true;
+    } catch (clickErr) {
+      log('warn', 'cover-upload', '    ' + pt.desc + ' 点击异常: ' + (clickErr as Error).message);
+    }
+  }
+  
+  return false;
+}
+
+// === 辅助：点击封面区域 V2（优先点击 .cover-Uudq5y，JS click + CDP 鼠标双保险）
+async function clickCoverAreaV2(
+  win: BrowserWindow,
+  log: (level: any, stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  // 获取封面元素坐标（优先找 .cover-Uudq5y 和 clickable 元素）
+  const getCoordsScript = `
+    (function () {
+      // 优先级从高到低（用户确认：点击"点击上传封面图"才会触发弹窗）
+      var selectors = [
+        '.mycard-info-uBuPL9',              // "点击上传封面图" 文本（用户确认的点击目标）
+        '.mycard-info-text-span-qfhmNK',    // "选择封面" 文本（带图标的可点击元素）
+        '.addIcon-WtgoEN',                  // +号图标
+        '.cover-Uudq5y.clickable-TQePcx',   // 上传成功后的封面元素（带 clickable）
+        '.cover-Uudq5y',                    // 封面元素
+        '[class*="cover-"][class*="clickable"]',
+        '[class*="clickable-"][class*="cover"]',
+        '.mycard-c48v6G',                   // 卡片容器（兜底）
+        '[class*="mycard"]',
+        '[class*="addIcon"]',               // 任意 +号图标
+      ];
+      
+      for (var s = 0; s < selectors.length; s++) {
+        try {
+          var el = document.querySelector(selectors[s]);
+          if (el) {
+            var rect = el.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              return {
+                found: true,
+                selector: selectors[s],
+                x: Math.round(rect.left + rect.width / 2),
+                y: Math.round(rect.top + rect.height / 2),
+                x20: Math.round(rect.left + rect.width * 0.2),
+                x80: Math.round(rect.left + rect.width * 0.8),
+                y20: Math.round(rect.top + rect.height * 0.2),
+                y80: Math.round(rect.top + rect.height * 0.8),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+                text: (el.innerText || '').slice(0, 40),
+                cls: (el.className || '').slice(0, 80),
+                tagName: el.tagName
+              };
+            }
+          }
+        } catch (e) {}
+      }
+      
+      // 文本匹配兜底
+      var allDivs = document.querySelectorAll('div, span');
+      for (var i = 0; i < allDivs.length; i++) {
+        var txt = (allDivs[i].innerText || '').trim();
+        if (txt.indexOf('点击上传封面图') !== -1 && txt.length < 100) {
+          var p = allDivs[i];
+          for (var d = 0; d < 8; d++) {
+            if (p.parentElement) {
+              p = p.parentElement;
+              var pr = p.getBoundingClientRect();
+              if (pr.width > 50 && pr.height > 30) {
+                return {
+                  found: true,
+                  selector: 'text-match',
+                  x: Math.round(pr.left + pr.width / 2),
+                  y: Math.round(pr.top + pr.height / 2),
+                  x20: Math.round(pr.left + pr.width * 0.2),
+                  x80: Math.round(pr.left + pr.width * 0.8),
+                  y20: Math.round(pr.top + pr.height * 0.2),
+                  y80: Math.round(pr.top + pr.height * 0.8),
+                  width: Math.round(pr.width),
+                  height: Math.round(pr.height),
+                  text: txt.slice(0, 40),
+                  cls: (p.className || '').slice(0, 80),
+                  tagName: p.tagName
+                };
+              }
+            }
+          }
+        }
+      }
+      
+      return { found: false, reason: 'no-click-target' };
+    })();
+  `;
+  
+  const coordsRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+    expression: getCoordsScript, returnByValue: true,
+  }).catch(() => null);
+  
+  const coordsVal = coordsRes?.result?.value;
+  log('info', 'cover-upload', '  点击目标: ' + (coordsVal ? JSON.stringify(coordsVal).slice(0, 300) : 'unknown'));
+  
+  if (!coordsVal || !coordsVal.found) {
+    return false;
+  }
+  
+  // 方案A：CDP 鼠标事件（优先，因为真实鼠标事件能触发 React 合成事件）
+  log('info', 'cover-upload', '  [方案A] CDP 真实鼠标事件点击…');
+  
+  const clickPoints = [
+    { x: coordsVal.x, y: coordsVal.y, desc: '中心' },
+    { x: coordsVal.x20, y: coordsVal.y20, desc: '左上' },
+    { x: coordsVal.x80, y: coordsVal.y80, desc: '右下' },
+    { x: coordsVal.x, y: coordsVal.y20, desc: '上中' },
+    { x: coordsVal.x20, y: coordsVal.y, desc: '左中' },
+  ];
+  
+  for (let i = 0; i < clickPoints.length; i++) {
+    const pt = clickPoints[i];
+    log('info', 'cover-upload', '    尝试点击 ' + pt.desc + ' (' + pt.x + ', ' + pt.y + ')');
+    
+    try {
+      // 鼠标移动到目标位置（悬停效果，触发 mouseenter/mouseover）
+      await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
+        type: 'mouseMoved', x: pt.x, y: pt.y,
+      });
+      await sleep(100);
+      
+      // 鼠标按下
+      await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
+        type: 'mousePressed', x: pt.x, y: pt.y, button: 'left', clickCount: 1,
+      });
+      await sleep(150);
+      
+      // 鼠标释放
+      await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
+        type: 'mouseReleased', x: pt.x, y: pt.y, button: 'left', clickCount: 1,
+      });
+      
+      await sleep(200);
+      log('info', 'cover-upload', '    ✅ ' + pt.desc + ' CDP 点击已发送');
+      return true;
+    } catch (clickErr) {
+      log('warn', 'cover-upload', '    ' + pt.desc + ' 点击异常: ' + (clickErr as Error).message);
+    }
+  }
+  
+  // 方案B：JS click()（兜底）
+  log('info', 'cover-upload', '  [方案B] JS click() 兜底…');
+  
+  const jsClickScript = `
+    (function () {
+      var selectors = [
+         '.mycard-info-uBuPL9',
+         '.mycard-info-text-span-qfhmNK',
+         '.addIcon-WtgoEN',
+         '.cover-Uudq5y.clickable-TQePcx',
+         '.cover-Uudq5y',
+         '[class*="cover-"][class*="clickable"]',
+         '.mycard-c48v6G',
+       ];
+      for (var s = 0; s < selectors.length; s++) {
+        try {
+          var el = document.querySelector(selectors[s]);
+          if (el) {
+            var rect = el.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) continue;
+            
+            try {
+              el.click();
+              return { clicked: true, selector: selectors[s], method: 'click()' };
+            } catch (e1) {
+              try {
+                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                return { clicked: true, selector: selectors[s], method: 'MouseEvent' };
+              } catch (e2) {}
+            }
+          }
+        } catch (e) {}
+      }
+      return { clicked: false, reason: 'no-element' };
+    })();
+  `;
+  
+  const jsClickRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+    expression: jsClickScript, returnByValue: true,
+  }).catch(() => null);
+  
+  const jsClickVal = jsClickRes?.result?.value;
+  if (jsClickVal && jsClickVal.clicked) {
+    log('info', 'cover-upload', '  ✅ JS click() 成功 (' + jsClickVal.method + ', ' + jsClickVal.selector + ')');
+    return true;
+  }
+  
+  return false;
+}
+
+// === 辅助：生成"超级封面上传 patch"脚本
+// 核心思路：
+// 1. 拦截 HTMLInputElement.prototype.click()：当 file input 被点击时，
+//    直接通过 DataTransfer API 设置文件，不弹出文件选择对话框，
+//    然后触发 change/input 事件，让页面正常处理文件上传。
+// 2. 拦截 showOpenFilePicker()：直接返回我们的文件，处理 File System Access API。
+// 3. 使用 MutationObserver 监听 DOM 中新出现的 file input，立即设置文件。
+// 4. 在捕获阶段监听所有 click 事件，查找附近的 file input 并设置文件。
+// 5. 设置全局标记 __flowxCoverFileSet 表示文件已设置。
+function buildSuperCoverPatchScript(base64Data: string, fileName: string, mimeType: string): string {
+  // 转义文件名中的单引号和反斜杠
+  const safeFileName = fileName.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  
+  return `
+    (function() {
+      try {
+        // 如果已经设置过文件，直接返回成功
+        if (window.__flowxCoverFileSet) {
+          return { alreadyPatched: true, fileSet: true };
+        }
+        
+        // 标记已注入 patch
+        window.__flowxSuperPatched = true;
+        
+        // base64 转 Blob/File
+        function base64ToFile(base64, filename, type) {
+          try {
+            var binaryStr = atob(base64);
+            var len = binaryStr.length;
+            var bytes = new Uint8Array(len);
+            for (var i = 0; i < len; i++) {
+              bytes[i] = binaryStr.charCodeAt(i);
+            }
+            return new File([bytes], filename, { type: type });
+          } catch (e) {
+            window.__flowxCoverError = 'base64ToFile: ' + String(e);
+            return null;
+          }
+        }
+        
+        // 创建我们的封面文件
+        var coverFile = base64ToFile('${base64Data}', '${safeFileName}', '${mimeType}');
+        if (!coverFile) {
+          return { patched: false, error: 'failed-to-create-file' };
+        }
+        
+        // 检查 input 是否接受图片
+        function isImageInput(input) {
+          try {
+            if (!input || !input.accept) return true; // 无 accept 属性默认接受
+            var accept = input.accept || '';
+            return /image\\//i.test(accept) || accept === '' || accept === '*/*';
+          } catch (e) {
+            return true;
+          }
+        }
+        
+        // 设置文件到 input 的核心函数
+        function setFileToInput(input) {
+          try {
+            if (!input || input.tagName !== 'INPUT' || input.type !== 'file') {
+              return false;
+            }
+            if (!isImageInput(input)) {
+              return false;
+            }
+            if (input.files && input.files.length > 0 && input.files[0].name === coverFile.name) {
+              return true; // 已经设置过了
+            }
+            
+            // 使用 DataTransfer 创建 FileList
+            var files;
+            try {
+              var dt = new DataTransfer();
+              dt.items.add(coverFile);
+              files = dt.files;
+            } catch (dtErr) {
+              // 旧浏览器可能不支持 DataTransfer，尝试用 ClipboardEvent 构造
+              try {
+                var dt2 = new ClipboardEvent('').clipboardData || new DataTransfer();
+                dt2.items.add(coverFile);
+                files = dt2.files;
+              } catch (dt2Err) {
+                window.__flowxCoverError = 'DataTransfer: ' + String(dtErr) + ' | ' + String(dt2Err);
+                return false;
+              }
+            }
+            
+            // 尝试多种方式设置 input.files
+            var setFilesSuccess = false;
+            
+            // 方法1: Object.defineProperty 重定义 files 属性
+            try {
+              Object.defineProperty(input, 'files', {
+                value: files,
+                writable: true,
+                configurable: true,
+                enumerable: true,
+              });
+              setFilesSuccess = true;
+            } catch (defineErr) {}
+            
+            // 方法2: 尝试调用原型链上的 setter
+            if (!setFilesSuccess) {
+              try {
+                var proto = HTMLInputElement.prototype;
+                var desc = Object.getOwnPropertyDescriptor(proto, 'files');
+                if (desc && desc.set) {
+                  desc.set.call(input, files);
+                  setFilesSuccess = true;
+                }
+              } catch (setterErr) {}
+            }
+            
+            // 方法3: 直接赋值（某些环境下可能生效）
+            if (!setFilesSuccess) {
+              try {
+                input.files = files;
+                setFilesSuccess = true;
+              } catch (assignErr) {}
+            }
+            
+            if (!setFilesSuccess) {
+              window.__flowxCoverError = 'set-files: all methods failed';
+              return false;
+            }
+            
+            // 设置 value（有些框架会检查这个）
+            try {
+              Object.defineProperty(input, 'value', {
+                value: 'C:\\\\fakepath\\\\' + coverFile.name,
+                writable: true,
+                configurable: true,
+              });
+            } catch (valErr) {
+              try { input.value = 'C:\\\\fakepath\\\\' + coverFile.name; } catch (e) {}
+            }
+            
+            // 按正确顺序触发事件：先 input，再 change（React 合成事件需要这样）
+            try {
+              input.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+            } catch (e1) {}
+            try {
+              input.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+            } catch (e2) {}
+            
+            window.__flowxCoverFileSet = true;
+            window.__flowxCoverFileSetTime = Date.now();
+            window.__flowxInputClickCount = (window.__flowxInputClickCount || 0) + 1;
+            console.log('[flowx] ✅ 文件已设置到 input: ' + coverFile.name + ', size=' + coverFile.size);
+            return true;
+          } catch (e) {
+            window.__flowxCoverError = 'setFileToInput: ' + String(e);
+            return false;
+          }
+        }
+        
+        // 扫描并设置页面中已存在的所有图片 file input
+        function scanAndSetExistingInputs() {
+          try {
+            var inputs = document.querySelectorAll('input[type="file"]');
+            for (var i = 0; i < inputs.length; i++) {
+              if (isImageInput(inputs[i])) {
+                setFileToInput(inputs[i]);
+              }
+            }
+          } catch (e) {}
+        }
+        
+        // === Patch 1: 捕获阶段 mousedown/click 事件监听 ===
+        // 策略：在用户点击（或代码触发click）时，第一时间阻止文件对话框弹出，然后设置文件
+        if (!window.__flowxClickCapturePatched) {
+          // 处理点击的核心函数
+          function handleClickEvent(e) {
+            if (window.__flowxCoverFileSet) return;
+            
+            var target = e.target;
+            var inputsToTry = [];
+            
+            // 1. 如果点击的就是 file input 本身
+            if (target && target.tagName === 'INPUT' && target.type === 'file') {
+              inputsToTry.push(target);
+            }
+            
+            // 2. 如果点击的是 label，检查关联的 input
+            if (target && target.tagName === 'LABEL') {
+              try {
+                var forId = target.getAttribute('for');
+                if (forId) {
+                  var labeledInput = document.getElementById(forId);
+                  if (labeledInput && labeledInput.type === 'file') {
+                    inputsToTry.push(labeledInput);
+                  }
+                }
+                // label内部也可能有input
+                var innerInputs = target.querySelectorAll('input[type="file"]');
+                for (var ii = 0; ii < innerInputs.length; ii++) {
+                  inputsToTry.push(innerInputs[ii]);
+                }
+              } catch (err) {}
+            }
+            
+            // 3. 向上查找父元素，收集内部的所有 file input
+            var el = target;
+            for (var d = 0; d < 10 && el; d++) {
+              try {
+                var found = el.querySelectorAll ? el.querySelectorAll('input[type="file"]') : [];
+                for (var i = 0; i < found.length; i++) {
+                  inputsToTry.push(found[i]);
+                }
+              } catch (qErr) {}
+              el = el.parentElement;
+            }
+            
+            // 检查是否有图片类型的input需要处理
+            var hasImageInput = false;
+            var tried = {};
+            var imageInputs = [];
+            
+            for (var j = 0; j < inputsToTry.length; j++) {
+              var inp = inputsToTry[j];
+              if (!inp || tried[inp]) continue;
+              tried[inp] = true;
+              
+              if (isImageInput(inp)) {
+                hasImageInput = true;
+                imageInputs.push(inp);
+              }
+            }
+            
+            // 如果有图片input，阻止默认行为（弹出文件对话框）
+            if (hasImageInput) {
+              try { e.preventDefault(); } catch (pe) {}
+              try { e.stopPropagation(); } catch (se) {} // 暂时不阻止传播，让页面UI更新
+              window.__flowxInputClickCount = (window.__flowxInputClickCount || 0) + 1;
+              console.log('[flowx] 拦截文件选择，准备设置封面');
+              
+              // 立即设置文件，然后再延迟设置几次确保成功
+              for (var k = 0; k < imageInputs.length; k++) {
+                (function(input) {
+                  setFileToInput(input);
+                  setTimeout(function() { setFileToInput(input); }, 0);
+                  setTimeout(function() { setFileToInput(input); }, 20);
+                  setTimeout(function() { setFileToInput(input); }, 100);
+                  setTimeout(function() { setFileToInput(input); }, 300);
+                })(imageInputs[k]);
+              }
+            }
+          }
+          
+          // 在 pointerdown/mousedown 阶段就拦截，更早阻止对话框
+          document.addEventListener('pointerdown', handleClickEvent, true);
+          document.addEventListener('mousedown', handleClickEvent, true);
+          // click阶段也拦截（双保险）
+          document.addEventListener('click', handleClickEvent, true);
+          
+          window.__flowxClickCapturePatched = true;
+        }
+        
+        // === Patch 2: 拦截 HTMLInputElement.prototype.click() 方法 ===
+        // 处理代码直接调用 input.click() 的情况
+        if (!window.__flowxClickPatched) {
+          var originalClick = HTMLInputElement.prototype.click;
+          HTMLInputElement.prototype.click = function() {
+            if (this.type && this.type.toLowerCase() === 'file') {
+              if (isImageInput(this)) {
+                window.__flowxInputClickCount = (window.__flowxInputClickCount || 0) + 1;
+                console.log('[flowx] input.click() called (code), setting file directly');
+                
+                // 直接设置文件，不调用原始click（避免弹出对话框）
+                setFileToInput(this);
+                setTimeout((function(input) { 
+                  return function() { setFileToInput(input); };
+                })(this), 0);
+                setTimeout((function(input) { 
+                  return function() { setFileToInput(input); };
+                })(this), 50);
+                
+                // 触发一个合成的click事件，让页面的监听器收到
+                try {
+                  this.dispatchEvent(new MouseEvent('click', {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window,
+                  }));
+                } catch (dispatchErr) {}
+                
+                return; // 不调用原始click
+              }
+            }
+            // 非图片input，调用原始方法
+            return originalClick.apply(this, arguments);
+          };
+          window.__flowxClickPatched = true;
+        }
+        
+        // === Patch 3: MutationObserver 监听 DOM 变化，捕获动态创建的 file input ===
+        if (!window.__flowxObserverPatched) {
+          function scanNode(node) {
+            if (!node || node.nodeType !== 1) return;
+            try {
+              if (node.tagName === 'INPUT' && node.type === 'file') {
+                if (isImageInput(node) && !window.__flowxCoverFileSet) {
+                  setFileToInput(node);
+                }
+              }
+              // 递归扫描子节点
+              if (node.children && node.children.length) {
+                for (var i = 0; i < node.children.length; i++) {
+                  scanNode(node.children[i]);
+                }
+              }
+              // 扫描 shadow DOM
+              try {
+                if (node.shadowRoot) {
+                  scanNode(node.shadowRoot);
+                }
+              } catch (se) {}
+            } catch (e) {}
+          }
+          
+          var observer = new MutationObserver(function(mutations) {
+            if (window.__flowxCoverFileSet) return;
+            for (var mi = 0; mi < mutations.length; mi++) {
+              var added = mutations[mi].addedNodes;
+              if (added && added.length) {
+                for (var ni = 0; ni < added.length; ni++) {
+                  scanNode(added[ni]);
+                }
+              }
+            }
+          });
+          
+          try {
+            observer.observe(document.documentElement, {
+              childList: true,
+              subtree: true,
+            });
+          } catch (obsErr) {}
+          
+          window.__flowxObserverPatched = true;
+        }
+        
+        // === Patch 4: showOpenFilePicker (File System Access API) ===
+        if (!window.__flowxPickerPatched) {
+          if (typeof window.showOpenFilePicker === 'function') {
+            window.__flowxOriginalPicker = window.showOpenFilePicker.bind(window);
+            
+            function createFakeFileHandle(file) {
+              return {
+                kind: 'file',
+                name: file.name,
+                getFile: function() {
+                  return Promise.resolve(file);
+                },
+                createWritable: function() {
+                  return Promise.reject(new Error('NotSupported'));
+                },
+                isSameEntry: function(other) {
+                  return Promise.resolve(other === this);
+                },
+                __flowxFakeHandle: true
+              };
+            }
+            
+            window.showOpenFilePicker = function(options) {
+              window.__flowxPickerCalled = true;
+              window.__flowxPickerCallCount = (window.__flowxPickerCallCount || 0) + 1;
+              console.log('[flowx] showOpenFilePicker called');
+              
+              // 检查是否请求图片
+              var types = (options && options.types) || [];
+              var acceptsImages = types.length === 0;
+              for (var t = 0; t < types.length; t++) {
+                var accept = types[t].accept || {};
+                for (var mime in accept) {
+                  if (/^image\\//i.test(mime)) {
+                    acceptsImages = true;
+                  }
+                }
+              }
+              
+              if (acceptsImages || types.length === 0) {
+                window.__flowxCoverFileSet = true;
+                window.__flowxCoverFileSetTime = Date.now();
+                console.log('[flowx] ✅ 通过 showOpenFilePicker 返回文件');
+                return Promise.resolve([createFakeFileHandle(coverFile)]);
+              }
+              
+              return window.__flowxOriginalPicker(options);
+            };
+            
+            window.__flowxPickerPatched = true;
+          } else {
+            window.__flowxPickerPatched = true;
+          }
+        }
+        
+        // 立即扫描一次已有 input
+        scanAndSetExistingInputs();
+        
+        return {
+          patched: true,
+          hasClick: true,
+          hasPicker: typeof window.showOpenFilePicker === 'function',
+          fileName: '${safeFileName}',
+        };
+      } catch (e) {
+        window.__flowxCoverError = 'patch: ' + String(e);
+        return { patched: false, error: String(e) };
+      }
+    })();
+  `;
+}
+
+// === 辅助：生成 showOpenFilePicker monkey patch 脚本
+// 抖音文章封面上传可能使用 File System Access API（showOpenFilePicker），
+// 而不是传统的 <input type="file">，所以找不到 input 元素。
+// 我们重写 showOpenFilePicker，让它直接返回我们的文件。
+function buildShowOpenFilePickerPatch(base64Data: string, fileName: string, mimeType: string): string {
+  // 注意：base64Data 可能很长，但对于封面图来说应该没问题
+  return `
+    (function() {
+      try {
+        if (window.__flowxPickerPatched) {
+          return { alreadyPatched: true };
+        }
+        
+        // 检查是否有 showOpenFilePicker
+        var hasPicker = typeof window.showOpenFilePicker === 'function';
+        if (!hasPicker) {
+          window.__flowxPickerPatched = true;
+          return { hasPicker: false };
+        }
+        
+        // 保存原始方法
+        var originalPicker = window.showOpenFilePicker.bind(window);
+        window.__flowxOriginalPicker = originalPicker;
+        
+        // base64 转 File 对象
+        function base64ToFile(base64, filename, type) {
+          var binaryStr = atob(base64);
+          var len = binaryStr.length;
+          var bytes = new Uint8Array(len);
+          for (var i = 0; i < len; i++) {
+            bytes[i] = binaryStr.charCodeAt(i);
+          }
+          return new File([bytes], filename, { type: type });
+        }
+        
+        // 创建假的 FileSystemFileHandle
+        function createFakeFileHandle(file) {
+          return {
+            kind: 'file',
+            name: file.name,
+            getFile: function() {
+              return Promise.resolve(file);
+            },
+            createWritable: function() {
+              return Promise.reject(new Error('NotSupported'));
+            },
+            isSameEntry: function(other) {
+              return Promise.resolve(other === this);
+            },
+            __flowxFakeHandle: true
+          };
+        }
+        
+        // 创建我们的假文件和假 handle
+        var fakeFile = base64ToFile('${base64Data}', '${fileName.replace(/'/g, "\\'")}', '${mimeType}');
+        var fakeHandle = createFakeFileHandle(fakeFile);
+        
+        // 重写 showOpenFilePicker
+        window.showOpenFilePicker = function(options) {
+          window.__flowxPickerCalled = true;
+          window.__flowxPickerOptions = options || null;
+          window.__flowxPickerCallCount = (window.__flowxPickerCallCount || 0) + 1;
+          console.log('[flowx] showOpenFilePicker called #' + window.__flowxPickerCallCount);
+          return Promise.resolve([fakeHandle]);
+        };
+        
+        // 也重写 showSaveFilePicker（防止意外调用）
+        if (typeof window.showSaveFilePicker === 'function') {
+          window.__flowxOriginalSavePicker = window.showSaveFilePicker.bind(window);
+          window.showSaveFilePicker = function() {
+            return Promise.reject(new Error('AbortError: User aborted'));
+          };
+        }
+        
+        // 重写 showDirectoryPicker
+        if (typeof window.showDirectoryPicker === 'function') {
+          window.__flowxOriginalDirPicker = window.showDirectoryPicker.bind(window);
+          window.showDirectoryPicker = function() {
+            return Promise.reject(new Error('AbortError: User aborted'));
+          };
+        }
+        
+        window.__flowxPickerPatched = true;
+        return { hasPicker: true, patched: true, fileName: '${fileName.replace(/'/g, "\\'")}' };
+      } catch (e) {
+        return { error: String(e) };
+      }
+    })();
+  `;
+}
+
+// === 辅助：快速在 frame 中查找并设置文件（用于 fileChooserOpened 触发时立即调用）
+// 高频轮询 + 递归 shadow DOM 遍历
+async function setFileInFrameQuick(
+  win: BrowserWindow,
+  coverFile: string,
+  frameId: string,
+  frameContextMap: Map<string, number>,
+  log: (level: any, stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  // 先尝试获取 contextId
+  let contextId = frameContextMap.get(frameId);
+  if (!contextId) {
+    try {
+      const isoResult: any = await win.webContents.debugger.sendCommand('Page.createIsolatedWorld', {
+        frameId: frameId,
+        worldName: 'flowx-quick-' + Date.now(),
+        grantUniversalAccess: true,
+      }).catch(() => null);
+      if (isoResult && isoResult.executionContextId) {
+        contextId = isoResult.executionContextId;
+      }
+    } catch { /* ignore */ }
+  }
+  
+  if (!contextId) {
+    log('info', 'cover-upload', '    [quick] 无法获取 contextId，快速方案失败');
+    return false;
+  }
+  
+  log('info', 'cover-upload', '    [quick] contextId=' + contextId + '，开始高频轮询…');
+  
+  // 高频轮询 20 次，每次 30ms
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      // 递归查找所有 input[type=file]，包括 shadow DOM
+      const findExpr = `
+        (function() {
+          var allInputs = [];
+          
+          function scanElement(el) {
+            if (!el) return;
+            if (el.nodeType !== 1) return;
+            
+            // 检查当前元素
+            if (el.tagName && el.tagName.toLowerCase() === 'input' && 
+                el.type && el.type.toLowerCase() === 'file') {
+              allInputs.push(el);
+            }
+            
+            // 遍历子元素
+            if (el.children && el.children.length) {
+              for (var i = 0; i < el.children.length; i++) {
+                scanElement(el.children[i]);
+              }
+            }
+            
+            // 遍历 shadow DOM
+            try {
+              if (el.shadowRoot) {
+                scanElement(el.shadowRoot);
+              }
+            } catch(e) {}
+          }
+          
+          scanElement(document.documentElement);
+          
+          return { count: allInputs.length, inputs: allInputs.map(function(inp, i) {
+            return {
+              index: i,
+              accept: inp.accept || '',
+              className: inp.className || '',
+              id: inp.id || '',
+            };
+          }) };
+        })();
+      `;
+      
+      const evalResult: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+        expression: findExpr,
+        contextId: contextId,
+        returnByValue: true,
+      });
+      
+      const val = evalResult?.result?.value;
+      if (val && val.count > 0) {
+        log('info', 'cover-upload', '    [quick] 第' + (attempt + 1) + '次找到 ' + val.count + ' 个 input');
+        
+        // 获取最后一个 input 的 objectId
+        const getInputExpr = `
+          (function() {
+            var allInputs = [];
+            function scanElement(el) {
+              if (!el || el.nodeType !== 1) return;
+              if (el.tagName && el.tagName.toLowerCase() === 'input' && el.type === 'file') {
+                allInputs.push(el);
+              }
+              if (el.children && el.children.length) {
+                for (var i = 0; i < el.children.length; i++) {
+                  scanElement(el.children[i]);
+                }
+              }
+              try { if (el.shadowRoot) scanElement(el.shadowRoot); } catch(e) {}
+            }
+            scanElement(document.documentElement);
+            if (allInputs.length > 0) return allInputs[allInputs.length - 1];
+            return null;
+          })();
+        `;
+        
+        const objResult: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+          expression: getInputExpr,
+          contextId: contextId,
+          returnByValue: false,
+        });
+        
+        const objectId = objResult?.result?.objectId;
+        if (objectId) {
+          try {
+            await win.webContents.debugger.sendCommand('DOM.setFileInputFiles', {
+              objectId: objectId,
+              files: [coverFile],
+            });
+            log('info', 'cover-upload', '    [quick] ✅ 设置文件成功！');
+            
+            // 触发 change/input 事件
+            const triggerExpr = `
+              (function() {
+                var allInputs = [];
+                function scanElement(el) {
+                  if (!el || el.nodeType !== 1) return;
+                  if (el.tagName && el.tagName.toLowerCase() === 'input' && el.type === 'file') {
+                    allInputs.push(el);
+                  }
+                  if (el.children && el.children.length) {
+                    for (var i = 0; i < el.children.length; i++) {
+                      scanElement(el.children[i]);
+                    }
+                  }
+                  try { if (el.shadowRoot) scanElement(el.shadowRoot); } catch(e) {}
+                }
+                scanElement(document.documentElement);
+                for (var i = 0; i < allInputs.length; i++) {
+                  allInputs[i].dispatchEvent(new Event('change', { bubbles: true }));
+                  allInputs[i].dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                return allInputs.length;
+              })();
+            `;
+            
+            await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+              expression: triggerExpr,
+              contextId: contextId,
+              returnByValue: true,
+            });
+            
+            return true;
+          } catch (setErr) {
+            log('info', 'cover-upload', '    [quick] 设置失败: ' + (setErr as Error).message);
+          }
+        }
+        break;
+      }
+    } catch {
+      // 继续尝试
+    }
+    
+    await new Promise(r => setTimeout(r, 30));
+  }
+  
+  log('info', 'cover-upload', '    [quick] 20次轮询未找到 input');
+  return false;
+}
+
+// === 辅助：在指定 frame 中查找 file input 并设置文件
+// 使用 Runtime executionContext 方式，直接在 frame 的 JS 上下文中运行代码
+async function setFileInFrame(
+  win: BrowserWindow,
+  coverFile: string,
+  frameId: string | undefined,
+  frameContextMap: Map<string, number>,
+  log: (level: any, stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  if (!frameId) return false;
+  
+  log('info', 'cover-upload', '    [frame方案] 在 frameId=' + frameId.slice(0, 20) + '... 中查找 input');
+  log('info', 'cover-upload', '    [frame方案] 已有 ' + frameContextMap.size + ' 个 frame->context 映射');
+  
+  try {
+    // 方案A：用 Runtime.evaluate + contextId 在 frame 上下文中查找 input
+    let contextId = frameContextMap.get(frameId);
+    
+    // 如果没有从事件追踪中拿到 contextId，尝试用 createIsolatedWorld 获取
+    if (!contextId) {
+      try {
+        const isolatedResult: any = await win.webContents.debugger.sendCommand('Page.createIsolatedWorld', {
+          frameId: frameId,
+          worldName: 'flowx-cover-upload',
+          grantUniversalAccess: true,
+        }).catch(() => null);
+        
+        if (isolatedResult && isolatedResult.executionContextId) {
+          contextId = isolatedResult.executionContextId;
+          log('info', 'cover-upload', '    [frame方案] 通过 createIsolatedWorld 获取 contextId=' + contextId);
+        }
+      } catch (isoErr) {
+        log('info', 'cover-upload', '    [frame方案] createIsolatedWorld 失败: ' + (isoErr as Error).message);
+      }
+    }
+    
+    if (contextId) {
+      log('info', 'cover-upload', '    [frame方案] contextId=' + contextId + '，尝试在 frame 上下文中查找…');
+      
+      try {
+        // 在 frame 上下文中查找所有 file input
+        const findInputExpr = `
+          (function() {
+            var inputs = document.querySelectorAll('input[type="file"]');
+            var result = { count: inputs.length, inputs: [] };
+            for (var i = 0; i < inputs.length; i++) {
+              result.inputs.push({
+                index: i,
+                accept: inputs[i].accept || '',
+                className: inputs[i].className || '',
+                visible: inputs[i].offsetWidth > 0 && inputs[i].offsetHeight > 0,
+              });
+            }
+            return result;
+          })();
+        `;
+        
+        const evalResult: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+          expression: findInputExpr,
+          contextId: contextId,
+          returnByValue: true,
+        });
+        
+        const evalVal = evalResult?.result?.value;
+        log('info', 'cover-upload', '    [frame方案] frame上下文中找到 ' + 
+            (evalVal?.count || 0) + ' 个 input: ' + JSON.stringify(evalVal?.inputs || []).slice(0, 200));
+        
+        if (evalVal && evalVal.count > 0) {
+          // 找到 input 了！现在获取最后一个 input 的 objectId 并设置文件
+          const getInputExpr = `
+            (function() {
+              var inputs = document.querySelectorAll('input[type="file"]');
+              if (inputs.length > 0) return inputs[inputs.length - 1];
+              return null;
+            })();
+          `;
+          
+          const objResult: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+            expression: getInputExpr,
+            contextId: contextId,
+            returnByValue: false,
+          });
+          
+          const objectId = objResult?.result?.objectId;
+          if (objectId) {
+            log('info', 'cover-upload', '    [frame方案] 获得 input 的 objectId=' + objectId.slice(0, 30) + '...');
+            try {
+              await win.webContents.debugger.sendCommand('DOM.setFileInputFiles', {
+                objectId: objectId,
+                files: [coverFile],
+              });
+              log('info', 'cover-upload', '    [frame方案] ✅ 设置文件成功');
+              
+              // 触发 change/input 事件
+              const triggerExpr = `
+                (function() {
+                  var inputs = document.querySelectorAll('input[type="file"]');
+                  for (var i = 0; i < inputs.length; i++) {
+                    if (inputs[i].files && inputs[i].files.length > 0) {
+                      inputs[i].dispatchEvent(new Event('change', { bubbles: true }));
+                      inputs[i].dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                  }
+                  return true;
+                })();
+              `;
+              
+              await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+                expression: triggerExpr,
+                contextId: contextId,
+                returnByValue: true,
+              });
+              
+              return true;
+            } catch (setErr) {
+              log('info', 'cover-upload', '    [frame方案] 设置文件失败: ' + (setErr as Error).message);
+            }
+          }
+        }
+      } catch (evalErr) {
+        log('info', 'cover-upload', '    [frame方案] contextId 方案失败: ' + (evalErr as Error).message);
+      }
+    }
+    
+    // 方案B：DOM.getDocument + frameId（可能不支持 frameId 参数，但试试）
+    try {
+      await sleep(200);
+      
+      const docResult: any = await win.webContents.debugger.sendCommand('DOM.getDocument', {
+        depth: -1,
+        pierce: true,
+        frameId: frameId,
+      } as any).catch(() => null);
+      
+      if (docResult && docResult.root) {
+        const allNodes: any[] = [];
+        const walk = (n: any) => {
+          if (!n) return;
+          allNodes.push(n);
+          if (n.children) n.children.forEach(walk);
+          if (n.shadowRoots) n.shadowRoots.forEach(walk);
+          if (n.templateContent) walk(n.templateContent);
+          if (n.contentDocument) walk(n.contentDocument);
+        };
+        walk(docResult.root);
+        
+        const fileInputs: Array<{ nodeId: number; accept: string; className: string }> = [];
+        for (const n of allNodes) {
+          if (!n || !n.attributes) continue;
+          const nn = (n.nodeName || '').toLowerCase();
+          if (nn !== 'input') continue;
+          let hasFile = false;
+          let acc = '';
+          let cls = '';
+          for (let i = 0; i < n.attributes.length; i += 2) {
+            if (n.attributes[i] === 'type' && n.attributes[i + 1] === 'file') hasFile = true;
+            if (n.attributes[i] === 'accept') acc = n.attributes[i + 1] || '';
+            if (n.attributes[i] === 'class') cls = n.attributes[i + 1] || '';
+          }
+          if (hasFile) fileInputs.push({ nodeId: n.nodeId, accept: acc, className: cls });
+        }
+        
+        log('info', 'cover-upload', '    [frame方案] DOM.getDocument(frameId) 找到 ' + fileInputs.length + ' 个 file input');
+        
+        for (const fi of fileInputs) {
+          try {
+            await win.webContents.debugger.sendCommand('DOM.setFileInputFiles', {
+              nodeId: fi.nodeId,
+              files: [coverFile],
+            });
+            log('info', 'cover-upload', '    [frame方案] ✅ 设置文件成功 (nodeId=' + fi.nodeId + ')');
+            return true;
+          } catch (setErr) {
+            log('info', 'cover-upload', '    [frame方案] 设置失败 nodeId=' + fi.nodeId + ': ' + (setErr as Error).message);
+          }
+        }
+      }
+    } catch (e) {
+      log('info', 'cover-upload', '    [frame方案] DOM.getDocument(frameId) 失败: ' + (e as Error).message);
+    }
+    
+    // 方案C：用 Runtime.evaluate 在主文档中尝试访问 iframe（同源的话可能可以）
+    try {
+      const iframeScript = `
+        (function () {
+          var iframes = document.querySelectorAll('iframe');
+          for (var i = 0; i < iframes.length; i++) {
+            try {
+              var idoc = iframes[i].contentDocument || (iframes[i].contentWindow && iframes[i].contentWindow.document);
+              if (idoc) {
+                var inputs = idoc.querySelectorAll('input[type="file"]');
+                if (inputs.length > 0) {
+                  return { found: true, count: inputs.length, frameIndex: i, src: iframes[i].src.slice(0, 80) };
+                }
+              }
+            } catch (e) {
+              // 跨域访问失败，正常
+            }
+          }
+          return { found: false, iframeCount: iframes.length };
+        })();
+      `;
+      
+      const iframeRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+        expression: iframeScript, returnByValue: true,
+      }).catch(() => null);
+      
+      const iframeVal = iframeRes?.result?.value;
+      log('info', 'cover-upload', '    [frame方案] 同源iframe检查: ' + (iframeVal ? JSON.stringify(iframeVal) : 'unknown'));
+      
+      if (iframeVal && iframeVal.found) {
+        const setScript = `
+          (function () {
+            var iframes = document.querySelectorAll('iframe');
+            for (var i = 0; i < iframes.length; i++) {
+              try {
+                var idoc = iframes[i].contentDocument || (iframes[i].contentWindow && iframes[i].contentWindow.document);
+                if (idoc) {
+                  var inputs = idoc.querySelectorAll('input[type="file"]');
+                  if (inputs.length > 0) {
+                    return inputs[inputs.length - 1];
+                  }
+                }
+              } catch (e) {}
+            }
+            return null;
+          })();
+        `;
+        
+        const setRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+          expression: setScript,
+          returnByValue: false,
+        }).catch(() => null);
+        
+        const objectId = setRes?.result?.objectId;
+        if (objectId) {
+          log('info', 'cover-upload', '    [frame方案] 获得同源 iframe input 的 objectId=' + objectId.slice(0, 24) + '...');
+          try {
+            await win.webContents.debugger.sendCommand('DOM.setFileInputFiles', {
+              objectId: objectId,
+              files: [coverFile],
+            });
+            log('info', 'cover-upload', '    [frame方案] ✅ 同源iframe 设置文件成功');
+            return true;
+          } catch (setErr) {
+            log('info', 'cover-upload', '    [frame方案] 同源iframe 设置失败: ' + (setErr as Error).message);
+          }
+        }
+      }
+    } catch (e) {
+      log('info', 'cover-upload', '    [frame方案] 同源iframe方案异常: ' + (e as Error).message);
+    }
+    
+    return false;
+  } catch (e) {
+    log('warn', 'cover-upload', '    [frame方案] 异常: ' + (e as Error).message);
+    return false;
+  }
+}
+
+// === 辅助：快速注入封面文件（仅 DOM.getDocument 一种策略，用于高频轮询）
+async function injectCoverFileQuick(
+  win: BrowserWindow,
+  coverFile: string,
+  log: (level: any, stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  try {
+    const docResult: any = await win.webContents.debugger.sendCommand('DOM.getDocument', { 
+      depth: -1, 
+      pierce: true 
+    }).catch(() => null);
+    
+    if (!docResult || !docResult.root) return false;
+    
+    const allNodes: any[] = [];
+    const walk = (n: any) => {
+      if (!n) return;
+      allNodes.push(n);
+      if (n.children) n.children.forEach(walk);
+      if (n.shadowRoots) n.shadowRoots.forEach(walk);
+      if (n.templateContent) walk(n.templateContent);
+      if (n.contentDocument) walk(n.contentDocument);
+    };
+    walk(docResult.root);
+    
+    const fileInputs: Array<{ nodeId: number; accept: string }> = [];
+    for (const n of allNodes) {
+      if (!n || !n.attributes) continue;
+      const nn = (n.nodeName || '').toLowerCase();
+      if (nn !== 'input') continue;
+      let hasFile = false;
+      let acc = '';
+      for (let i = 0; i < n.attributes.length; i += 2) {
+        if (n.attributes[i] === 'type' && n.attributes[i + 1] === 'file') hasFile = true;
+        if (n.attributes[i] === 'accept') acc = n.attributes[i + 1] || '';
+      }
+      if (hasFile) fileInputs.push({ nodeId: n.nodeId, accept: acc });
+    }
+    
+    if (fileInputs.length === 0) {
+      log('info', 'cover-upload', '    快速查找: 0 个 file input');
+      return false;
+    }
+    
+    log('info', 'cover-upload', '    快速查找: 找到 ' + fileInputs.length + ' 个 file input');
+    
+    // 优先选 accept 含 image 的
+    fileInputs.sort((a, b) => {
+      const aImg = /image\//i.test(a.accept) ? 1 : 0;
+      const bImg = /image\//i.test(b.accept) ? 1 : 0;
+      return bImg - aImg;
+    });
+    
+    for (const fi of fileInputs) {
+      try {
+        await win.webContents.debugger.sendCommand('DOM.setFileInputFiles', {
+          nodeId: fi.nodeId,
+          files: [coverFile],
+        });
+        log('info', 'cover-upload', '    ✅ 快速注入成功 (nodeId=' + fi.nodeId + ')');
+        return true;
+      } catch { /* 继续试下一个 */ }
+    }
+    
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// === 辅助：注入封面文件（多种 CDP 方式）
+async function injectCoverFile(
+  win: BrowserWindow,
+  coverFile: string,
+  log: (level: any, stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  // 工具函数：注入文件并触发事件
+  const tryInject = async (nodeId: number | undefined, objectId: string | undefined, source: string): Promise<boolean> => {
+    try {
+      const params: Record<string, unknown> = { files: [coverFile] };
+      if (nodeId !== undefined && nodeId !== null) {
+        params.nodeId = nodeId;
+        log('info', 'cover-upload', '    [' + source + '] 以 nodeId=' + nodeId + ' 注入文件…');
+      } else if (objectId !== undefined) {
+        params.objectId = objectId;
+        log('info', 'cover-upload', '    [' + source + '] 以 objectId=' + objectId.slice(0, 20) + '... 注入文件…');
+      } else {
+        return false;
+      }
+      
+      await win.webContents.debugger.sendCommand('DOM.setFileInputFiles', params);
+      log('info', 'cover-upload', '    ✅ [' + source + '] 文件注入成功');
+      
+      // 触发 change 和 input 事件
+      try {
+        const evtScript = `
+          (function () {
+            try {
+              var count = 0;
+              var inputs = document.querySelectorAll('input[type="file"]');
+              for (var i = 0; i < inputs.length; i++) {
+                if (inputs[i].files && inputs[i].files.length > 0) {
+                  try { inputs[i].dispatchEvent(new Event('change', { bubbles: true })); } catch(e1) {}
+                  try { inputs[i].dispatchEvent(new Event('input', { bubbles: true })); } catch(e2) {}
+                  count++;
+                }
+              }
+              // 也遍历 shadow DOM
+              function scanShadow(root) {
+                if (!root) return;
+                try {
+                  var all = root.querySelectorAll('*');
+                  for (var j = 0; j < all.length; j++) {
+                    try {
+                      if (all[j].shadowRoot) {
+                        var sInputs = all[j].shadowRoot.querySelectorAll('input[type="file"]');
+                        for (var k = 0; k < sInputs.length; k++) {
+                          if (sInputs[k].files && sInputs[k].files.length > 0) {
+                            try { sInputs[k].dispatchEvent(new Event('change', { bubbles: true })); } catch(e3) {}
+                            try { sInputs[k].dispatchEvent(new Event('input', { bubbles: true })); } catch(e4) {}
+                            count++;
+                          }
+                        }
+                        scanShadow(all[j].shadowRoot);
+                      }
+                    } catch(e) {}
+                  }
+                } catch(e) {}
+              }
+              scanShadow(document.documentElement);
+              return { triggered: count };
+            } catch (e) { return { error: String(e) }; }
+          })();
+        `;
+        const evtRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+          expression: evtScript, returnByValue: true,
+        }).catch(() => null);
+        
+        const evtVal = evtRes?.result?.value;
+        log('info', 'cover-upload', '    [' + source + '] 事件触发: ' + (evtVal ? JSON.stringify(evtVal) : 'unknown'));
+      } catch (evtErr) {
+        log('warn', 'cover-upload', '    [' + source + '] 事件触发异常: ' + (evtErr as Error).message);
+      }
+      
+      await sleep(1000);
+      return true;
+    } catch (e) {
+      log('warn', 'cover-upload', '    [' + source + '] 注入失败: ' + (e as Error).message);
+      return false;
+    }
+  };
+  
+  // 策略1：DOM.getDocument(pierce:true) + 递归遍历（含 Shadow DOM + iframe contentDocument）
+  try {
+    log('info', 'cover-upload', '  [策略1] DOM.getDocument 递归遍历（pierce=true）…');
+    const docResult: any = await win.webContents.debugger.sendCommand('DOM.getDocument', { depth: -1, pierce: true }).catch(() => null);
+    
+    if (docResult && docResult.root) {
+      const allNodes: any[] = [];
+      const walk = (n: any) => {
+        if (!n) return;
+        allNodes.push(n);
+        if (n.children) n.children.forEach(walk);
+        if (n.shadowRoots) n.shadowRoots.forEach(walk);
+        if (n.templateContent) walk(n.templateContent);
+        if (n.contentDocument) walk(n.contentDocument);
+      };
+      walk(docResult.root);
+      
+      log('info', 'cover-upload', '    遍历 ' + allNodes.length + ' 个节点，查找 file input…');
+      
+      const fileInputs: Array<{ nodeId: number; accept: string }> = [];
+      for (const n of allNodes) {
+        if (!n || !n.attributes) continue;
+        const nn = (n.nodeName || '').toLowerCase();
+        if (nn !== 'input') continue;
+        let hasFile = false;
+        let acc = '';
+        for (let i = 0; i < n.attributes.length; i += 2) {
+          if (n.attributes[i] === 'type' && n.attributes[i + 1] === 'file') hasFile = true;
+          if (n.attributes[i] === 'accept') acc = n.attributes[i + 1] || '';
+        }
+        if (hasFile) fileInputs.push({ nodeId: n.nodeId, accept: acc });
+      }
+      
+      log('info', 'cover-upload', '    找到 ' + fileInputs.length + ' 个 file input');
+      
+      // 优先选 accept 含 image 的
+      fileInputs.sort((a, b) => {
+        const aImg = /image\//i.test(a.accept) ? 1 : 0;
+        const bImg = /image\//i.test(b.accept) ? 1 : 0;
+        return bImg - aImg;
+      });
+      
+      for (const fi of fileInputs) {
+        log('info', 'cover-upload', '    尝试 nodeId=' + fi.nodeId + ' (accept=' + fi.accept + ')');
+        if (await tryInject(fi.nodeId, undefined, '策略1-node' + fi.nodeId)) {
+          return true;
+        }
+      }
+    }
+  } catch (err) {
+    log('warn', 'cover-upload', '  [策略1] 异常: ' + (err as Error).message);
+  }
+  
+  // 策略2：DOM.querySelectorAll 主文档根
+  try {
+    log('info', 'cover-upload', '  [策略2] DOM.querySelectorAll 搜索…');
+    const docResult2: any = await win.webContents.debugger.sendCommand('DOM.getDocument', { depth: 1, pierce: true }).catch(() => null);
+    
+    if (docResult2 && docResult2.root && docResult2.root.nodeId !== undefined) {
+      const qsaResult: any = await win.webContents.debugger.sendCommand('DOM.querySelectorAll', {
+        nodeId: docResult2.root.nodeId,
+        selector: 'input[type="file"]',
+      }).catch(() => null);
+      
+      if (qsaResult && qsaResult.nodeIds && qsaResult.nodeIds.length > 0) {
+        log('info', 'cover-upload', '    找到 ' + qsaResult.nodeIds.length + ' 个 file input');
+        for (const nid of qsaResult.nodeIds) {
+          if (await tryInject(nid, undefined, '策略2-node' + nid)) {
+            return true;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    log('warn', 'cover-upload', '  [策略2] 异常: ' + (err as Error).message);
+  }
+  
+  // 策略3：Runtime.evaluate 获取 objectId（遍历 iframe 和 shadow DOM）
+  try {
+    log('info', 'cover-upload', '  [策略3] Runtime.evaluate 获取 input…');
+    const script = `
+      (function () {
+        var allInputs = [];
+        
+        function collectInputs(root) {
+          if (!root) return;
+          try {
+            var inputs = root.querySelectorAll ? root.querySelectorAll('input[type="file"]') : [];
+            if (inputs) for (var i = 0; i < inputs.length; i++) allInputs.push(inputs[i]);
+            
+            var allEls = root.querySelectorAll ? root.querySelectorAll('*') : [];
+            if (allEls) {
+              for (var j = 0; j < allEls.length; j++) {
+                try {
+                  if (allEls[j].shadowRoot) collectInputs(allEls[j].shadowRoot);
+                } catch (e) {}
+              }
+            }
+            
+            var iframes = root.querySelectorAll ? root.querySelectorAll('iframe') : [];
+            if (iframes) {
+              for (var k = 0; k < iframes.length; k++) {
+                try {
+                  var idoc = iframes[k].contentDocument || (iframes[k].contentWindow && iframes[k].contentWindow.document);
+                  if (idoc) collectInputs(idoc);
+                } catch (e) {}
+              }
+            }
+          } catch (e) {}
+        }
+        
+        collectInputs(document.documentElement);
+        return allInputs.length > 0 ? allInputs[allInputs.length - 1] : null;
+      })();
+    `;
+    
+    const evalResult: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+      expression: script,
+      returnByValue: false,
+    }).catch(() => null);
+    
+    if (evalResult && evalResult.result && evalResult.result.objectId) {
+      const objectId = evalResult.result.objectId;
+      log('info', 'cover-upload', '    获得 objectId=' + objectId.slice(0, 24) + '...');
+      if (await tryInject(undefined, objectId, '策略3-objectId')) {
+        return true;
+      }
+    }
+  } catch (err) {
+    log('warn', 'cover-upload', '  [策略3] 异常: ' + (err as Error).message);
+  }
+  
+  // 策略4：DOM.performSearch 全局搜索
+  try {
+    log('info', 'cover-upload', '  [策略4] DOM.performSearch 搜索…');
+    const searchRes: any = await win.webContents.debugger.sendCommand('DOM.performSearch', {
+      query: 'input[type="file"]',
+    }).catch(() => null);
+    
+    if (searchRes && searchRes.result && searchRes.result.length > 0) {
+      log('info', 'cover-upload', '    找到 ' + searchRes.result.length + ' 个匹配');
+      for (const nid of searchRes.result) {
+        if (await tryInject(nid, undefined, '策略4-node' + nid)) {
+          return true;
+        }
+      }
+    }
+  } catch (err) {
+    log('warn', 'cover-upload', '  [策略4] 异常: ' + (err as Error).message);
+  }
+  
+  // 策略5：Page.setInterceptFileChooserDialog 拦截（兜底）
+  try {
+    log('info', 'cover-upload', '  [策略5] FileChooser 拦截兜底…');
+    
+    let interceptionEnabled = false;
+    try {
+      await win.webContents.debugger.sendCommand('Page.setInterceptFileChooserDialog', {
+        mode: 'accept',
+        files: [coverFile],
+      });
+      interceptionEnabled = true;
+      log('info', 'cover-upload', '    FileChooser 拦截已启用');
+    } catch {
+      try {
+        await win.webContents.debugger.sendCommand('Page.setInterceptFileChooserDialog', {
+          mode: 'accept',
+          fileChooserFiles: [coverFile],
+        } as any);
+        interceptionEnabled = true;
+      } catch { /* ignore */ }
+    }
+    
+    if (interceptionEnabled) {
+      // 重新点击封面区域，触发文件选择对话框
+      log('info', 'cover-upload', '    重新点击封面区域触发对话框…');
+      await clickCoverArea(win, log);
+      await sleep(1500);
+      
+      // 检查是否有文件被设置（通过 input 的 files 属性）
+      const checkScript = `
+        (function () {
+          var inputs = document.querySelectorAll('input[type="file"]');
+          for (var i = 0; i < inputs.length; i++) {
+            if (inputs[i].files && inputs[i].files.length > 0) {
+              return { hasFile: true, count: inputs[i].files.length };
+            }
+          }
+          return { hasFile: false, totalInputs: inputs.length };
+        })();
+      `;
+      
+      const checkRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+        expression: checkScript, returnByValue: true,
+      }).catch(() => null);
+      
+      const checkVal = checkRes?.result?.value;
+      if (checkVal && checkVal.hasFile) {
+        log('info', 'cover-upload', '    ✅ FileChooser 拦截成功，文件已设置');
+        return true;
+      }
+    }
+  } catch (err) {
+    log('warn', 'cover-upload', '  [策略5] 异常: ' + (err as Error).message);
+  }
+  
+  log('error', 'cover-upload', '  ❌ 所有策略都失败了');
+  return false;
+}
+
+// === 辅助：验证封面是否上传成功
+async function verifyCoverUploaded(
+  win: BrowserWindow,
+  log: (level: any, stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  const verifyScript = `
+    (function () {
+      // 检查封面区域是否有背景图（表示上传成功）
+      var coverImg = document.querySelector('.cover-Uudq5y');
+      if (coverImg) {
+        var style = coverImg.getAttribute('style') || '';
+        var hasBg = style.indexOf('background-image') !== -1 && style.indexOf('url(') !== -1;
+        if (hasBg) return { hasCover: true, note: 'background-image', style: style.slice(0, 100) };
+      }
+      
+      // 检查是否有"编辑封面"文本（表示已上传）
+      var allSpans = document.querySelectorAll('span');
+      for (var i = 0; i < allSpans.length; i++) {
+        var txt = (allSpans[i].innerText || '').trim();
+        if (txt === '编辑封面') {
+          return { hasCover: true, note: 'found-编辑封面' };
+        }
+      }
+      
+      // 检查 mycard 元素的状态变化
+      var mycard = document.querySelector('.mycard-c48v6G');
+      if (mycard) {
+        var mycardText = (mycard.innerText || '').trim();
+        // 如果文本从"点击上传封面图"变成了其他内容，可能上传成功了
+        if (mycardText.indexOf('点击上传封面图') === -1 && mycardText.length > 0) {
+          return { hasCover: true, note: 'text-changed', text: mycardText.slice(0, 50) };
+        }
+      }
+      
+      return { hasCover: false, note: 'no-cover-indicator' };
+    })();
+  `;
+  
+  const verifyRes: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+    expression: verifyScript, returnByValue: true,
+  }).catch(() => null);
+  
+  const verifyVal = verifyRes?.result?.value;
+  log('info', 'cover-upload', '  验证结果: ' + (verifyVal ? JSON.stringify(verifyVal) : 'unknown'));
+  
+  return verifyVal && verifyVal.hasCover === true;
+}
+
+// === 辅助函数：点击完成按钮脚本
+function buildClickCompleteScript(): string {
+  return `
+    (function () {
+      try {
+        var buttons = document.querySelectorAll('button');
+        var candidates = [];
+        
+        for (var i = 0; i < buttons.length; i++) {
+          var btn = buttons[i];
+          var txt = (btn.innerText || btn.textContent || '').trim();
+          if (!txt) continue;
+          
+          var score = 0;
+          if (txt === '完成') score += 1000;
+          else if (txt === '确认' || txt === '确定') score += 500;
+          
+          if (score > 0) {
+            var inFooter = false;
+            var p = btn.parentElement;
+            var d = 0;
+            while (p && d < 10) {
+              var cls = p.className || '';
+              if (typeof cls === 'string' && /footer|dialog|modal|popup/i.test(cls)) { inFooter = true; break; }
+              p = p.parentElement;
+              d++;
+            }
+            if (inFooter) score += 500;
+            
+            var cls = btn.className || '';
+            if (typeof cls === 'string' && /primary|completeButton/i.test(cls)) score += 300;
+            
+            var w = btn.offsetWidth || 0;
+            var h = btn.offsetHeight || 0;
+            if (w >= 20 && h >= 20) {
+              candidates.push({ el: btn, score: score, text: txt, inFooter: inFooter });
+            }
+          }
+        }
+        
+        if (candidates.length === 0) {
+          return { clicked: false, reason: 'no-complete-button', note: '可能没有裁剪弹窗' };
+        }
+        
+        candidates.sort(function (a, b) { return b.score - a.score; });
+        var top = candidates[0];
+        
+        try { top.el.click(); } catch (e1) {
+          try { top.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); } catch (e2) {}
+        }
+        
+        return { clicked: true, text: top.text, score: top.score };
+      } catch (e) {
+        return { clicked: false, error: String(e) };
+      }
+    })();
+  `;
+}
+
+// === 抖音文章发布引导页检测脚本（检测并点击"我要发文"按钮）
+// 引导页结构：
+//   <button class="semi-button semi-button-primary container-drag-btn-hcUuRC">
+//     <span class="semi-button-content">我要发文</span>
+//   </button>
+function buildDetectArticleLandingScript(): string {
+  return `(function () {
+    try {
+      // 查找所有 semi-button-content span，文本包含"我要发文"
+      var spans = document.querySelectorAll('span.semi-button-content');
+      for (var i = 0; i < spans.length; i++) {
+        var span = spans[i];
+        var txt = (span.innerText || span.textContent || '').trim();
+        if (txt === '我要发文' || txt.indexOf('我要发文') !== -1) {
+          // 找到父级 button
+          var btn = span.closest ? span.closest('button') : null;
+          if (!btn) {
+            // 兼容不支持 closest 的情况
+            var p = span.parentElement;
+            while (p && p.tagName !== 'BUTTON' && p.tagName !== 'BODY') { p = p.parentElement; }
+            if (p && p.tagName === 'BUTTON') btn = p;
+          }
+          if (btn) {
+            btn.click();
+            return { hasLanding: true, clicked: true, text: txt };
+          }
+          return { hasLanding: true, clicked: false, reason: 'no-button-parent' };
+        }
+      }
+      // 也检查一下是否有"抖音等你大作文章"的标题，确认是引导页
+      var titleEl = document.querySelector('[class*="container-drag-title"]');
+      if (titleEl && /大作文章|我要发文/.test(titleEl.innerText || '')) {
+        // 是引导页但没找到按钮，再尝试找所有 primary 按钮
+        var btns = document.querySelectorAll('button.semi-button-primary');
+        for (var j = 0; j < btns.length; j++) {
+          var b = btns[j];
+          var bTxt = (b.innerText || b.textContent || '').trim();
+          if (bTxt === '我要发文' || bTxt.indexOf('我要发文') !== -1) {
+            b.click();
+            return { hasLanding: true, clicked: true, text: bTxt, method: 'fallback' };
+          }
+        }
+        return { hasLanding: true, clicked: false, reason: 'btn-not-found-on-landing' };
+      }
+      return { hasLanding: false, clicked: false };
+    } catch (e) {
+      return { hasLanding: false, clicked: false, error: String(e) };
+    }
+  })();`;
+}
+
 // === 抖音发布结果检测脚本（成功跳转到内容管理页视为成功）
 function buildPublishResultProbeScript(): string {
   return `(function () {
@@ -629,27 +3064,27 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
       log('info', 'login', '已登录，URL: ' + win.webContents.getURL().slice(0, 100));
     }
 
-    // 文章发布：上传用户提供的素材（如有）
-    const mediaFiles = request.mediaFiles || [];
-    if (mediaFiles.length > 0) {
-      onProgress(25, '上传 ' + mediaFiles.length + ' 个素材…');
-      const uploadOk = await uploadViaCDP(win, mediaFiles, log, 'image');
-      if (!uploadOk) {
-        log('warn', 'upload', '素材上传失败，继续发布流程（可能缺少封面）');
+    // 检测文章发布引导页，如果有"我要发文"按钮则点击进入编辑器
+    onProgress(18, '检测文章发布引导页…');
+    const landingScript = buildDetectArticleLandingScript();
+    const landingResult: any = await evalJS(win, landingScript, 'article-landing', log).catch(function () { return null; });
+    if (landingResult && landingResult.hasLanding) {
+      if (landingResult.clicked) {
+        log('info', 'article-landing', '检测到引导页，已点击"我要发文"按钮，等待编辑器加载…');
+        onProgress(22, '已点击"我要发文"，等待编辑器加载…');
+        await tracker.waitForStable(1500, 15000);
+        await sleep(2000);
+        log('info', 'article-landing', '编辑器页面加载完成，URL: ' + win.webContents.getURL().slice(0, 100));
       } else {
-        onProgress(40, '等待上传完成…');
-        const uploadResult = await waitForUploadComplete(win, log, onProgress, 300000, tracker);
-        if (!uploadResult.ready) log('warn', 'upload', '上传完成检测失败: ' + uploadResult.finalStatus);
+        log('warn', 'article-landing', '检测到引导页但点击失败: ' + (landingResult.reason || '未知'));
+        // 即使点击失败也继续尝试，也许页面结构不同
       }
-      await sleep(1500);
     } else {
-      log('info', 'upload', '无素材上传，跳过上传步骤');
-      onProgress(40, '准备填写内容…');
+      log('info', 'article-landing', '未检测到引导页，直接进入编辑器');
     }
 
-    // 标题（最多 30 字）
+    // 先填写标题和正文，再上传封面（避免填写时页面滚动导致封面区域位置变化）
     const titleText = truncate((request.title || '').trim(), ARTICLE_TITLE_MAX);
-    // 正文 + 话题（最多 8000 字）
     const rawContent = (request.content || '').trim();
     const tagText = buildArticleTags(request.tags);
     const combinedContent = [rawContent, tagText].filter(function (s) { return s && s.length > 0; }).join('\n');
@@ -657,7 +3092,7 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
     log('info', 'fill', '文章标题: ' + (titleText || '').slice(0, 40) + ' (限' + ARTICLE_TITLE_MAX + '字)');
     log('info', 'fill', '文章正文: ' + contentText.length + '字 (限' + ARTICLE_CONTENT_MAX + '字)');
 
-    onProgress(55, '填写标题…');
+    onProgress(25, '填写标题…');
     if (titleText) {
       const script1 = buildFillTitleScript(titleText);
       const res1: any = await evalJS(win, script1, 'article-fill-title', log).catch(function () { return null; });
@@ -666,13 +3101,50 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
       await sleep(800);
     }
 
-    onProgress(65, '填写正文…');
+    onProgress(35, '填写正文…');
     if (contentText) {
       const script2 = buildFillContentScript(contentText);
       const res2: any = await evalJS(win, script2, 'article-fill-content', log).catch(function () { return null; });
       if (!res2 || !res2.ok) log('warn', 'fill', '文章正文填写失败');
       else log('info', 'fill', '文章正文已写入 (' + (res2 && res2.method) + ')');
       await sleep(1500);
+    }
+
+    // 文章发布：上传封面（第一张图片作为封面）+ 正文图片（如有多余图片）
+    const mediaFiles = request.mediaFiles || [];
+    if (mediaFiles.length > 0) {
+      // 第一张图片作为封面
+      const coverFile = mediaFiles[0];
+      onProgress(45, '上传文章封面…');
+      const coverOk = await uploadArticleCover(win, coverFile, log);
+      if (!coverOk) {
+        log('warn', 'upload', '封面上传失败，继续尝试发布（可能缺少封面）');
+      } else {
+        log('info', 'upload', '✅ 封面上传成功');
+        onProgress(55, '封面上传完成…');
+        await sleep(2000);
+      }
+      
+      // 如果有多张图片，剩下的上传到正文
+      const bodyImages = mediaFiles.slice(1);
+      if (bodyImages.length > 0) {
+        onProgress(60, '上传 ' + bodyImages.length + ' 张正文图片…');
+        const bodyUploadOk = await uploadViaCDP(win, bodyImages, log, 'image');
+        if (!bodyUploadOk) {
+          log('warn', 'upload', '正文图片上传失败');
+        } else {
+          onProgress(65, '等待上传完成…');
+          const uploadResult = await waitForUploadComplete(win, log, onProgress, 300000, tracker);
+          if (!uploadResult.ready) log('warn', 'upload', '正文上传完成检测失败: ' + uploadResult.finalStatus);
+        }
+      } else {
+          log('info', 'upload', '无正文图片，跳过正文上传');
+        onProgress(65, '准备发布…');
+      }
+      await sleep(1500);
+    } else {
+      log('warn', 'upload', '⚠️ 无素材上传，文章发布需要封面，可能导致发布失败');
+      onProgress(65, '准备发布…');
     }
 
     // 点击发布
