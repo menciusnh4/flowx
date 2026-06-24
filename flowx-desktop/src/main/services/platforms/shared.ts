@@ -1,5 +1,6 @@
 import { BrowserWindow, session as electronSession } from 'electron';
 import type { PublishLogEntry, PublishItemProgress, PublishRequest, PlatformType, ContentType } from '../../../types';
+import { getAppIcon } from '../../windows/MainWindow';
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -169,6 +170,7 @@ export function makePublishWindow(accountId: string, title: string): BrowserWind
     title,
     autoHideMenuBar: true,
     show: true,
+    icon: getAppIcon(),
     webPreferences: {
       partition: `persist:account_${accountId}`,
       contextIsolation: true,

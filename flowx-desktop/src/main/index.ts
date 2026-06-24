@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { registerAllIpc } from './ipc';
-import { createMainWindow, getMainWindow } from './windows/MainWindow';
+import { createMainWindow, getMainWindow, getAppIcon } from './windows/MainWindow';
 import { setupLogger, logger } from './utils/logger';
 import { initStore } from './store/SecureStore';
 import { AccountService } from './services/AccountService';
@@ -12,6 +12,11 @@ import { PublishEngine } from './services/PublishEngine';
 
 // 安全基线：禁用不安全的 API
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true';
+
+// ✅ Windows: 设置 AppUserModelID，确保任务栏图标正确显示
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.flowx.desktop');
+}
 
 // ✅ 关键修复（Electron 31 + GPU 隔离方案，详见抖音发布解救方案报告）
 //    抖音 creator 编辑页上传视频后会触发 0xC0000005 (STATUS_ACCESS_VIOLATION)
@@ -62,6 +67,25 @@ async function bootstrap() {
   // 当 Electron 完成初始化并准备好创建浏览器窗口时调用
   await app.whenReady();
   isReady = true;
+
+  // ✅ 设置应用图标（Windows/macOS/Linux 全平台）
+  try {
+    app.setName('FlowX');
+    
+    // 使用 getAppIcon 获取正确的图标 nativeImage
+    const appIcon = getAppIcon();
+    if (appIcon) {
+      // macOS: 设置 Dock 图标
+      if (process.platform === 'darwin') {
+        app.dock.setIcon(appIcon);
+      }
+      console.log('[FlowX] ✅ 应用图标已加载');
+    } else {
+      console.warn('[FlowX] ⚠️ 图标加载失败');
+    }
+  } catch (iconErr) {
+    console.warn('[FlowX] 设置应用图标失败:', iconErr);
+  }
 
   // 初始化存储（加密）
   initStore();

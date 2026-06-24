@@ -2,6 +2,7 @@ import { BrowserWindow } from 'electron';
 import { PLATFORMS } from './PlatformRegistry';
 import { writePublishLog } from '../utils/logger';
 import { applyDouyinAntiCrash } from './platforms/shared';
+import { getAppIcon } from '../windows/MainWindow';
 // 新平台注册表（通过 side-effect import 触发注册）
 import { getPlatform } from './platforms/index';
 import type {
@@ -1666,6 +1667,7 @@ const xiaohongshuAdapter: PlatformAdapter = {
         title: '小红书发布 - FlowX',
         autoHideMenuBar: true,
         show: false,
+        icon: getAppIcon(),
         webPreferences: {
           partition: `persist:account_${accountId}`,
           contextIsolation: true,
@@ -2235,6 +2237,7 @@ const douyinAdapter: PlatformAdapter = {
         title: '抖音发布 - FlowX',
         autoHideMenuBar: false,
         show: true,
+        icon: getAppIcon(),
         webPreferences: {
           partition: `persist:account_${accountId}`,
           contextIsolation: true,

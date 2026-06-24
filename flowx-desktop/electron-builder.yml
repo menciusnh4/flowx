@@ -19,23 +19,37 @@ files:
   - "!**/{appveyor.yml,.travis.yml,circle.yml}"
   - "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
 extraResources:
-  - from: resources/
-    to: .
+  - from: build/icon.png
+    to: icon.png
+  - from: build/icon.ico
+    to: icon.ico
+  - from: build/icon-512.png
+    to: icon-512.png
 win:
-  target: nsis
+  icon: build/icon.ico
   artifactName: "${productName}-${version}-setup.${ext}"
   signAndEditExecutable: false
+  target:
+    - target: nsis
+      arch:
+        - x64
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: FlowX
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  deleteAppDataOnUninstall: false
 mac:
   target: dmg
+  icon: build/icon.png
   category: public.app-category.productivity
 linux:
   target: AppImage
+  icon: build/icon.png
 publish:
   provider: generic
   url: "https://update.flowx.com/${os}/"

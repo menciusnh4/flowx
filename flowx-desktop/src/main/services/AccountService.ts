@@ -4,6 +4,7 @@ import { getStore, encrypt, decrypt } from '../store/SecureStore';
 import { logger } from '../utils/logger';
 import { PLATFORMS } from './PlatformRegistry';
 import { getPlatform, getAllPlatforms, applyDouyinAntiCrash } from './platforms';
+import { getAppIcon } from '../windows/MainWindow';
 import type {
   AccountCredential,
   AccountInfo,
@@ -167,6 +168,7 @@ export class AccountService {
       title: `检测登录态 - ${cred.nickname || id}`,
       show: false,  // 隐藏窗口，静默检测
       autoHideMenuBar: true,
+      icon: getAppIcon(),
       webPreferences: {
         partition,
         contextIsolation: true,
@@ -317,6 +319,7 @@ export class AccountService {
       minHeight: 640,
       title: `登录 ${PLATFORMS[platformKey]?.name ?? platformKey} — FlowX （完成扫码后点击右上角"保存账号"按钮）`,
       autoHideMenuBar: true,
+      icon: getAppIcon(),
       webPreferences: {
         partition,
         contextIsolation: true,

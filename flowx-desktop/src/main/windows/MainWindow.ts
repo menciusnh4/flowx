@@ -1,7 +1,82 @@
-import { BrowserWindow, app, net } from 'electron';
+import { BrowserWindow, app, net, nativeImage } from 'electron';
 import path from 'path';
+import fs from 'fs';
 
 let mainWindow: BrowserWindow | null = null;
+
+// 缓存图标路径，避免重复查找
+let _cachedIconPath: string | undefined | null = null;
+
+// 获取应用图标路径（兼容开发/生产环境）
+export function getAppIconPath(): string | undefined {
+  // 返回缓存结果
+  if (_cachedIconPath !== null) {
+    return _cachedIconPath;
+  }
+  
+  try {
+    const isWin = process.platform === 'win32';
+    const isMac = process.platform === 'darwin';
+    
+    // 可能的图标路径列表（按优先级排序）
+    const candidatePaths: string[] = [];
+    
+    // 生产环境：从 resources 目录读取
+    if (app.isPackaged) {
+      // Windows 优先使用 .ico
+      if (isWin) {
+        candidatePaths.push(path.join(process.resourcesPath, 'icon.ico'));
+      }
+      // macOS/Linux 使用 .png
+      candidatePaths.push(path.join(process.resourcesPath, 'icon.png'));
+      candidatePaths.push(path.join(process.resourcesPath, 'icon-512.png'));
+      // 兜底
+      candidatePaths.push(path.join(process.resourcesPath, 'assets/icon.png'));
+    } else {
+      // 开发环境：从 build 目录读取
+      // __dirname 在编译后是 dist-electron/main/
+      const buildDir = path.join(__dirname, '../../build');
+      if (isWin) {
+        candidatePaths.push(path.join(buildDir, 'icon.ico'));
+      }
+      candidatePaths.push(path.join(buildDir, 'icon.png'));
+      candidatePaths.push(path.join(buildDir, 'icon-512.png'));
+      candidatePaths.push(path.join(buildDir, 'icon-1024.png'));
+    }
+    
+    // 查找第一个存在的图标
+    for (const p of candidatePaths) {
+      if (fs.existsSync(p)) {
+        console.log('[FlowX] 找到图标:', p);
+        _cachedIconPath = p;
+        return p;
+      }
+    }
+    
+    console.warn('[FlowX] 未找到图标文件，搜索路径:', candidatePaths);
+  } catch (e) {
+    console.warn('[FlowX] 获取图标路径失败:', e);
+  }
+  
+  _cachedIconPath = undefined;
+  return undefined;
+}
+
+// 获取应用图标 nativeImage
+export function getAppIcon(): Electron.NativeImage | undefined {
+  const iconPath = getAppIconPath();
+  if (iconPath) {
+    try {
+      const img = nativeImage.createFromPath(iconPath);
+      if (!img.isEmpty()) {
+        return img;
+      }
+    } catch (e) {
+      console.warn('[FlowX] 加载图标失败:', e);
+    }
+  }
+  return undefined;
+}
 
 // 动态解析 preload / 生产产物路径（兼容 development / production）
 function resolveAssetPath(relativeFromBundleRoot: string): string {
@@ -53,6 +128,7 @@ export async function createMainWindow(): Promise<BrowserWindow> {
 
   const preloadPath = resolveAssetPath('../preload/index.js');
   const prodHtmlPath = resolveAssetPath('../../dist/index.html');
+  const appIcon = getAppIcon();
 
   mainWindow = new BrowserWindow({
     width: 1360,
@@ -63,6 +139,7 @@ export async function createMainWindow(): Promise<BrowserWindow> {
     backgroundColor: '#ffffff',
     show: false,
     autoHideMenuBar: true,
+    icon: appIcon,
     webPreferences: {
       preload: preloadPath,
       sandbox: true,
