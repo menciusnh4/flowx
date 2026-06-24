@@ -7,7 +7,7 @@ import type { PublishLogEntry, PublishLogQuery } from '../../types';
 let initialized = false;
 
 // 独立的 publish 日志文件 logger（不与主 logger 混用传输）
-const publishLogger = log.create('publish');
+const publishLogger = log.create({ logId: 'publish' });
 
 // 结构化日志环形缓冲（内存里保存最新的，便于渲染端查询并显示）
 const MAX_MEMORY_LOGS = 2000;
@@ -33,7 +33,7 @@ export function setupLogger() {
   publishLogger.transports.file.fileName = 'publish.log';
   publishLogger.transports.file.format =
     '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] [{processType}] {text}';
-  publishLogger.transports.console.level = false as never; // 发布日志不打印到控制台（主 log 已打）
+  publishLogger.transports.console.level = false as any; // 发布日志不打印到控制台（主 log 已打）
 
   // 捕获未处理异常
   process.on('uncaughtException', (err) => {

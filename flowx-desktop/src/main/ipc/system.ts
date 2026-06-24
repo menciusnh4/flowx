@@ -2,6 +2,7 @@ import { ipcMain, shell, app, dialog, BrowserWindow } from 'electron';
 import { safeInvoke } from './index';
 import type { SystemInfo, UpdateInfo } from '../../types';
 import { getMainWindow } from '../windows/MainWindow';
+import { getLogsDir, getPublishLogPath, getMainLogPath } from '../utils/logger';
 
 export function registerSystemIpc(): void {
   safeInvoke(
@@ -18,6 +19,9 @@ export function registerSystemIpc(): void {
     platform: process.platform,
     electronVersion: process.versions.electron,
     appPath: app.getAppPath(),
+    logsDir: getLogsDir(),
+    publishLogPath: getPublishLogPath(),
+    mainLogPath: getMainLogPath(),
   }));
 
   // 选择文件（用于本地素材上传）

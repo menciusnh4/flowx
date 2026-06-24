@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia';
 import type {
   PublishItemProgress,
-  PublishProgress,
   PublishRequest,
   PublishTask,
   PublishStatus,

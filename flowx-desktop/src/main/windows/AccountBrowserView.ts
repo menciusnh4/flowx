@@ -79,7 +79,7 @@ export class AccountBrowserView {
 
   destroy(): void {
     if (!this.view.webContents.isDestroyed()) {
-      this.view.webContents.destroy();
+      this.view.webContents.close();
     }
   }
 }

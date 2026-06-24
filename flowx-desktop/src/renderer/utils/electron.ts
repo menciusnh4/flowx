@@ -123,7 +123,7 @@ export const electronApi = {
   async getSystemInfo(): Promise<SystemInfo> {
     return invokeElectron('system.getInfo', 'system:getInfo');
   },
-  async openFileDialog(opts?: { mode?: 'file' | 'files' }): Promise<{ canceled: boolean; filePaths: string[] }> {
+  async openFileDialog(opts?: { mode?: 'file' | 'files'; filters?: Electron.FileFilter[] }): Promise<{ canceled: boolean; filePaths: string[] }> {
     return invokeElectron('system.openFileDialog', 'system:openFileDialog', opts);
   },
   async minimizeWindow(): Promise<boolean> {

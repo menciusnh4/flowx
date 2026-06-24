@@ -93,11 +93,11 @@
         </el-table-column>
         <el-table-column label="操作" width="250" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" type="success" @click="openCreator(row)" :loading="openingId === row.id">
+            <el-button size="small" type="success" @click="openCreator(asAccount(row))" :loading="openingId === asAccount(row).id">
               <el-icon><Link /></el-icon>&nbsp;创作中心
             </el-button>
-            <el-button size="small" type="warning" @click="refreshToken(row)" :loading="refreshingId === row.id" title="打开平台页面，刷新账号信息/粉丝数/关注数/获赞数">刷新</el-button>
-            <el-button size="small" type="danger" @click="remove(row)">删除</el-button>
+            <el-button size="small" type="warning" @click="refreshToken(asAccount(row))" :loading="refreshingId === asAccount(row).id" title="打开平台页面，刷新账号信息/粉丝数/关注数/获赞数">刷新</el-button>
+            <el-button size="small" type="danger" @click="remove(asAccount(row))">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -221,6 +221,11 @@ function formatCount(n: number | undefined): string {
   if (n >= 10000) return (n / 10000).toFixed(n >= 100000 ? 0 : 1).replace(/\.0$/, '') + '万';
   if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
   return String(n);
+}
+
+/** 类型辅助：将 el-table 默认的 DefaultRow 断言为 AccountInfo */
+function asAccount(row: unknown): AccountInfo {
+  return row as AccountInfo;
 }
 
 async function openAuthDialog() {

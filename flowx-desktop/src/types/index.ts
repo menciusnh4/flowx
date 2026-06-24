@@ -152,6 +152,10 @@ export interface PublishRequest {
   scheduledAt?: number;
   /** 备注/草稿名 */
   remark?: string;
+  /** 封面图片路径（视频发布可选，文章发布抖音必填） */
+  coverImage?: string;
+  /** 分类（部分平台需要） */
+  category?: string;
 }
 
 /** 发布任务状态 */

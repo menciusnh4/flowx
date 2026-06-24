@@ -1,12 +1,12 @@
 import { defineStore } from 'pinia';
 import { electronApi } from '../utils/electron';
-import type { AccountInfo, PlatformType, HealthCheckConfig } from '../../types';
+import type { AccountInfo, PlatformMeta, PlatformType, HealthCheckConfig } from '../../types';
 
 export const useAccountStore = defineStore('account', {
   state: () => ({
     loading: false,
     accounts: [] as AccountInfo[],
-    platforms: [] as { key: PlatformType; name: string; icon: string; platformAccountLabel: string }[],
+    platforms: [] as PlatformMeta[],
     error: '' as string,
     healthCheckConfig: null as HealthCheckConfig | null,
   }),
