@@ -3220,7 +3220,7 @@ const meta: PlatformMeta = {
   contentTypes: ['video', 'image', 'article'],
   capabilities: { publishVideo: true, publishImage: true, publishArticle: true } as AccountCapabilities,
   contentLimits: { title: 80, content: 1000 },
-  articleLimits: { title: 30, content: 8000 },
+  articleLimits: { title: 30, content: 8000, minContent: 100 },
   nicknameSelectors: ['[class*="header-"] [class*="name-"]', '[class*="name-"]', '[class*="name"]', '.name-box', '.user-name', '.nickname'],
   avatarSelectors: ['[class*="avatar-"] img', 'img[class*="img-"]', 'img[class*="avatar"]', 'img.user_avatar', '.user-info img'],
   loginKeywords: ['创作中心', '内容管理', '发布', '作品', '数据', '粉丝'],

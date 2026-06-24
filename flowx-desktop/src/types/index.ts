@@ -42,6 +42,8 @@ export interface PlatformMeta {
     title?: number;
     /** 文章正文最大字符数（undefined 表示不限制，超出将被截断） */
     content?: number;
+    /** 文章正文最小字符数（发布前验证，不足则提示用户） */
+    minContent?: number;
   };
 }
 

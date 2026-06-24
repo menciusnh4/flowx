@@ -180,6 +180,24 @@ const hasDouyinAccount = computed(() => {
   return accountStore.accounts.some((a) => ids.includes(a.id) && a.platform === 'douyin')
 })
 
+// 文章模式下的正文最小字数提示
+const articleMinContentHint = computed(() => {
+  if (contentType.value !== 'article') return null
+  const ids = getSelectedIds()
+  const minReqs: Array<{ platform: string; min: number }> = []
+  for (const id of ids) {
+    const a = accountStore.accounts.find((x) => x.id === id)
+    if (!a) continue
+    const meta = accountStore.platforms.find((p) => p.key === a.platform)
+    if (meta?.articleLimits?.minContent) {
+      minReqs.push({ platform: a.platform, min: meta.articleLimits.minContent })
+    }
+  }
+  if (minReqs.length === 0) return null
+  const parts = minReqs.map((r) => `${platformName(r.platform)}至少${r.min}字`)
+  return `📝 ${parts.join('，')}（当前 ${content.value.length} 字）`
+})
+
 // ============ 文件操作 ============
 async function pickMediaFiles() {
   console.log('[Publish.vue] pickMediaFiles start')
@@ -262,6 +280,23 @@ async function submitPublish() {
     return
   }
 
+  // 文章模式：正文最小字数检查（阻塞性验证，不满足不能发布）
+  if (contentType.value === 'article') {
+    for (const id of accountIds) {
+      const a = accountStore.accounts.find((x) => x.id === id)
+      if (!a) continue
+      const meta = accountStore.platforms.find((p) => p.key === a.platform)
+      if (!meta || !meta.articleLimits) continue
+      const minContent = meta.articleLimits.minContent
+      if (typeof minContent === 'number' && content.value.length < minContent) {
+        const platformDisplayName = platformName(a.platform)
+        ElMessage.warning(`${platformDisplayName}文章正文至少需要 ${minContent} 字（当前 ${content.value.length} 字）`)
+        console.warn(`[Publish.vue] ${a.platform} article content too short: ${content.value.length}/${minContent}`)
+        return
+      }
+    }
+  }
+
   // ===== 字数限制预检：提醒用户 =====
   // 按平台分别检查标题和内容，若任意平台超限，在提交时弹提醒（不阻塞，用户可自己取舍）
   const overLimitPlats: Array<{ platform: string; titleLen?: number; contentLen?: number; titleMax?: number; contentMax?: number }> = []
@@ -269,16 +304,34 @@ async function submitPublish() {
     const a = accountStore.accounts.find((x) => x.id === id)
     if (!a) continue
     const meta = accountStore.platforms.find((p) => p.key === a.platform)
-    if (!meta || !meta.contentLimits) continue
-    const tMax = meta.contentLimits.title
-    const cMax = meta.contentLimits.content
-    if ((typeof tMax === 'number' && title.value.length > tMax) ||
-        (typeof cMax === 'number' && content.value.length > cMax)) {
-      overLimitPlats.push({
-        platform: a.platform,
-        titleLen: title.value.length, contentLen: content.value.length,
-        titleMax: tMax, contentMax: cMax,
-      })
+    if (!meta) continue
+    
+    // 检查图文/视频的contentLimits
+    if (meta.contentLimits) {
+      const tMax = meta.contentLimits.title
+      const cMax = meta.contentLimits.content
+      if ((typeof tMax === 'number' && title.value.length > tMax) ||
+          (typeof cMax === 'number' && content.value.length > cMax)) {
+        overLimitPlats.push({
+          platform: a.platform,
+          titleLen: title.value.length, contentLen: content.value.length,
+          titleMax: tMax, contentMax: cMax,
+        })
+      }
+    }
+    
+    // 检查文章模式的articleLimits最大字数
+    if (contentType.value === 'article' && meta.articleLimits) {
+      const tMax = meta.articleLimits.title
+      const cMax = meta.articleLimits.content
+      if ((typeof tMax === 'number' && title.value.length > tMax) ||
+          (typeof cMax === 'number' && content.value.length > cMax)) {
+        overLimitPlats.push({
+          platform: a.platform,
+          titleLen: title.value.length, contentLen: content.value.length,
+          titleMax: tMax, contentMax: cMax,
+        })
+      }
     }
   }
   if (overLimitPlats.length > 0) {
@@ -454,7 +507,7 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
             type="textarea"
             :rows="contentType === 'article' ? 8 : 4"
             :placeholder="contentType === 'article'
-              ? '请输入文章正文（抖音 8000 字/小红书不限制字数）'
+              ? '请输入文章正文（抖音：至少100字，最多8000字；小红书：不限制字数）'
               : contentType === 'image'
                 ? '可选：为图文添加描述文案（将作为笔记正文发布，小红书 1000 字/抖音 1000 字/快手 500 字）'
                 : '可选：为视频添加描述文案（快手最多 500 字）'"
@@ -469,6 +522,9 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
           </div>
           <div v-if="platformContentLimit.platforms.length > 0" class="limits-hint">
             各平台正文限制：{{ platformContentLimit.platforms.map(p => `${platformName(p.platform)} ${p.limit}字`).join(' / ') }}
+          </div>
+          <div v-if="articleMinContentHint" class="min-content-hint">
+            {{ articleMinContentHint }}
           </div>
         </el-form-item>
 
@@ -676,6 +732,15 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
   font-size: 11px;
   color: #909399;
   margin-top: 4px;
+}
+.min-content-hint {
+  font-size: 12px;
+  color: #409eff;
+  margin-top: 4px;
+  background: #ecf5ff;
+  border-left: 3px solid #409eff;
+  padding: 6px 10px;
+  border-radius: 3px;
 }
 .content-limit-tag {
   font-size: 11px;
