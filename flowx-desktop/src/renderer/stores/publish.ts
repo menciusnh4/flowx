@@ -4,6 +4,7 @@ import type {
   PublishRequest,
   PublishTask,
   PublishStatus,
+  PublishStats,
 } from '../../types';
 import { electronApi } from '../utils/electron';
 
@@ -39,6 +40,13 @@ export const usePublishStore = defineStore('publish', {
     history: [] as PublishTask[],
     loading: false,
     historyError: '',
+    // 分页相关
+    historyPage: 1,
+    historyPageSize: 20,
+    historyTotal: 0,
+    historyTotalPages: 0,
+    // 统计信息（轻量级，用于仪表盘）
+    stats: { total: 0, todaySuccess: 0, running: 0, failed: 0 } as PublishStats,
 
     // ========== 内部日志（可选展示到调试面板） ==========
     _log: [] as Array<{ ts: number; level: 'info' | 'warn' | 'error'; msg: string; data?: unknown }>,
@@ -267,12 +275,47 @@ export const usePublishStore = defineStore('publish', {
       try {
         const tasks = await electronApi.listTasks();
         this.history = tasks || [];
+        this.historyTotal = this.history.length;
+        this.historyTotalPages = 1;
+        this.historyPage = 1;
         this._logLine('info', `loadHistory: got ${this.history.length} tasks`);
       } catch (e) {
         this.historyError = e instanceof Error ? e.message : String(e);
         this._logLine('error', `loadHistory failed: ${this.historyError}`, { err: e });
       } finally {
         this.loading = false;
+      }
+    },
+
+    async loadHistoryPaged(page?: number, pageSize?: number) {
+      if (page != null) this.historyPage = page;
+      if (pageSize != null) this.historyPageSize = pageSize;
+      this.loading = true;
+      this.historyError = '';
+      this._logLine('info', `loadHistoryPaged: page=${this.historyPage}, pageSize=${this.historyPageSize}`);
+      try {
+        const result = await electronApi.listTasksPaged(this.historyPage, this.historyPageSize);
+        this.history = result.items || [];
+        this.historyTotal = result.total;
+        this.historyPage = result.page;
+        this.historyPageSize = result.pageSize;
+        this.historyTotalPages = result.totalPages;
+        this._logLine('info', `loadHistoryPaged: got ${this.history.length}/${this.historyTotal} tasks, page ${this.historyPage}/${this.historyTotalPages}`);
+      } catch (e) {
+        this.historyError = e instanceof Error ? e.message : String(e);
+        this._logLine('error', `loadHistoryPaged failed: ${this.historyError}`, { err: e });
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    /** 轻量级加载统计信息（不加载完整任务列表，用于仪表盘） */
+    async loadStats() {
+      try {
+        this.stats = await electronApi.getPublishStats();
+        this._logLine('info', `loadStats: total=${this.stats.total}, todaySuccess=${this.stats.todaySuccess}, running=${this.stats.running}, failed=${this.stats.failed}`);
+      } catch (e) {
+        this._logLine('error', `loadStats failed: ${e instanceof Error ? e.message : String(e)}`, { err: e });
       }
     },
 

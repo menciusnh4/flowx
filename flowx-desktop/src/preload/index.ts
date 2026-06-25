@@ -12,6 +12,8 @@ import type {
   PublishLogEntry,
   PublishLogQuery,
   HealthCheckConfig,
+  PagedResult,
+  PublishStats,
 } from '../types';
 
 // Preload 脚本：通过 contextBridge 暴露安全 API
@@ -83,6 +85,13 @@ contextBridge.exposeInMainWorld('electron', {
       invoke('publish:progress', taskId),
     cancel: (taskId: string): Promise<boolean> => invoke('publish:cancel', taskId),
     list: (): Promise<PublishTask[]> => invoke('publish:list'),
+    listPaged: (page?: number, pageSize?: number): Promise<PagedResult<PublishTask>> =>
+      invoke('publish:listPaged', page, pageSize),
+    getStats: (): Promise<PublishStats> => invoke('publish:getStats'),
+    retry: (taskId: string): Promise<string | null> => invoke('publish:retry', taskId),
+    detail: (taskId: string): Promise<{ task: PublishTask | null; logs: PublishLogEntry[] }> =>
+      invoke('publish:detail', taskId),
+    delete: (taskId: string): Promise<boolean> => invoke('publish:delete', taskId),
     setConcurrency: (n: number): Promise<boolean> => invoke('publish:setConcurrency', n),
 
     // 日志相关
@@ -159,6 +168,11 @@ declare global {
         progress: (taskId: string) => Promise<ProgressInfo | null>;
         cancel: (taskId: string) => Promise<boolean>;
         list: () => Promise<PublishTask[]>;
+        listPaged: (page?: number, pageSize?: number) => Promise<PagedResult<PublishTask>>;
+        getStats: () => Promise<PublishStats>;
+        retry: (taskId: string) => Promise<string | null>;
+        detail: (taskId: string) => Promise<{ task: PublishTask | null; logs: PublishLogEntry[] }>;
+        delete: (taskId: string) => Promise<boolean>;
         setConcurrency: (n: number) => Promise<boolean>;
         getLogPaths: () => Promise<{ publishLog: string; mainLog: string; dir: string }>;
         openLogDir: () => Promise<boolean>;

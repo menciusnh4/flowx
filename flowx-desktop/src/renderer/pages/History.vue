@@ -3,9 +3,11 @@
     <div class="panel">
       <div style="display:flex; align-items:center; justify-content:space-between">
         <h2 class="section-title" style="margin:0">发布历史</h2>
-        <el-button @click="refresh">
-          <el-icon><Refresh /></el-icon>&nbsp; 刷新
-        </el-button>
+        <el-space>
+          <el-button @click="refresh">
+            <el-icon><Refresh /></el-icon>&nbsp; 刷新
+          </el-button>
+        </el-space>
       </div>
 
       <el-table
@@ -15,44 +17,87 @@
         stripe
         style="margin-top: 12px"
       >
-        <el-table-column label="任务ID" prop="id" width="200" />
-        <el-table-column label="标题/备注" min-width="240">
+        <el-table-column label="任务ID" prop="id" width="170" />
+        <el-table-column label="类型" width="90">
+          <template #default="{ row }">
+            <el-tag size="small" :type="contentTypeTagType(row.request?.contentType)">
+              {{ contentTypeLabel(row.request?.contentType) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="标题/备注" min-width="200">
           <template #default="{ row }">
             <div style="font-weight:500">{{ row.request?.title || row.request?.remark || '-' }}</div>
             <div style="color:#909399; font-size:12px">
               目标账号：{{ row.items.length }} 个
+              <span v-if="row.request?.tags?.length" style="margin-left:8px">
+                标签：{{ formatTags(row.request.tags) }}
+              </span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="110">
+        <el-table-column label="状态" width="100">
           <template #default="{ row }">
             <el-tag v-if="row.status === 'success'" type="success">成功</el-tag>
             <el-tag v-else-if="row.status === 'failed'" type="danger">失败</el-tag>
             <el-tag v-else-if="row.status === 'running'" type="primary">发布中</el-tag>
+            <el-tag v-else-if="row.status === 'cancelled'" type="info">已取消</el-tag>
             <el-tag v-else-if="row.status === 'scheduled'" type="warning">待发布</el-tag>
             <el-tag v-else type="info">{{ row.status }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="创建时间" width="180">
-          <template #default="{ row }">{{ fmt(row.createdAt) }}</template>
-        </el-table-column>
-        <el-table-column label="更新时间" width="180">
-          <template #default="{ row }">{{ fmt(row.updatedAt) }}</template>
-        </el-table-column>
-        <el-table-column label="详情" min-width="320">
+        <el-table-column label="各账号结果" min-width="240">
           <template #default="{ row }">
             <el-space wrap>
               <el-tag
-                v-for="item in row.items.slice(0, 5)"
+                v-for="item in row.items.slice(0, 4)"
                 :key="item.accountId"
-                :type="item.status === 'success' ? 'success' : item.status === 'failed' ? 'danger' : 'info'"
+                size="small"
+                :type="itemStatusTagType(item.status)"
               >
-                {{ nicknameOf(item.accountId) }} ({{ item.progress }}%)
+                {{ nicknameOf(item.accountId) }}
+                <span v-if="item.status === 'success'">✓</span>
+                <span v-else-if="item.status === 'failed'">✗</span>
               </el-tag>
-              <span v-if="row.items.length > 5" style="color:#909399; font-size:12px">
-                +{{ row.items.length - 5 }}
-              </span>
+              <el-tooltip
+                v-if="row.items.length > 4"
+                :content="formatAccountList(row.items)"
+              >
+                <span style="color:#909399; font-size:12px; cursor:help">
+                  +{{ row.items.length - 4 }}
+                </span>
+              </el-tooltip>
             </el-space>
+          </template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="160">
+          <template #default="{ row }">{{ fmt(row.createdAt) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="200" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" type="primary" link @click="showDetail(row)">
+              <el-icon><View /></el-icon>&nbsp;详情
+            </el-button>
+            <el-button
+              v-if="hasFailedItems(row)"
+              size="small"
+              type="warning"
+              link
+              :loading="retryingId === row.id"
+              @click="retryTask(row)"
+            >
+              <el-icon><RefreshRight /></el-icon>&nbsp;重试
+            </el-button>
+            <el-popconfirm
+              title="确定删除此历史记录？"
+              @confirm="deleteTask(row)"
+            >
+              <template #reference>
+                <el-button size="small" type="danger" link>
+                  <el-icon><Delete /></el-icon>&nbsp;删除
+                </el-button>
+              </template>
+            </el-popconfirm>
           </template>
         </el-table-column>
       </el-table>
@@ -60,24 +105,188 @@
       <div v-if="publishStore.history.length === 0 && !publishStore.loading" class="empty-hint">
         暂无发布记录，请到「一键发布」创建第一个任务。
       </div>
+
+      <!-- 分页控件 -->
+      <div v-if="publishStore.historyTotal > 0" class="pagination-wrapper">
+        <el-pagination
+          v-model:current-page="publishStore.historyPage"
+          v-model:page-size="publishStore.historyPageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="publishStore.historyTotal"
+          layout="total, sizes, prev, pager, next, jumper"
+          background
+          @size-change="handleSizeChange"
+          @current-change="handlePageChange"
+        />
+      </div>
     </div>
+
+    <!-- 详情弹窗 -->
+    <el-dialog
+      v-model="detailVisible"
+      :title="'任务详情 - ' + (detailData?.task?.id || '')"
+      width="760px"
+      destroy-on-close
+    >
+      <div v-if="detailData?.task" class="detail-content">
+        <!-- 基本信息 -->
+        <el-descriptions :column="2" border size="small" style="margin-bottom:16px">
+          <el-descriptions-item label="任务ID">{{ detailData.task.id }}</el-descriptions-item>
+          <el-descriptions-item label="内容类型">
+            {{ contentTypeLabel(detailData.task.request?.contentType) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="整体状态">
+            <el-tag :type="statusTagType(detailData.task.status)" size="small">
+              {{ statusLabel(detailData.task.status) }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="账号数量">
+            {{ detailData.task.items.length }} 个
+          </el-descriptions-item>
+          <el-descriptions-item label="标题" :span="2">
+            {{ detailData.task.request?.title || '-' }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailData.task.request?.remark" label="备注" :span="2">
+            {{ detailData.task.request.remark }}
+          </el-descriptions-item>
+          <el-descriptions-item label="创建时间">
+            {{ fmt(detailData.task.createdAt) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="更新时间">
+            {{ fmt(detailData.task.updatedAt) }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailData.task.request?.tags?.length" label="标签" :span="2">
+            <el-tag v-for="t in detailData.task.request.tags" :key="t" size="small" style="margin-right:4px">
+              #{{ t }}
+            </el-tag>
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <!-- 正文预览 -->
+        <div v-if="detailData.task.request?.content" class="detail-section">
+          <div class="detail-section-title">正文内容</div>
+          <div class="content-preview">
+            {{ detailData.task.request.content.slice(0, 500) }}
+            <span v-if="detailData.task.request.content.length > 500">...</span>
+          </div>
+        </div>
+
+        <!-- 各账号详情 -->
+        <div class="detail-section">
+          <div class="detail-section-title">各账号执行结果</div>
+          <el-table :data="detailData.task.items" border size="small">
+            <el-table-column label="平台" width="80">
+              <template #default="{ row }">
+                {{ platformLabel(row.platform) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="账号" min-width="120">
+              <template #default="{ row }">{{ nicknameOf(row.accountId) }}</template>
+            </el-table-column>
+            <el-table-column label="状态" width="90">
+              <template #default="{ row }">
+                <el-tag size="small" :type="itemStatusTagType(row.status)">
+                  {{ statusLabel(row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="进度" width="80">
+              <template #default="{ row }">{{ row.progress }}%</template>
+            </el-table-column>
+            <el-table-column label="结果/消息" min-width="200">
+              <template #default="{ row }">
+                <div v-if="row.resultUrl">
+                  <el-link type="primary" :href="row.resultUrl" target="_blank" @click.stop="openUrl(row.resultUrl)">
+                    查看作品
+                  </el-link>
+                </div>
+                <div v-else-if="row.message" style="color:#F56C6C; font-size:12px; word-break:break-all">
+                  {{ row.message }}
+                </div>
+                <span v-else style="color:#909399">-</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="耗时" width="100">
+              <template #default="{ row }">
+                {{ row.startedAt && row.finishedAt ? formatDuration(row.finishedAt - row.startedAt) : '-' }}
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <!-- 执行日志 -->
+        <div v-if="detailData.logs && detailData.logs.length > 0" class="detail-section">
+          <div class="detail-section-title">
+            执行日志 ({{ detailData.logs.length }} 条)
+          </div>
+          <div class="log-container">
+            <div
+              v-for="(log, idx) in detailData.logs.slice(-50)"
+              :key="idx"
+              class="log-line"
+              :class="'log-' + log.level"
+            >
+              <span class="log-time">{{ fmt(log.ts) }}</span>
+              <span class="log-level">[{{ log.level.toUpperCase() }}]</span>
+              <span v-if="log.platform" class="log-platform">[{{ platformLabel(log.platform) }}]</span>
+              <span v-if="log.accountId" class="log-account">[{{ nicknameOf(log.accountId) }}]</span>
+              <span class="log-stage">[{{ log.stage }}]</span>
+              <span class="log-msg">{{ log.message }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-space>
+          <el-button @click="detailVisible = false">关闭</el-button>
+          <el-button
+            v-if="detailData?.task && hasFailedItems(detailData.task)"
+            type="warning"
+            :loading="retryingId === detailData.task.id"
+            @click="retryTask(detailData.task)"
+          >
+            <el-icon><RefreshRight /></el-icon>&nbsp;重试失败账号
+          </el-button>
+        </el-space>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue';
+import { onMounted, ref } from 'vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { View, RefreshRight, Delete, Refresh } from '@element-plus/icons-vue';
 import { usePublishStore } from '../stores/publish';
 import { useAccountStore } from '../stores/account';
+import { electronApi } from '../utils/electron';
+import type { PublishTask, PlatformType, PublishStatus, PublishLogEntry, PublishItemProgress } from '../../types';
 
 const publishStore = usePublishStore();
 const accountStore = useAccountStore();
 
+const detailVisible = ref(false);
+const detailData = ref<{ task: PublishTask | null; logs: PublishLogEntry[] } | null>(null);
+const retryingId = ref<string | null>(null);
+
 async function refresh() {
-  await publishStore.loadHistory();
+  await Promise.all([
+    publishStore.loadHistoryPaged(),
+    publishStore.loadStats(),
+  ]);
+}
+
+function handlePageChange(page: number) {
+  publishStore.loadHistoryPaged(page);
+}
+
+function handleSizeChange(size: number) {
+  publishStore.loadHistoryPaged(1, size);
 }
 
 function nicknameOf(id: string): string {
-  return accountStore.accounts.find((a) => a.id === id)?.nickname || id;
+  return accountStore.accounts.find((a) => a.id === id)?.nickname || id.slice(0, 8);
 }
 
 function fmt(ts?: number): string {
@@ -87,9 +296,243 @@ function fmt(ts?: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+function contentTypeLabel(type?: string): string {
+  switch (type) {
+    case 'video': return '视频';
+    case 'image': return '图文';
+    case 'article': return '文章';
+    default: return type || '-';
+  }
+}
+
+function contentTypeTagType(type?: string): 'success' | 'warning' | 'info' | undefined {
+  switch (type) {
+    case 'video': return undefined;
+    case 'image': return 'success';
+    case 'article': return 'warning';
+    default: return 'info';
+  }
+}
+
+function platformLabel(p: PlatformType): string {
+  switch (p) {
+    case 'douyin': return '抖音';
+    case 'xiaohongshu': return '小红书';
+    case 'kuaishou': return '快手';
+    default: return p;
+  }
+}
+
+function statusLabel(s: PublishStatus): string {
+  switch (s) {
+    case 'success': return '成功';
+    case 'failed': return '失败';
+    case 'running': return '发布中';
+    case 'queued': return '等待中';
+    case 'cancelled': return '已取消';
+    case 'scheduled': return '待发布';
+    default: return s;
+  }
+}
+
+function statusTagType(s: PublishStatus): 'success' | 'danger' | 'primary' | 'warning' | 'info' | undefined {
+  switch (s) {
+    case 'success': return 'success';
+    case 'failed': return 'danger';
+    case 'running': return 'primary';
+    case 'queued': return 'info';
+    case 'cancelled': return 'info';
+    case 'scheduled': return 'warning';
+    default: return 'info';
+  }
+}
+
+function itemStatusTagType(s: PublishStatus): 'success' | 'danger' | 'primary' | 'warning' | 'info' | undefined {
+  return statusTagType(s);
+}
+
+function hasFailedItems(task: any): boolean {
+  if (task.status === 'running' || task.status === 'queued' || task.status === 'scheduled') return false;
+  return task.items.some((i: PublishItemProgress) => i.status === 'failed' || i.status === 'cancelled');
+}
+
+function formatTags(tags?: string[]): string {
+  if (!tags || tags.length === 0) return '';
+  return tags.map((t: string) => '#' + t).join(' ');
+}
+
+function formatAccountList(items: PublishItemProgress[]): string {
+  return items.slice(4).map((i: PublishItemProgress) => nicknameOf(i.accountId)).join('、');
+}
+
+function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}秒`;
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  if (m < 60) return `${m}分${sec}秒`;
+  const h = Math.floor(m / 60);
+  return `${h}时${m % 60}分`;
+}
+
+async function openUrl(url: string) {
+  try {
+    await electronApi.openExternal(url);
+  } catch {
+    window.open(url, '_blank');
+  }
+}
+
+async function showDetail(row: any) {
+  try {
+    const data = await electronApi.getTaskDetail(row.id as string);
+    detailData.value = data;
+    detailVisible.value = true;
+  } catch (err) {
+    ElMessage.error('获取详情失败: ' + (err as Error).message);
+  }
+}
+
+async function retryTask(task: any) {
+  try {
+    await ElMessageBox.confirm(
+      `将重试此任务中失败的账号（成功的账号不会重复发布），确定继续？`,
+      '重试发布',
+      { type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+
+  retryingId.value = task.id as string;
+  try {
+    const newTaskId = await electronApi.retryPublish(task.id as string);
+    if (newTaskId) {
+      ElMessage.success(`已创建重试任务，新任务ID: ${newTaskId}`);
+      detailVisible.value = false;
+      await refresh();
+    } else {
+      ElMessage.info('没有需要重试的失败账号');
+    }
+  } catch (err) {
+    ElMessage.error('重试失败: ' + (err as Error).message);
+  } finally {
+    retryingId.value = null;
+  }
+}
+
+async function deleteTask(task: any) {
+  try {
+    await electronApi.deleteTask(task.id as string);
+    ElMessage.success('已删除');
+    await refresh();
+  } catch (err) {
+    ElMessage.error('删除失败: ' + (err as Error).message);
+  }
+}
+
 onMounted(async () => {
   await accountStore.loadPlatforms();
   await accountStore.refreshAccounts();
-  await publishStore.loadHistory();
+  await publishStore.loadHistoryPaged(1);
 });
 </script>
+
+<style scoped>
+.empty-hint {
+  text-align: center;
+  color: #909399;
+  padding: 60px 0;
+  font-size: 14px;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: center;
+  margin-top: 20px;
+  padding: 16px 0;
+}
+
+.detail-content {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.detail-section {
+  margin-top: 16px;
+}
+
+.detail-section-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #303133;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.content-preview {
+  background: #f5f7fa;
+  border-radius: 4px;
+  padding: 12px;
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.log-container {
+  background: #1e1e1e;
+  border-radius: 4px;
+  padding: 10px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.log-line {
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+.log-time {
+  color: #888;
+  margin-right: 6px;
+}
+
+.log-level {
+  margin-right: 4px;
+}
+
+.log-info .log-level { color: #4fc3f7; }
+.log-warn .log-level { color: #ffb74d; }
+.log-error .log-level { color: #ef5350; }
+.log-debug .log-level { color: #888; }
+
+.log-platform {
+  color: #81c784;
+  margin-right: 4px;
+}
+
+.log-account {
+  color: #ba68c8;
+  margin-right: 4px;
+}
+
+.log-stage {
+  color: #ffd54f;
+  margin-right: 4px;
+}
+
+.log-msg {
+  color: #e0e0e0;
+}
+
+.log-error .log-msg {
+  color: #ef9a9a;
+}
+</style>

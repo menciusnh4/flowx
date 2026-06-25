@@ -9,6 +9,7 @@
         :default-active="activeMenu"
         @select="onMenuSelect"
         :router="false"
+        :ellipsis="false"
       >
         <el-menu-item index="/dashboard">
           <el-icon><House /></el-icon>

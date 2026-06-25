@@ -200,6 +200,27 @@ export interface ProgressInfo {
   overallProgress: number;
 }
 
+/** 分页查询结果 */
+export interface PagedResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+/** 发布统计信息（轻量级，不加载完整任务列表） */
+export interface PublishStats {
+  /** 总任务数 */
+  total: number;
+  /** 今日成功数 */
+  todaySuccess: number;
+  /** 运行中任务数 */
+  running: number;
+  /** 失败任务数 */
+  failed: number;
+}
+
 /** 发布日志条目（结构化，方便在 App 内可查看） */
 export interface PublishLogEntry {
   /** 时间戳（毫秒） */

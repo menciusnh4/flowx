@@ -183,9 +183,52 @@ class PublishEngineClass {
     };
   }
 
-  /** 列出所有任务（历史） */
+  /** 列出所有任务（历史） - 返回全部，用于统计 */
   listTasks(): PublishTask[] {
     return Array.from(this.running.values()).sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  /** 分页查询任务列表
+   * @param page 页码，从1开始
+   * @param pageSize 每页数量，默认20
+   * @returns { items: PublishTask[], total: number, page: number, pageSize: number }
+   */
+  listTasksPaged(page = 1, pageSize = 20): {
+    items: PublishTask[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+  } {
+    const all = Array.from(this.running.values()).sort((a, b) => b.createdAt - a.createdAt);
+    const total = all.length;
+    const safePage = Math.max(1, page | 0);
+    const safeSize = Math.min(100, Math.max(5, pageSize | 0));
+    const totalPages = Math.max(1, Math.ceil(total / safeSize));
+    const start = (safePage - 1) * safeSize;
+    const items = all.slice(start, start + safeSize);
+    return { items, total, page: safePage, pageSize: safeSize, totalPages };
+  }
+
+  /** 获取统计信息（轻量级，仅返回计数，不序列化完整任务列表） */
+  getStats(): { total: number; todaySuccess: number; running: number; failed: number } {
+    const all = Array.from(this.running.values());
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const todayTs = startOfToday.getTime();
+
+    let total = all.length;
+    let todaySuccess = 0;
+    let running = 0;
+    let failed = 0;
+
+    for (const t of all) {
+      if (t.status === 'success' && t.updatedAt >= todayTs) todaySuccess++;
+      if (t.status === 'running' || t.status === 'queued') running++;
+      if (t.status === 'failed') failed++;
+    }
+
+    return { total, todaySuccess, running, failed };
   }
 
   /** 取消任务 */
@@ -239,6 +282,87 @@ class PublishEngineClass {
   /** 清空内存日志 */
   clearLogs(): boolean {
     clearPublishLogs();
+    return true;
+  }
+
+  /**
+   * 重试失败的任务
+   * - 只重试失败的账号（成功的跳过）
+   * - 创建新的子任务条目，保留原始请求
+   * - 如果全部账号都已成功，返回 null 表示无需重试
+   */
+  retry(taskId: string): string | null {
+    const originalTask = this.running.get(taskId);
+    if (!originalTask) {
+      throw new Error(`任务不存在: ${taskId}`);
+    }
+
+    // 找出失败或取消的子任务
+    const failedItems = originalTask.items.filter(
+      (item) => item.status === 'failed' || item.status === 'cancelled',
+    );
+
+    if (failedItems.length === 0) {
+      return null; // 没有失败的账号，无需重试
+    }
+
+    // 收集需要重试的账号ID
+    const retryAccountIds = failedItems.map((item) => item.accountId);
+
+    // 构造新的发布请求（使用原始请求，但只包含失败的账号）
+    const retryRequest: PublishRequest = {
+      ...originalTask.request,
+      accountIds: retryAccountIds,
+    };
+
+    writePublishLog({
+      ts: Date.now(),
+      level: 'info',
+      taskId: originalTask.id,
+      stage: 'retry',
+      message: `发起重试，原任务=${originalTask.id}，失败账号数=${retryAccountIds.length}`,
+      data: { retryAccountIds, originalStatus: originalTask.status },
+    });
+
+    // 提交新任务（复用submit逻辑）
+    const newTaskId = this.submit(retryRequest);
+
+    writePublishLog({
+      ts: Date.now(),
+      level: 'info',
+      taskId: newTaskId,
+      stage: 'retry',
+      message: `重试任务已创建，新任务ID=${newTaskId}，来源任务=${originalTask.id}`,
+      data: { sourceTaskId: originalTask.id, retryAccountIds },
+    });
+
+    return newTaskId;
+  }
+
+  /** 获取单个任务详情（含日志） */
+  getTaskDetail(taskId: string): { task: PublishTask | null; logs: PublishLogEntry[] } {
+    const task = this.running.get(taskId) || null;
+    const logs = queryPublishLogs({ taskId });
+    return { task, logs };
+  }
+
+  /** 删除单条历史记录 */
+  deleteTask(taskId: string): boolean {
+    const task = this.running.get(taskId);
+    if (!task) return false;
+    // 如果任务正在运行，不允许删除
+    if (task.status === 'running' || task.status === 'queued') {
+      throw new Error('任务正在执行中，无法删除');
+    }
+    this.running.delete(taskId);
+    this.persist();
+    writePublishLog({
+      ts: Date.now(),
+      level: 'info',
+      taskId,
+      stage: 'delete',
+      message: '历史记录已删除',
+    });
     return true;
   }
 
@@ -442,7 +566,7 @@ class PublishEngineClass {
 
   private persist() {
     const all = Array.from(this.running.values());
-    const sorted = all.sort((a, b) => b.createdAt - a.createdAt).slice(0, 200);
+    const sorted = all.sort((a, b) => b.createdAt - a.createdAt).slice(0, 1000);
     getStore().set(TASKS_KEY, sorted as never);
   }
 

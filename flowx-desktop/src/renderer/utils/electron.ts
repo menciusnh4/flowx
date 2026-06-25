@@ -13,6 +13,8 @@ import type {
   PublishLogEntry,
   PublishLogQuery,
   HealthCheckConfig,
+  PagedResult,
+  PublishStats,
 } from '../../types';
 
 type StatusCb = (evt: unknown) => void;
@@ -92,6 +94,21 @@ export const electronApi = {
   },
   async listTasks(): Promise<PublishTask[]> {
     return invokeElectron('publish.list', 'publish:list');
+  },
+  async listTasksPaged(page?: number, pageSize?: number): Promise<PagedResult<PublishTask>> {
+    return invokeElectron('publish.listPaged', 'publish:listPaged', page, pageSize);
+  },
+  async getPublishStats(): Promise<PublishStats> {
+    return invokeElectron('publish.getStats', 'publish:getStats');
+  },
+  async retryPublish(taskId: string): Promise<string | null> {
+    return invokeElectron('publish.retry', 'publish:retry', taskId);
+  },
+  async getTaskDetail(taskId: string): Promise<{ task: PublishTask | null; logs: PublishLogEntry[] }> {
+    return invokeElectron('publish.detail', 'publish:detail', taskId);
+  },
+  async deleteTask(taskId: string): Promise<boolean> {
+    return invokeElectron('publish.delete', 'publish:delete', taskId);
   },
   async setConcurrency(n: number): Promise<boolean> {
     return invokeElectron('publish.setConcurrency', 'publish:setConcurrency', n);

@@ -15,6 +15,23 @@ export function registerPublishIpc(): void {
   // 获取所有任务（历史记录）
   safeInvoke('publish:list', () => PublishEngine.listTasks());
 
+  // 分页查询任务列表
+  safeInvoke('publish:listPaged', (page?: number, pageSize?: number) =>
+    PublishEngine.listTasksPaged(page || 1, pageSize || 20),
+  );
+
+  // 获取统计信息（轻量级）
+  safeInvoke('publish:getStats', () => PublishEngine.getStats());
+
+  // 重试失败任务 -> 返回新的 taskId，或 null（无需重试）
+  safeInvoke('publish:retry', (taskId: string) => PublishEngine.retry(taskId));
+
+  // 获取任务详情（含日志）
+  safeInvoke('publish:detail', (taskId: string) => PublishEngine.getTaskDetail(taskId));
+
+  // 删除单条历史记录
+  safeInvoke('publish:delete', (taskId: string) => PublishEngine.deleteTask(taskId));
+
   // 修改并发数
   safeInvoke('publish:setConcurrency', (n: number) => {
     PublishEngine.setConcurrency(n);

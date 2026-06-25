@@ -18,13 +18,13 @@
         <el-col :span="6">
           <el-card shadow="hover">
             <div class="stat-title">历史发布</div>
-            <div class="stat-value">{{ publishStore.history.length }}</div>
+            <div class="stat-value">{{ publishStore.stats.total }}</div>
           </el-card>
         </el-col>
         <el-col :span="6">
           <el-card shadow="hover">
             <div class="stat-title">今日成功</div>
-            <div class="stat-value">{{ todaySuccess }}</div>
+            <div class="stat-value">{{ publishStore.stats.todaySuccess }}</div>
           </el-card>
         </el-col>
       </el-row>
@@ -63,7 +63,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue';
+import { onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAccountStore } from '../stores/account';
 import { usePublishStore } from '../stores/publish';
@@ -72,15 +72,6 @@ const router = useRouter();
 const accountStore = useAccountStore();
 const publishStore = usePublishStore();
 
-const todaySuccess = computed(() => {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const ts = start.getTime();
-  return publishStore.history.filter(
-    (t) => t.updatedAt >= ts && t.status === 'success',
-  ).length;
-});
-
 function go(path: string) {
   router.push(path);
 }
@@ -88,7 +79,7 @@ function go(path: string) {
 onMounted(async () => {
   await accountStore.loadPlatforms();
   await accountStore.refreshAccounts();
-  await publishStore.loadHistory();
+  await publishStore.loadStats();
 });
 </script>
 
