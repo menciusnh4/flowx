@@ -8,12 +8,10 @@
   "private": true,
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/patch-electron-exe.js && vue-tsc --noEmit && vite build && electron-builder",
-    "build:win": "node scripts/patch-electron-exe.js && vue-tsc --noEmit && vite build && electron-builder --win --x64",
+    "build": "vue-tsc --noEmit && vite build && electron-builder",
+    "build:win": "vue-tsc --noEmit && vite build && electron-builder --win --x64",
     "build:mac": "vue-tsc --noEmit && vite build && electron-builder --mac",
-    "generate-icons": "node scripts/generate-icons-v3.js",
-    "patch-electron": "node scripts/patch-electron-exe.js",
-    "fix-icon": "node scripts/fix-exe-icon.js",
+    "generate-icons": "node scripts/generate-icons.js",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit"
   },

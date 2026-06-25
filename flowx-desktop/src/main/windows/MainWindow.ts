@@ -4,77 +4,58 @@ import fs from 'fs';
 
 let mainWindow: BrowserWindow | null = null;
 
-// 缓存图标路径，避免重复查找
-let _cachedIconPath: string | undefined | null = null;
+// 缓存图标，避免重复加载
+let _cachedIcon: Electron.NativeImage | undefined | null = null;
 
-// 获取应用图标路径（兼容开发/生产环境）
-export function getAppIconPath(): string | undefined {
-  // 返回缓存结果
-  if (_cachedIconPath !== null) {
-    return _cachedIconPath;
+// 获取应用图标（nativeImage）
+// 按照electron-builder官方推荐方式：
+// - 开发环境: build/icon.png (1024x1024)
+// - 生产环境: electron-builder会自动将图标嵌入exe，
+//   但我们仍然尝试从resources加载，确保窗口图标正确
+export function getAppIcon(): Electron.NativeImage | undefined {
+  if (_cachedIcon !== null) {
+    return _cachedIcon;
   }
   
   try {
-    const isWin = process.platform === 'win32';
-    const isMac = process.platform === 'darwin';
-    
-    // 可能的图标路径列表（按优先级排序）
     const candidatePaths: string[] = [];
     
-    // 生产环境：从 resources 目录读取
     if (app.isPackaged) {
-      // Windows 优先使用 .ico
-      if (isWin) {
-        candidatePaths.push(path.join(process.resourcesPath, 'icon.ico'));
-      }
-      // macOS/Linux 使用 .png
+      // 生产环境：electron-builder会将图标放在resources目录
       candidatePaths.push(path.join(process.resourcesPath, 'icon.png'));
-      candidatePaths.push(path.join(process.resourcesPath, 'icon-512.png'));
-      // 兜底
-      candidatePaths.push(path.join(process.resourcesPath, 'assets/icon.png'));
+      // Windows上exe图标已经嵌入，也可以尝试ico
+      candidatePaths.push(path.join(process.resourcesPath, 'icon.ico'));
     } else {
-      // 开发环境：从 build 目录读取
-      // __dirname 在编译后是 dist-electron/main/
+      // 开发环境：从build目录读取
       const buildDir = path.join(__dirname, '../../build');
-      if (isWin) {
-        candidatePaths.push(path.join(buildDir, 'icon.ico'));
-      }
       candidatePaths.push(path.join(buildDir, 'icon.png'));
-      candidatePaths.push(path.join(buildDir, 'icon-512.png'));
-      candidatePaths.push(path.join(buildDir, 'icon-1024.png'));
+      candidatePaths.push(path.join(buildDir, 'icon.ico'));
     }
     
-    // 查找第一个存在的图标
     for (const p of candidatePaths) {
       if (fs.existsSync(p)) {
-        console.log('[FlowX] 找到图标:', p);
-        _cachedIconPath = p;
-        return p;
+        const img = nativeImage.createFromPath(p);
+        if (!img.isEmpty()) {
+          console.log('[FlowX] 加载应用图标:', p);
+          _cachedIcon = img;
+          return img;
+        }
       }
     }
     
-    console.warn('[FlowX] 未找到图标文件，搜索路径:', candidatePaths);
+    console.warn('[FlowX] 未找到图标文件');
   } catch (e) {
-    console.warn('[FlowX] 获取图标路径失败:', e);
+    console.warn('[FlowX] 获取应用图标失败:', e);
   }
   
-  _cachedIconPath = undefined;
+  _cachedIcon = undefined;
   return undefined;
 }
 
-// 获取应用图标 nativeImage
-export function getAppIcon(): Electron.NativeImage | undefined {
-  const iconPath = getAppIconPath();
-  if (iconPath) {
-    try {
-      const img = nativeImage.createFromPath(iconPath);
-      if (!img.isEmpty()) {
-        return img;
-      }
-    } catch (e) {
-      console.warn('[FlowX] 加载图标失败:', e);
-    }
-  }
+// 获取图标路径（兼容旧代码）
+export function getAppIconPath(): string | undefined {
+  const icon = getAppIcon();
+  // nativeImage没有直接获取路径的方法，这里返回undefined让Electron使用默认
   return undefined;
 }
 

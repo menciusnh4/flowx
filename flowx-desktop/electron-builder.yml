@@ -3,6 +3,7 @@ productName: FlowX
 directories:
   output: release
   buildResources: build
+afterPack: scripts/afterPack.js
 files:
   - dist/**/*
   - dist-electron/**/*
@@ -21,18 +22,14 @@ files:
 extraResources:
   - from: build/icon.png
     to: icon.png
-  - from: build/icon.ico
-    to: icon.ico
-  - from: build/icon-512.png
-    to: icon-512.png
 win:
   icon: build/icon.ico
-  artifactName: "${productName}-${version}-setup.${ext}"
-  signAndEditExecutable: false
   target:
     - target: nsis
       arch:
         - x64
+  artifactName: "${productName}-${version}-setup.${ext}"
+  signAndEditExecutable: false
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
@@ -41,15 +38,14 @@ nsis:
   shortcutName: FlowX
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
-  installerHeaderIcon: build/icon.ico
   deleteAppDataOnUninstall: false
 mac:
-  target: dmg
   icon: build/icon.png
+  target: dmg
   category: public.app-category.productivity
 linux:
-  target: AppImage
   icon: build/icon.png
+  target: AppImage
 publish:
   provider: generic
   url: "https://update.flowx.com/${os}/"

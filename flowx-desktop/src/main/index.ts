@@ -68,23 +68,15 @@ async function bootstrap() {
   await app.whenReady();
   isReady = true;
 
-  // ✅ 设置应用图标（Windows/macOS/Linux 全平台）
-  try {
-    app.setName('FlowX');
-    
-    // 使用 getAppIcon 获取正确的图标 nativeImage
+  // 设置应用名称和图标
+  app.setName('FlowX');
+  
+  // macOS: 设置 Dock 图标
+  if (process.platform === 'darwin') {
     const appIcon = getAppIcon();
     if (appIcon) {
-      // macOS: 设置 Dock 图标
-      if (process.platform === 'darwin') {
-        app.dock.setIcon(appIcon);
-      }
-      console.log('[FlowX] ✅ 应用图标已加载');
-    } else {
-      console.warn('[FlowX] ⚠️ 图标加载失败');
+      app.dock.setIcon(appIcon);
     }
-  } catch (iconErr) {
-    console.warn('[FlowX] 设置应用图标失败:', iconErr);
   }
 
   // 初始化存储（加密）
