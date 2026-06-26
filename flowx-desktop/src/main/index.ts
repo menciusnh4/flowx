@@ -48,21 +48,25 @@ async function bootstrap() {
   setupLogger();
   logger.info('[FlowX] 应用启动');
 
-  // 单实例锁
-  const gotLock = app.requestSingleInstanceLock();
-  if (!gotLock) {
-    logger.info('[FlowX] 已有实例运行，退出');
-    app.quit();
-    return;
-  }
-
-  app.on('second-instance', () => {
-    const win = getMainWindow();
-    if (win) {
-      if (win.isMinimized()) win.restore();
-      win.focus();
+  // 单实例锁（开发模式下禁用，方便同时运行打包版和开发版调试）
+  // 使用 app.isPackaged 判断最可靠：打包后为 true，开发模式下为 false
+  if (app.isPackaged) {
+    const gotLock = app.requestSingleInstanceLock();
+    if (!gotLock) {
+      logger.info('[FlowX] 已有实例运行，退出');
+      app.quit();
+      return;
     }
-  });
+    app.on('second-instance', () => {
+      const win = getMainWindow();
+      if (win) {
+        if (win.isMinimized()) win.restore();
+        win.focus();
+      }
+    });
+  } else {
+    logger.info('[FlowX] 开发模式，跳过单实例锁');
+  }
 
   // 当 Electron 完成初始化并准备好创建浏览器窗口时调用
   await app.whenReady();
