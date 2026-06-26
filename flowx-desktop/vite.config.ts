@@ -73,8 +73,8 @@ export default defineConfig(({ command }) => {
     server: {
       // 关键修复：强制 IPv4，避免 Windows 上 localhost 解析为 IPv6 (::1) 导致 connection refused
       host: '127.0.0.1',
-      port: 5173,
-      strictPort: true,
+      port: 41730, // 使用不常用的高位端口，避免与常见开发服务冲突
+      strictPort: false, // 端口被占用时自动尝试下一个可用端口
     },
     build: {
       outDir: 'dist',

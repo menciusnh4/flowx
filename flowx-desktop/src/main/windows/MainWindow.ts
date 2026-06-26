@@ -134,7 +134,7 @@ export async function createMainWindow(): Promise<BrowserWindow> {
 
   const isDev = !app.isPackaged;
   // 关键修复：Windows 上优先用 127.0.0.1，避免 localhost 解析为 IPv6 [::1] 导致 connection refused
-  const devUrl = process.env.VITE_DEV_SERVER_URL?.replace('localhost', '127.0.0.1') || 'http://127.0.0.1:5173/';
+  const devUrl = process.env.VITE_DEV_SERVER_URL?.replace('localhost', '127.0.0.1') || 'http://127.0.0.1:41730/';
 
   if (isDev) {
     try {
