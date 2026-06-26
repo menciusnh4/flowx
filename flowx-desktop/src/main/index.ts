@@ -66,6 +66,10 @@ async function bootstrap() {
     });
   } else {
     logger.info('[FlowX] 开发模式，跳过单实例锁');
+    // 开发模式使用独立的缓存目录，避免与打包版冲突（缓存文件被锁定导致拒绝访问）
+    const devCachePath = path.join(app.getPath('userData') + '-dev', 'Cache');
+    app.commandLine.appendSwitch('disk-cache-dir', devCachePath);
+    logger.info('[FlowX] 开发模式缓存目录: ' + devCachePath);
   }
 
   // 当 Electron 完成初始化并准备好创建浏览器窗口时调用
