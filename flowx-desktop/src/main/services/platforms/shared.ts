@@ -1325,6 +1325,26 @@ export async function cdpInsertTagsWithSpace(
     }).catch(() => {});
   };
 
+  /** 通过 CDP 发送真实 End 键事件（光标移到行尾） */
+  const sendEndKey = async () => {
+    const VK_END = 35;
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key: 'End',
+      code: 'End',
+      windowsVirtualKeyCode: VK_END,
+      nativeVirtualKeyCode: VK_END,
+    }).catch(() => {});
+    await sleep(30);
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key: 'End',
+      code: 'End',
+      windowsVirtualKeyCode: VK_END,
+      nativeVirtualKeyCode: VK_END,
+    }).catch(() => {});
+  };
+
   /** 通过 JS 派发 input 事件，确保框架（React/Vue）感知到文本变化 */
   const dispatchInputEvent = async () => {
     const script = `(function(){
@@ -1342,30 +1362,51 @@ export async function cdpInsertTagsWithSpace(
   try {
     await sleep(300); // 等待正文写入完成，编辑器稳定
 
-    // 如果有正文内容，先换行（用 JS 方式更可靠，不依赖焦点状态）
-    // 1. 找到编辑器 → 2. 聚焦并移到末尾 → 3. 插入段落换行
+    // 如果有正文内容，先换行
+    // 🔑 关键策略：JS 只负责找到正确的编辑器并聚焦，
+    // 光标定位（End键）和换行（Enter键）全部用 CDP 完成，
+    // 确保和后续话题输入的键盘上下文完全一致
     if (hasContentBefore) {
-      const newlineScript = `(function(){
+      // 第1步：JS 找到正文编辑器并聚焦
+      const focusScript = `(function(){
         try {
           var ce = document.querySelectorAll('[contenteditable]');
-          var target = null;
-          // 优先找 ProseMirror/tiptap 编辑器
+          var allEditable = [];
           for (var i = 0; i < ce.length; i++) {
             var val = ce[i].getAttribute && ce[i].getAttribute('contenteditable');
             if (val === 'false') continue;
-            var cls = String(ce[i].className || '');
-            if (/tiptap|ProseMirror|prosemirror/i.test(cls)) { target = ce[i]; break; }
+            var txt = (ce[i].innerText || ce[i].textContent || '').trim();
+            allEditable.push({ el: ce[i], len: txt.length, cls: String(ce[i].className || '') });
           }
-          // 否则找最后一个可编辑元素（通常是正文描述框）
+          if (allEditable.length === 0) return { ok: false, reason: 'no-editable' };
+          var target = null;
+          var reason = '';
+          // 策略1：有内容的 ProseMirror/tiptap（内容最多的）
+          var pmWithContent = allEditable.filter(function(x) {
+            return /tiptap|ProseMirror|prosemirror/i.test(x.cls) && x.len > 0;
+          });
+          if (pmWithContent.length > 0) {
+            pmWithContent.sort(function(a, b) { return b.len - a.len; });
+            target = pmWithContent[0].el;
+            reason = 'prosemirror-with-content';
+          }
+          // 策略2：有内容的普通 contenteditable（内容最多的）
           if (!target) {
-            for (var j = ce.length - 1; j >= 0; j--) {
-              var v2 = ce[j].getAttribute && ce[j].getAttribute('contenteditable');
-              if (v2 !== 'false') { target = ce[j]; break; }
+            var withContent = allEditable.filter(function(x) { return x.len > 0; });
+            if (withContent.length > 0) {
+              withContent.sort(function(a, b) { return b.len - a.len; });
+              target = withContent[0].el;
+              reason = 'max-content';
             }
+          }
+          // 策略3：兜底用最后一个
+          if (!target) {
+            target = allEditable[allEditable.length - 1].el;
+            reason = 'last-fallback';
           }
           if (target) {
             target.focus();
-            // 光标移到末尾
+            // 光标移到末尾（先用 JS 方式尝试，后续 CDP End 键再确认）
             try {
               var range = document.createRange();
               range.selectNodeContents(target);
@@ -1374,24 +1415,31 @@ export async function cdpInsertTagsWithSpace(
               sel.removeAllRanges();
               sel.addRange(range);
             } catch(e) {}
-            // 插入段落换行（优先 insertParagraph，失败则 insertLineBreak）
-            var ok = false;
-            try { ok = document.execCommand('insertParagraph', false, null); } catch(e) {}
-            if (!ok) {
-              try { ok = document.execCommand('insertLineBreak', false, null); } catch(e) {}
-            }
-            return { ok: ok, tag: target.tagName };
+            return { ok: true, reason: reason, cls: String(target.className || '').slice(0,60) };
           }
           return { ok: false, reason: 'no-editor' };
         } catch(e) { return { ok: false, err: String(e) }; }
       })()`;
+      let focusOk = false;
       try {
-        const nlRes: any = await win.webContents.executeJavaScript(newlineScript);
-        log('info', 'cdp-tags', `正文后换行: ${nlRes && nlRes.ok ? '成功' : '失败 - ' + (nlRes && (nlRes.reason || nlRes.err))}`);
+        const focusRes: any = await win.webContents.executeJavaScript(focusScript);
+        focusOk = !!(focusRes && focusRes.ok);
+        log('info', 'cdp-tags', `聚焦编辑器: ${focusOk ? '成功' : '失败'} (${focusRes && (focusRes.reason || focusRes.err)})`);
       } catch {
-        log('warn', 'cdp-tags', '换行脚本执行失败');
+        log('warn', 'cdp-tags', '聚焦编辑器脚本执行失败');
       }
-      await sleep(200); // 等待换行完成，编辑器稳定
+      await sleep(150);
+
+      if (focusOk) {
+        // 第2步：CDP 发送 End 键，确保光标在编辑器末尾
+        // （JS 移动光标在某些编辑器中可能不可靠，CDP End 键更保险）
+        await sendEndKey();
+        await sleep(100);
+
+        // 第3步：CDP 发送 Enter 键换行
+        await sendEnterKey();
+        await sleep(200);
+      }
     }
 
     for (let i = 0; i < tags.length; i++) {
@@ -1427,17 +1475,16 @@ export async function cdpInsertTagsWithSpace(
       await sleep(500); // 等待平台处理话题转换
 
       // 第4步：额外输入一个普通空格，确保光标移到普通文本区域
-      // 🔑 关键：话题确认后光标可能在话题节点内部/边缘，导致下一个 # 号无法触发话题模式
-      // 额外输入一个普通空格，把光标推到普通文本区域，确保下一个话题的 # 号能正常触发
-      if (i < tags.length - 1) {
-        await sendCharKey(' ');
-        await sleep(150);
-      }
+      // 🔑 关键：话题确认后光标可能在话题节点内部/边缘
+      // 额外输入一个普通空格，把光标推到普通文本区域
+      // - 非最后一个：确保下一个话题的 # 号能正常触发话题模式
+      // - 最后一个：确保话题转换完全完成（有些平台需要离开话题模式才完成转换）
+      await sendCharKey(' ');
+      await sleep(150);
     }
 
-    // 最后一个话题额外等待：确保话题完全转换稳定后再返回
-    // 避免后续操作（如点击发布）干扰话题的最终状态
-    await sleep(300);
+    // 所有话题输入完后额外等待，确保最后一个话题完全转换稳定
+    await sleep(500);
 
     log('info', 'cdp-tags', `✅ 已输入 ${tags.length} 个标签`);
     return true;
