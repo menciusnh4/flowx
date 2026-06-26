@@ -15,6 +15,7 @@ import {
   uploadViaCDP,
   waitForUploadComplete,
   buildPageStructureProbe,
+  cdpInsertTagsWithSpace,
 } from './shared';
 import { registerPlatform } from './registry';
 import type {
@@ -270,46 +271,52 @@ function truncate(text: string, max: number): string {
 /** 格式化 tag 列表：加 "#" 前缀、去重、截断数量 */
 function buildTagsString(tags: string[] | undefined): string {
   if (!tags || tags.length === 0) return '';
-  const cleaned = tags
-    .map((t) => t.trim())
-    .filter((t) => t.length > 0)
-    .map((t) => (t.startsWith('#') ? t : `#${t}`));
-  const deduped = Array.from(new Set(cleaned));
-  const limited = deduped.slice(0, TAG_MAX);
-  return limited.join(' ');
+  const cleaned = prepareTags(tags);
+  return cleaned.join(' ');
 }
 
 /**
- * 组装要写入内容字段的文本：[标题] + [正文] + [标签]（按字数限制截断）。
+ * 清洗标签数组：去空、加#前缀、去重、截断到TAG_MAX
+ */
+function prepareTags(tags: string[] | undefined): string[] {
+  if (!tags || tags.length === 0) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const t of tags) {
+    const trimmed = (t || '').trim();
+    if (!trimmed) continue;
+    const withHash = trimmed.startsWith('#') ? trimmed : '#' + trimmed;
+    if (seen.has(withHash)) continue;
+    seen.add(withHash);
+    result.push(withHash);
+    if (result.length >= TAG_MAX) break;
+  }
+  return result;
+}
+
+/**
+ * 组装要写入内容字段的基础文本（不含标签，标签单独插入以触发话题识别）：[标题] + [正文]（按字数限制截断）。
  * 对于图文模式，skipTitle=true，表示"标题并入内容"，内容里保留完整文本。
  */
-function buildContentText(
+function buildContentBaseText(
   title: string | undefined,
   content: string | undefined,
-  tags: string[] | undefined,
   skipTitle: boolean,
 ): string {
   const titleText = (title || '').trim();
   const contentText = (content || '').trim();
-  const tagsText = buildTagsString(tags);
 
-  // 标题字段独占（视频模式）：标题单独填入 title 输入框，不受 content 限制
+  // 标题字段独占（视频模式）：标题单独填入 title 输入框，内容字段只含正文
   if (!skipTitle) {
-    // 内容字段由 content + tags 组成，总长度 <= CONTENT_MAX
-    const base = contentText;
-    if (!tagsText) return truncate(base, CONTENT_MAX);
-    const combined = base ? `${base}\n${tagsText}` : tagsText;
-    return truncate(combined, CONTENT_MAX);
+    return truncate(contentText, CONTENT_MAX);
   }
 
-  // skipTitle=true：把 title + content + tags 全部合并进内容字段，总长 <= CONTENT_MAX
+  // skipTitle=true：把 title + content 合并进内容字段，总长 <= CONTENT_MAX
   const parts: string[] = [];
   if (titleText) parts.push(titleText);
   if (contentText) parts.push(contentText);
   const base = parts.join('\n');
-  if (!tagsText) return truncate(base, CONTENT_MAX);
-  const combined = base ? `${base}\n${tagsText}` : tagsText;
-  return truncate(combined, CONTENT_MAX);
+  return truncate(base, CONTENT_MAX);
 }
 
 // ========================= 快手平台专用脚本 =========================
@@ -443,6 +450,11 @@ function buildFillContenteditableScript(kind: 'title' | 'content', text: string)
     ? `(index === 0 && all.length > 1)` // 仅当存在多个 contenteditable 时，第一个当作 title
     : `(index === all.length - 1 || (index === 0 && all.length === 1))`; // content 为最后一个 或 唯一的一个
 
+  // content 类型写完后不 blur，保持焦点在末尾，便于后续 CDP 输入标签
+  const afterWrite = isTitle
+    ? `target.blur();`
+    : `try { var rng = document.createRange(); rng.selectNodeContents(target); rng.collapse(false); var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(rng); } catch(e) {}`;
+
   return `
     (function () {
       var text = ${json};
@@ -503,9 +515,9 @@ function buildFillContenteditableScript(kind: 'title' | 'content', text: string)
             } catch (evErr2) {}
           }
         }
-        // 让页面有时间响应
-        target.blur();
-        return { ok: true, kind: '${kind}', index: matchedIdx, length: text.length };
+        // 标题写完后blur；正文写完后保持焦点在末尾，便于CDP输入标签
+        ${afterWrite}
+        return { ok: true, kind: '${kind}', index: matchedIdx, length: text.length, isContentEditable: ${isTitle ? 'false' : 'true'} };
       } catch (e) {
         return { ok: false, kind: '${kind}', msg: String(e) };
       }
@@ -685,10 +697,11 @@ async function runKuaishouPublish(
     await sleep(1500);
 
     // ---- 步骤 8：填写标题 / 内容 / 标签 ----
-    const contentText = buildContentText(request.title, request.content, request.tags, skipTitle);
+    const ksTagList = prepareTags(request.tags);
+    const baseContentText = buildContentBaseText(request.title, request.content, skipTitle);
     const titleText = skipTitle ? '' : truncate((request.title || '').trim(), TITLE_MAX);
 
-    log('info', 'fill', `准备写入：title="${titleText.slice(0, 40)}" (len=${titleText.length}), contentLen=${contentText.length}`);
+    log('info', 'fill', `准备写入：title="${titleText.slice(0, 40)}" (len=${titleText.length}), contentLen=${baseContentText.length}, tags=${ksTagList.length}`);
 
     if (titleText) {
       const script = buildFillContenteditableScript('title', titleText);
@@ -701,15 +714,20 @@ async function runKuaishouPublish(
       await sleep(800);
     }
 
-    if (contentText) {
-      const script = buildFillContenteditableScript('content', contentText);
+    if (baseContentText || ksTagList.length > 0) {
+      const script = buildFillContenteditableScript('content', baseContentText);
       const res: any = await evalJS(win, script, 'fill-content', log).catch(() => null);
       if (!res || !res.ok) {
         log('warn', 'fill', `内容写入失败: ${JSON.stringify(res).slice(0, 200)}`);
       } else {
         log('info', 'fill', `✅ 内容已写入 (index=${res.index})`);
       }
-      await sleep(1500);
+      await sleep(500);
+      // 通过 CDP 真实键盘事件逐个输入话题标签
+      if (ksTagList.length > 0 && res && res.ok && res.isContentEditable) {
+        await cdpInsertTagsWithSpace(win, ksTagList, baseContentText.length > 0, log);
+        await sleep(300);
+      }
     }
 
     // ---- 步骤 9：点击发布按钮 ----

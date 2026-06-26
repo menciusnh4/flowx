@@ -12,6 +12,7 @@ import {
   waitForUploadComplete,
   buildPageStructureProbe,
   cdpClickPublishButton, // 🔑 CDP 穿透 closed shadow DOM 点击（小红书发布按钮是自定义 web component）
+  cdpInsertTagsWithSpace,
 } from './shared';
 import { registerPlatform } from './registry';
 import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities, ContentType } from '../../../types';
@@ -378,12 +379,25 @@ function buildFillTitleTextScript(text: string): string {
  *  2) 找到后 focus → 全选 → 删除 → insertText（insertText 可正确处理多行/空格/表情）
  *  3) 若无 ProseMirror，退回到普通 contenteditable 的 innerText 写入
  *  4) 若再无，回退到 textarea
+ *  5) 写完后保持焦点在编辑器末尾，不 blur（便于后续 CDP 键盘事件输入标签）
  */
 function buildFillContentScript(content: string): string {
   const contentJSON = JSON.stringify(content);
   return (
     '(function(){' +
     'var content = ' + contentJSON + ';' +
+    // 辅助：将光标移到编辑器末尾
+    'function moveCursorToEnd(el) {' +
+    '  try {' +
+    '    el.focus();' +
+    '    var range = document.createRange();' +
+    '    range.selectNodeContents(el);' +
+    '    range.collapse(false);' +
+    '    var sel = window.getSelection();' +
+    '    sel.removeAllRanges();' +
+    '    sel.addRange(range);' +
+    '  } catch(e) {}' +
+    '}' +
     // 辅助：判断是否为 ProseMirror / tiptap
     'function isProseMirror(el) {' +
     '  if (!el || !el.getAttribute) return false;' +
@@ -414,7 +428,8 @@ function buildFillContentScript(content: string): string {
     '} catch(e) {}' +
     'var target = pmTarget || edTarget || taTarget;' +
     'if (!target) return { ok: false, reason: \'no-content-target\' };' +
-    // 写入
+    'var kind = pmTarget ? \'prosemirror\' : (edTarget ? \'contenteditable\' : \'textarea\');' +
+    // 写入正文
     'try {' +
     '  target.focus();' +
     '  var tag = (target.tagName || \'\').toLowerCase();' +
@@ -436,14 +451,17 @@ function buildFillContentScript(content: string): string {
     '    }' +
     '    try { pmTarget.dispatchEvent(new Event(\'input\', { bubbles: true })); } catch(e) {}' +
     '  } else {' +
-    // 普通 contenteditable：用 execCommand 触发真实输入事件，确保 React 受控组件 state 更新
+    // 普通 contenteditable：用 execCommand 触发真实输入事件
     '    try { document.execCommand(\'selectAll\'); } catch(e1) {}' +
     '    try { document.execCommand(\'delete\'); } catch(e2) {}' +
     '    try { document.execCommand(\'insertText\', false, content); } catch(e3) { target.innerText = content; }' +
     '    try { target.dispatchEvent(new Event(\'input\', { bubbles: true })); } catch(e) {}' +
     '  }' +
-    '  try { target.blur(); } catch(e) {}' +
-    '  return { ok: true, kind: pmTarget ? \'prosemirror\' : (edTarget ? \'contenteditable\' : \'textarea\'), length: content.length };' +
+    // 将光标移到末尾，保持焦点（不blur），便于后续CDP输入标签
+    '  if (pmTarget || edTarget) {' +
+    '    moveCursorToEnd(target);' +
+    '  }' +
+    '  return { ok: true, kind: kind, length: content.length, isContentEditable: pmTarget || edTarget ? true : false };' +
     '} catch(e) {' +
     '  return { ok: false, reason: String(e && e.message || e) };' +
     '}' +
@@ -552,15 +570,30 @@ function truncate(text: string, max: number): string {
 function buildContentText(content: string, tags: string[] | undefined): string {
   const base = content || '';
   if (!tags || tags.length === 0) return base;
-  const trimmedTags = tags
-    .map((t) => (t || '').trim())
-    .filter((t) => t.length > 0)
-    .slice(0, MAX_TAGS)
-    .map((t) => (t.startsWith('#') ? t : '#' + t));
+  const trimmedTags = prepareTags(tags);
   if (trimmedTags.length === 0) return base;
   const tagStr = trimmedTags.join(' ');
   const combined = base.length > 0 ? base + '\n' + tagStr : tagStr;
   return combined;
+}
+
+/**
+ * 清洗标签数组：去空、加#前缀、去重、截断到MAX_TAGS
+ */
+function prepareTags(tags: string[] | undefined): string[] {
+  if (!tags || tags.length === 0) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const t of tags) {
+    const trimmed = (t || '').trim();
+    if (!trimmed) continue;
+    const withHash = trimmed.startsWith('#') ? trimmed : '#' + trimmed;
+    if (seen.has(withHash)) continue;
+    seen.add(withHash);
+    result.push(withHash);
+    if (result.length >= MAX_TAGS) break;
+  }
+  return result;
 }
 
 // =====================================================================
@@ -720,18 +753,23 @@ async function runXhsPublish(
     log('info', 'fill-title', `标题填写结果: ${JSON.stringify(titleResult)}`);
     await sleep(500);
 
-    // 9) 填充正文（含话题）
+    // 9) 填充正文
     onProgress(70, '填写正文…');
-    const fullContent = buildContentText(request.content || '', request.tags);
-    const contentText = truncate(fullContent, CONTENT_LIMIT);
-    if (fullContent.length > CONTENT_LIMIT) {
-      log('warn', 'fill-content', `正文过长，已从 ${fullContent.length} 字截断为 ${CONTENT_LIMIT} 字`);
-    } else {
-      log('info', 'fill-content', `正文长度: ${contentText.length}/${CONTENT_LIMIT} 字`);
+    const baseContent = truncate(request.content || '', CONTENT_LIMIT);
+    const tagList = prepareTags(request.tags);
+    if ((request.content || '').length > CONTENT_LIMIT) {
+      log('warn', 'fill-content', `正文过长，已从 ${(request.content || '').length} 字截断为 ${CONTENT_LIMIT} 字`);
     }
-    const contentResult: any = await evalJS(win, buildFillContentScript(contentText), '填写正文', log);
+    log('info', 'fill-content', `正文长度: ${baseContent.length}/${CONTENT_LIMIT} 字, 标签: ${tagList.length} 个`);
+    const contentResult: any = await evalJS(win, buildFillContentScript(baseContent), '填写正文', log);
     log('info', 'fill-content', `正文填写结果: ${JSON.stringify(contentResult)}`);
-    await sleep(800);
+    await sleep(500);
+
+    // 9.5) 通过 CDP 真实键盘事件逐个输入话题标签（空格键触发话题识别）
+    if (tagList.length > 0 && contentResult && contentResult.ok && contentResult.isContentEditable) {
+      await cdpInsertTagsWithSpace(win, tagList, baseContent.length > 0, log);
+      await sleep(300);
+    }
 
     // 10) 点击"发布"按钮 —— 🔑 使用 CDP 穿透 closed shadow DOM（小红书发布按钮是自定义 web component）
     //    先尝试 JS 点击（处理 light DOM 中的按钮），失败后用 CDP 鼠标合成事件（可穿透 shadow DOM）
@@ -1186,21 +1224,17 @@ async function publishArticle(
     // 7) 正文（富文本，不限制字数）
     onProgress(72, '填写正文…');
     const rawContent = request.content || '';
-    // 话题处理：与图文相同，最多 10 个
-    const trimmedTags = (request.tags || [])
-      .map((t) => (t || '').trim())
-      .filter((t) => t.length > 0)
-      .slice(0, MAX_TAGS)
-      .map((t) => (t.startsWith('#') ? t : '#' + t));
-    let articleContent = rawContent;
-    if (trimmedTags.length > 0) {
-      const tagStr = trimmedTags.join(' ');
-      articleContent = articleContent.length > 0 ? articleContent + '\n' + tagStr : tagStr;
-    }
-    log('info', 'fill-content', `文章正文: ${articleContent.length} 字`);
-    const contentRes: any = await evalJS(win, buildFillContentScript(articleContent), '文章-填写正文', log).catch(() => null);
+    const articleTagList = prepareTags(request.tags);
+    log('info', 'fill-content', `文章正文: ${rawContent.length} 字, 标签: ${articleTagList.length} 个`);
+    const contentRes: any = await evalJS(win, buildFillContentScript(rawContent), '文章-填写正文', log).catch(() => null);
     log('info', 'fill-content', `正文填写结果: ${JSON.stringify(contentRes)}`);
-    await sleep(800);
+    await sleep(500);
+
+    // 7.5) 通过 CDP 输入话题标签
+    if (articleTagList.length > 0 && contentRes && contentRes.ok && contentRes.isContentEditable) {
+      await cdpInsertTagsWithSpace(win, articleTagList, rawContent.length > 0, log);
+      await sleep(300);
+    }
 
     // 8) 文章发布：点击底部 "next-btn" 红色按钮 2-3 次（文本动态变化）
     //    🔑 关键洞察（来自实际页面 HTML）：

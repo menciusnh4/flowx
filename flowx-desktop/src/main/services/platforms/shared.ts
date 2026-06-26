@@ -1212,6 +1212,241 @@ export async function cdpClickPublishButton(
   }
 }
 
+/**
+ * 通过 CDP 真实键盘事件触发话题标签识别。
+ *
+ * 使用场景：各平台（小红书/抖音/快手）的富文本编辑器在输入 #话题 后，
+ * 需要用户按下空格键才能将纯文本 #话题 转为可点击的话题标签。
+ * 通过 JS 派发的合成 KeyboardEvent（isTrusted=false）不会被平台识别，
+ * 必须通过 CDP Input.dispatchKeyEvent 发送真实键盘事件。
+ *
+ * 方案设计（混合模式，兼顾中文支持和真实键盘事件）：
+ *   1. 换行符通过 JS eval 执行 execCommand('insertText') 插入
+ *   2. 标签的 # 号通过 CDP 键盘事件输入（触发平台进入话题模式）
+ *   3. 标签的中文/英文文字通过 JS execCommand 插入（可靠支持中文/表情）
+ *   4. 每个标签插入后，通过 CDP 发送真实 Space 键事件触发话题识别
+ *   5. 这样既保证了中文文本正确输入，又通过真实键盘事件触发平台话题识别
+ *
+ * 前置条件：
+ *   - 正文已经通过 execCommand('insertText') 写入编辑器
+ *   - 编辑器（contenteditable）已获得焦点，光标在正文末尾
+ *
+ * @param win 浏览器窗口
+ * @param tags 已清洗好的标签数组（每个标签已带 # 前缀）
+ * @param hasContentBefore 正文是否有内容（有则先输入换行符再输入标签）
+ * @param log 日志函数
+ */
+export async function cdpInsertTagsWithSpace(
+  win: BrowserWindow,
+  tags: string[],
+  hasContentBefore: boolean,
+  log: (level: PublishLogEntry['level'], stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  if (!tags || tags.length === 0) return true;
+
+  // 确保 CDP 已 attached
+  try {
+    if (!win.webContents.debugger.isAttached()) {
+      await win.webContents.debugger.attach('1.3');
+    }
+  } catch {
+    // 已 attached 或 attach 失败，继续尝试
+  }
+
+  /** 通过 JS execCommand 在当前光标位置插入文本（可靠支持中文） */
+  const insertTextViaJS = async (text: string): Promise<boolean> => {
+    const escaped = JSON.stringify(text);
+    const script = `(function(){
+      try {
+        var ok = document.execCommand('insertText', false, ${escaped});
+        return { ok: !!ok };
+      } catch(e) {
+        return { ok: false, err: String(e) };
+      }
+    })()`;
+    try {
+      const res: any = await win.webContents.executeJavaScript(script);
+      return !!(res && res.ok);
+    } catch {
+      return false;
+    }
+  };
+
+  /** 通过 CDP 发送一个可打印字符（使用 type='char'，最可靠的字符输入方式） */
+  const sendCharKey = async (char: string) => {
+    // 使用 type='char' 直接发送字符，浏览器会正确处理输入法和修饰键
+    // 这种方式比模拟物理按键（keyDown/keyUp + VK码）更可靠，不受键盘布局影响
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+      type: 'char',
+      text: char,
+      key: char,
+      code: '',
+    }).catch(() => {});
+    await sleep(30);
+  };
+
+  /** 通过 CDP 发送真实 Space 键事件（keydown → 等待 → keyup） */
+  const sendSpaceKey = async () => {
+    const VK_SPACE = 32;
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key: ' ',
+      code: 'Space',
+      windowsVirtualKeyCode: VK_SPACE,
+      nativeVirtualKeyCode: VK_SPACE,
+    }).catch(() => {});
+    await sleep(50);
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key: ' ',
+      code: 'Space',
+      windowsVirtualKeyCode: VK_SPACE,
+      nativeVirtualKeyCode: VK_SPACE,
+    }).catch(() => {});
+  };
+
+  /** 通过 CDP 发送真实 Enter 键事件（keydown → 等待 → keyup） */
+  const sendEnterKey = async () => {
+    const VK_RETURN = 13;
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: VK_RETURN,
+      nativeVirtualKeyCode: VK_RETURN,
+    }).catch(() => {});
+    await sleep(50);
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: VK_RETURN,
+      nativeVirtualKeyCode: VK_RETURN,
+    }).catch(() => {});
+  };
+
+  /** 通过 JS 派发 input 事件，确保框架（React/Vue）感知到文本变化 */
+  const dispatchInputEvent = async () => {
+    const script = `(function(){
+      try {
+        var active = document.activeElement;
+        if (active) {
+          active.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        return { ok: true };
+      } catch(e) { return { ok: false }; }
+    })()`;
+    await win.webContents.executeJavaScript(script).catch(() => {});
+  };
+
+  try {
+    await sleep(300); // 等待正文写入完成，编辑器稳定
+
+    // 如果有正文内容，先换行（用 JS 方式更可靠，不依赖焦点状态）
+    // 1. 找到编辑器 → 2. 聚焦并移到末尾 → 3. 插入段落换行
+    if (hasContentBefore) {
+      const newlineScript = `(function(){
+        try {
+          var ce = document.querySelectorAll('[contenteditable]');
+          var target = null;
+          // 优先找 ProseMirror/tiptap 编辑器
+          for (var i = 0; i < ce.length; i++) {
+            var val = ce[i].getAttribute && ce[i].getAttribute('contenteditable');
+            if (val === 'false') continue;
+            var cls = String(ce[i].className || '');
+            if (/tiptap|ProseMirror|prosemirror/i.test(cls)) { target = ce[i]; break; }
+          }
+          // 否则找最后一个可编辑元素（通常是正文描述框）
+          if (!target) {
+            for (var j = ce.length - 1; j >= 0; j--) {
+              var v2 = ce[j].getAttribute && ce[j].getAttribute('contenteditable');
+              if (v2 !== 'false') { target = ce[j]; break; }
+            }
+          }
+          if (target) {
+            target.focus();
+            // 光标移到末尾
+            try {
+              var range = document.createRange();
+              range.selectNodeContents(target);
+              range.collapse(false);
+              var sel = window.getSelection();
+              sel.removeAllRanges();
+              sel.addRange(range);
+            } catch(e) {}
+            // 插入段落换行（优先 insertParagraph，失败则 insertLineBreak）
+            var ok = false;
+            try { ok = document.execCommand('insertParagraph', false, null); } catch(e) {}
+            if (!ok) {
+              try { ok = document.execCommand('insertLineBreak', false, null); } catch(e) {}
+            }
+            return { ok: ok, tag: target.tagName };
+          }
+          return { ok: false, reason: 'no-editor' };
+        } catch(e) { return { ok: false, err: String(e) }; }
+      })()`;
+      try {
+        const nlRes: any = await win.webContents.executeJavaScript(newlineScript);
+        log('info', 'cdp-tags', `正文后换行: ${nlRes && nlRes.ok ? '成功' : '失败 - ' + (nlRes && (nlRes.reason || nlRes.err))}`);
+      } catch {
+        log('warn', 'cdp-tags', '换行脚本执行失败');
+      }
+      await sleep(200); // 等待换行完成，编辑器稳定
+    }
+
+    for (let i = 0; i < tags.length; i++) {
+      const tag = tags[i];
+      // 分离 # 号和标签文字（全部通过CDP输入，触发平台话题搜索联想）
+      const tagName = tag.startsWith('#') ? tag.slice(1) : tag;
+      log('info', 'cdp-tags', `输入标签: ${tag}`);
+
+      // 每个话题都用足够的等待时间
+      // 因为上一个话题确认后话题模式退出，下一个话题需要重新触发搜索联想
+      const hashWaitMs = 500;   // # 号后等待：给话题搜索组件初始化时间
+      const textWaitMs = 500;   // 文字输入后等待：确保搜索结果稳定
+
+      // 第1步：通过 CDP 输入 # 号（触发平台进入话题识别模式）
+      // 使用 type='char' 方式直接发送字符，不受键盘布局影响，最可靠
+      await sendCharKey('#');
+      await sleep(hashWaitMs); // 等待平台检测到 # 号，弹出话题联想
+
+      // 第2步：通过 CDP 逐字符输入标签文字
+      // 🔑 关键点：逐字符输入能触发平台的话题搜索/联想实时更新
+      // 如果用 JS execCommand 一次性插入文字，平台不会更新推荐列表，
+      // 导致按空格后选中的是默认推荐话题，而不是我们输入的话题
+      if (tagName) {
+        for (let ci = 0; ci < tagName.length; ci++) {
+          await sendCharKey(tagName[ci]);
+          await sleep(80); // 每字间隔，给搜索联想留足时间
+        }
+      }
+      await sleep(textWaitMs); // 等待平台根据文字筛选话题，联想列表稳定
+
+      // 第3步：通过 CDP 发送真实 Space 键，触发话题识别（将 #tag 转为可点击话题）
+      await sendSpaceKey();
+      await sleep(500); // 等待平台处理话题转换
+
+      // 第4步：额外输入一个普通空格，确保光标移到普通文本区域
+      // 🔑 关键：话题确认后光标可能在话题节点内部/边缘，导致下一个 # 号无法触发话题模式
+      // 额外输入一个普通空格，把光标推到普通文本区域，确保下一个话题的 # 号能正常触发
+      if (i < tags.length - 1) {
+        await sendCharKey(' ');
+        await sleep(150);
+      }
+    }
+
+    // 最后一个话题额外等待：确保话题完全转换稳定后再返回
+    // 避免后续操作（如点击发布）干扰话题的最终状态
+    await sleep(300);
+
+    log('info', 'cdp-tags', `✅ 已输入 ${tags.length} 个标签`);
+    return true;
+  } catch (err) {
+    log('error', 'cdp-tags', `CDP标签输入失败: ${(err as Error).message}`);
+    return false;
+  }
+}
+
 export async function waitForUploadComplete(
   win: BrowserWindow,
   log: (level: PublishLogEntry['level'], stage: string, message: string, data?: Record<string, unknown>) => void,

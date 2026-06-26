@@ -2,7 +2,7 @@ import type { BrowserWindow } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { PlatformAdapter, ExtractedAccountInfo, LoginCheckResult, ProgressCallback } from './types';
-import { sleep, makePublishLogger, makePublishWindow, attachNavigationTracker, evalJS, makeFailedResult, uploadViaCDP, waitForUploadComplete, buildPageStructureProbe } from './shared';
+import { sleep, makePublishLogger, makePublishWindow, attachNavigationTracker, evalJS, makeFailedResult, uploadViaCDP, waitForUploadComplete, buildPageStructureProbe, cdpInsertTagsWithSpace } from './shared';
 import { registerPlatform } from './registry';
 import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities, ContentType } from '../../../types';
 
@@ -27,13 +27,33 @@ function buildContentText(content: string | undefined, tags: string[] | undefine
   const parts: string[] = [];
   if (content && content.trim()) parts.push(content.trim());
   if (tags && tags.length > 0) {
-    const cleaned = tags.map(function (t) { return t.trim(); }).filter(function (t) { return t.length > 0; }).map(function (t) { return t.startsWith('#') ? t : '#' + t; });
-    const deduped = Array.from(new Set(cleaned));
-    const limited = deduped.slice(0, TAG_MAX);
-    parts.push(limited.join(' '));
+    const cleaned = prepareTags(tags);
+    parts.push(cleaned.join(' '));
   }
   const combined = parts.join('\n');
   return truncate(combined, CONTENT_MAX);
+}
+
+/**
+ * 清洗标签数组：去空、加#前缀、去重、截断
+ * @param tags 原始标签数组
+ * @param max 最大标签数，默认TAG_MAX
+ */
+function prepareTags(tags: string[] | undefined, max?: number): string[] {
+  if (!tags || tags.length === 0) return [];
+  const limit = max || TAG_MAX;
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const t of tags) {
+    const trimmed = (t || '').trim();
+    if (!trimmed) continue;
+    const withHash = trimmed.startsWith('#') ? trimmed : '#' + trimmed;
+    if (seen.has(withHash)) continue;
+    seen.add(withHash);
+    result.push(withHash);
+    if (result.length >= limit) break;
+  }
+  return result;
 }
 
 // === 登录检测脚本（直接在页面上执行 JS）
@@ -299,11 +319,28 @@ function buildFillTitleScript(text: string): string {
 
 // === 抖音内容填写脚本（内容是 contenteditable/ProseMirror）
 // 优先级：1) ProseMirror 富文本  2) 普通 contenteditable  3) textarea 兜底
+// 写完后保持焦点在编辑器末尾，不 blur（便于后续 CDP 键盘事件输入标签）
 function buildFillContentScript(content: string): string {
   const contentJson = JSON.stringify(content);
   return `(function () {
     var content = ${contentJson};
-    if (!content) return { ok: true, skipped: true };
+
+    // 辅助：将光标移到编辑器末尾
+    function moveCursorToEnd(el) {
+      try {
+        el.focus();
+        var range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch(e) {}
+    }
+
+    var foundTarget = null;
+    var foundKind = '';
+
     // 1) ProseMirror / tiptap 富文本
     try {
       var pmEls = document.querySelectorAll('[contenteditable]');
@@ -316,41 +353,77 @@ function buildFillContentScript(content: string): string {
           e1.focus();
           try { document.execCommand('selectAll'); document.execCommand('delete'); } catch (eX1) {}
           var lines = content.split('\\n');
+          // ProseMirror 是结构化编辑器，insertText 插入 \n 不会创建真正的段落换行
+          // 需要逐行插入文本，行之间用 insertParagraph（段落换行）或 insertLineBreak（软换行）
+          var useParagraph = true; // 使用段落换行（类似按 Enter 键效果）
           for (var li = 0; li < lines.length; li++) {
-            document.execCommand('insertText', false, lines[li]);
-            if (li < lines.length - 1) document.execCommand('insertText', false, '\\n');
+            if (lines[li]) {
+              document.execCommand('insertText', false, lines[li]);
+            }
+            if (li < lines.length - 1) {
+              // 优先尝试 insertParagraph（硬换行，创建新段落），失败则用 insertLineBreak（软换行）
+              var paraOk = false;
+              try {
+                paraOk = document.execCommand('insertParagraph', false, null);
+              } catch (eP) { paraOk = false; }
+              if (!paraOk) {
+                try {
+                  document.execCommand('insertLineBreak', false, null);
+                } catch (eLB) {}
+              }
+            }
           }
-          return { ok: true, method: 'prosemirror' };
+          foundTarget = e1;
+          foundKind = 'prosemirror';
+          break;
         }
       }
     } catch (e1) {}
+
     // 2) 普通 contenteditable
-    try {
-      var ce2 = document.querySelectorAll('[contenteditable]');
-      for (var i2 = 0; i2 < ce2.length; i2++) {
-        var e2 = ce2[i2];
-        var ceVal2 = e2.getAttribute && e2.getAttribute('contenteditable');
-        if (ceVal2 === 'false') continue;
-        var cls2 = String(e2.className || '');
-        if (/tiptap|ProseMirror|prosemirror/i.test(cls2)) continue; // 跳过 ProseMirror
-        e2.focus();
-        try { document.execCommand('selectAll'); document.execCommand('delete'); } catch (eX2) {}
-        document.execCommand('insertText', false, content);
-        return { ok: true, method: 'plain-ce' };
-      }
-    } catch (e2) {}
+    if (!foundTarget) {
+      try {
+        var ce2 = document.querySelectorAll('[contenteditable]');
+        for (var i2 = 0; i2 < ce2.length; i2++) {
+          var e2 = ce2[i2];
+          var ceVal2 = e2.getAttribute && e2.getAttribute('contenteditable');
+          if (ceVal2 === 'false') continue;
+          var cls2 = String(e2.className || '');
+          if (/tiptap|ProseMirror|prosemirror/i.test(cls2)) continue;
+          e2.focus();
+          try { document.execCommand('selectAll'); document.execCommand('delete'); } catch (eX2) {}
+          document.execCommand('insertText', false, content);
+          foundTarget = e2;
+          foundKind = 'plain-ce';
+          break;
+        }
+      } catch (e2) {}
+    }
+
     // 3) 兜底 textarea
-    try {
-      var ta1 = document.querySelectorAll('textarea');
-      for (var j1 = 0; j1 < ta1.length; j1++) {
-        var e3 = ta1[j1];
-        e3.focus();
-        e3.value = content;
-        try { var ev2 = document.createEvent('Event'); ev2.initEvent('input', true, true); e3.dispatchEvent(ev2); } catch (eErr2) {}
-        return { ok: true, method: 'textarea' };
-      }
-    } catch (e3) {}
-    return { ok: false, reason: 'no-content-field' };
+    if (!foundTarget) {
+      try {
+        var ta1 = document.querySelectorAll('textarea');
+        for (var j1 = 0; j1 < ta1.length; j1++) {
+          var e3 = ta1[j1];
+          e3.focus();
+          e3.value = content;
+          try { var ev2 = document.createEvent('Event'); ev2.initEvent('input', true, true); e3.dispatchEvent(ev2); } catch (eErr2) {}
+          foundTarget = e3;
+          foundKind = 'textarea';
+          break;
+        }
+      } catch (e3) {}
+    }
+
+    if (!foundTarget) return { ok: false, reason: 'no-content-field' };
+
+    // 将光标移到末尾，保持焦点（不blur），便于后续CDP输入标签
+    if (foundKind !== 'textarea') {
+      moveCursorToEnd(foundTarget);
+    }
+
+    return { ok: true, method: foundKind, isContentEditable: foundKind !== 'textarea' };
   })();`;
 }
 
@@ -2955,8 +3028,9 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
     onProgress(60, '上传完成，准备填写内容…');
     await sleep(1500);
     const titleText = truncate((request.title || '').trim(), TITLE_MAX);
-    const contentText = buildContentText(request.content, request.tags);
-    log('info', 'fill', '准备写入: title=' + (titleText || '').slice(0, 40) + ', contentLen=' + contentText.length);
+    const baseContent = truncate((request.content || '').trim(), CONTENT_MAX);
+    const douyinTagList = prepareTags(request.tags);
+    log('info', 'fill', '准备写入: title=' + (titleText || '').slice(0, 40) + ', contentLen=' + baseContent.length + ', tags=' + douyinTagList.length);
     if (titleText) {
       const script1 = buildFillTitleScript(titleText);
       const res1: any = await evalJS(win, script1, 'fill-title', log).catch(function () { return null; });
@@ -2964,12 +3038,20 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
       else log('info', 'fill', '标题已写入');
       await sleep(800);
     }
-    if (contentText) {
-      const script2 = buildFillContentScript(contentText);
+    if (baseContent || douyinTagList.length > 0) {
+      const script2 = buildFillContentScript(baseContent);
       const res2: any = await evalJS(win, script2, 'fill-content', log).catch(function () { return null; });
-      if (!res2 || !res2.ok) log('warn', 'fill', '内容填写失败');
-      else log('info', 'fill', '内容已写入 (' + (res2 && res2.method) + ')');
-      await sleep(1500);
+      if (!res2 || !res2.ok) {
+        log('warn', 'fill', '内容填写失败');
+      } else {
+        log('info', 'fill', '内容已写入 (' + (res2 && res2.method) + ')');
+      }
+      await sleep(500);
+      // 通过 CDP 真实键盘事件逐个输入话题标签
+      if (douyinTagList.length > 0 && res2 && res2.ok && res2.isContentEditable) {
+        await cdpInsertTagsWithSpace(win, douyinTagList, baseContent.length > 0, log);
+        await sleep(300);
+      }
     }
     onProgress(75, '点击发布按钮…');
     const clickScript = buildClickPublishScript();
@@ -3085,12 +3167,10 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
 
     // 先填写标题和正文，再上传封面（避免填写时页面滚动导致封面区域位置变化）
     const titleText = truncate((request.title || '').trim(), ARTICLE_TITLE_MAX);
-    const rawContent = (request.content || '').trim();
-    const tagText = buildArticleTags(request.tags);
-    const combinedContent = [rawContent, tagText].filter(function (s) { return s && s.length > 0; }).join('\n');
-    const contentText = truncate(combinedContent, ARTICLE_CONTENT_MAX);
+    const rawContent = truncate((request.content || '').trim(), ARTICLE_CONTENT_MAX);
+    const articleTagList = prepareTags(request.tags, ARTICLE_TAG_MAX);
     log('info', 'fill', '文章标题: ' + (titleText || '').slice(0, 40) + ' (限' + ARTICLE_TITLE_MAX + '字)');
-    log('info', 'fill', '文章正文: ' + contentText.length + '字 (限' + ARTICLE_CONTENT_MAX + '字)');
+    log('info', 'fill', '文章正文: ' + rawContent.length + '字 (限' + ARTICLE_CONTENT_MAX + '字), 标签: ' + articleTagList.length + '个');
 
     onProgress(25, '填写标题…');
     if (titleText) {
@@ -3102,12 +3182,20 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
     }
 
     onProgress(35, '填写正文…');
-    if (contentText) {
-      const script2 = buildFillContentScript(contentText);
+    if (rawContent || articleTagList.length > 0) {
+      const script2 = buildFillContentScript(rawContent);
       const res2: any = await evalJS(win, script2, 'article-fill-content', log).catch(function () { return null; });
-      if (!res2 || !res2.ok) log('warn', 'fill', '文章正文填写失败');
-      else log('info', 'fill', '文章正文已写入 (' + (res2 && res2.method) + ')');
-      await sleep(1500);
+      if (!res2 || !res2.ok) {
+        log('warn', 'fill', '文章正文填写失败');
+      } else {
+        log('info', 'fill', '文章正文已写入 (' + (res2 && res2.method) + ')');
+      }
+      await sleep(500);
+      // 通过 CDP 输入话题标签
+      if (articleTagList.length > 0 && res2 && res2.ok && res2.isContentEditable) {
+        await cdpInsertTagsWithSpace(win, articleTagList, rawContent.length > 0, log);
+        await sleep(300);
+      }
     }
 
     // 文章发布：上传封面（第一张图片作为封面）+ 正文图片（如有多余图片）
