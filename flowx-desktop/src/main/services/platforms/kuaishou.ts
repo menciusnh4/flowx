@@ -221,7 +221,8 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
       // 第四步：从 cookie 解析 user_id / kuaiShouId
       try {
         var cookieStr = document.cookie || '';
-        var uidMatch = cookieStr.match(/(?:userId|user_id|kuaiShouId|ks_id)=([^;&\\s]+)/i);
+        // 🔑 增加 (?:^|;\\s*) 前缀边界，防止误匹配到 bUserId
+        var uidMatch = cookieStr.match(/(?:^|;\\s*)(?:userId|user_id|kuaiShouId|ks_id)=([^;\\s]+)/i);
         if (uidMatch) {
           debug.cookieUserId = uidMatch[1];
           r.platformAccountId = uidMatch[1];
@@ -244,10 +245,33 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
       return {} as any;
     });
 
+  let platformAccountId = result.platformAccountId;
+  if (!platformAccountId && !win.isDestroyed()) {
+    try {
+      const cookies = await win.webContents.session.cookies.get({});
+      const targetKeys = [
+        'userId',
+        'kuaishou.server.web_ph',
+        'user_id',
+        'ks_id',
+        'kuaiShouId',
+      ];
+      for (const key of targetKeys) {
+        const c = cookies.find((x) => x.name === key);
+        if (c && c.value && c.value.trim()) {
+          platformAccountId = c.value.trim();
+          break;
+        }
+      }
+    } catch (e) {
+      console.warn('[kuaishou] 提取 session cookies 失败:', e);
+    }
+  }
+
   return {
     nickname: result.nickname || '',
     avatar: result.avatar || undefined,
-    platformAccountId: result.platformAccountId || undefined,
+    platformAccountId: platformAccountId || undefined,
     fansCount: typeof result.fansCount === 'number' ? result.fansCount : undefined,
     followCount: typeof result.followCount === 'number' ? result.followCount : undefined,
     likeCount: typeof result.likeCount === 'number' ? result.likeCount : undefined,
