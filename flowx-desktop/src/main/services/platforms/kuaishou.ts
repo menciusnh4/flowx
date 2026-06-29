@@ -60,7 +60,7 @@ const meta: PlatformMeta = {
   name: '快手',
   icon: '🎬',
   platformAccountLabel: '快手号',
-  authUrl: 'https://passport.kuaishou.com/pc/account/login/',
+  authUrl: 'https://passport.kuaishou.com/pc/account/login/?sid=kuaishou.web.cp.api&callback=https%3A%2F%2Fcp.kuaishou.com%2Frest%2Finfra%2Fsts%3FfollowUrl%3Dhttps%253A%252F%252Fcp.kuaishou.com%252Fprofile%26setRootDomain%3Dtrue',
   publishUrl: 'https://cp.kuaishou.com/article/publish/video',
   homeUrl: 'https://cp.kuaishou.com/',
   contentTypes: ['video', 'image'],

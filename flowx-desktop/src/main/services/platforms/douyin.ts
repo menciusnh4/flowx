@@ -203,10 +203,30 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
 
         // ===== 3) 头像 =====
         try {
-          var avaSels = ['img.user_avatar', 'img[class*="avatar"]'];
+          var avaSels = ['img.user_avatar', 'img[class*="avatar"]', '[class*="avatar"] img', 'img[class*="img-"]'];
           for (var j = 0; j < avaSels.length; j++) {
             var el2 = document.querySelector(avaSels[j]);
             if (el2 && el2.getAttribute && el2.getAttribute('src')) { r.avatar = el2.getAttribute('src'); break; }
+          }
+        } catch (e) {}
+
+        // ===== 3.5) 抖音号 =====
+        try {
+          var uniqueIdSels = ['.unique_id', '[class*="unique_id-"]', '[class*="unique_id"]'];
+          for (var u = 0; u < uniqueIdSels.length; u++) {
+            var uEl = document.querySelector(uniqueIdSels[u]);
+            if (uEl && uEl.textContent) {
+              var uMatch = uEl.textContent.trim().match(/(?:抖音号|unique_id)[：:\\s]*([A-Za-z0-9_\\-]{3,30})/i);
+              if (uMatch && uMatch[1]) {
+                r.platformAccountId = uMatch[1];
+                break;
+              }
+            }
+          }
+          if (!r.platformAccountId) {
+            var bodyText = (document.body ? (document.body.innerText || "") : "") || "";
+            var uMatch2 = bodyText.match(/(?:抖音号|unique_id)[：:\\s]*([A-Za-z0-9_\\-]{3,30})/i);
+            if (uMatch2 && uMatch2[1]) r.platformAccountId = uMatch2[1];
           }
         } catch (e) {}
 

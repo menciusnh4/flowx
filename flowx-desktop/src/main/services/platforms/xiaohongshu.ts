@@ -202,9 +202,19 @@ function buildExtractPageInfoScript(): string {
     'try {' +
     '  var bodyText = (document.body ? (document.body.innerText || "") : "") || "";' +
     // 小红书号
-    '  var reAccount = /小红书号[：:\\s]*([A-Za-z0-9_\\-]{3,30})/;' +
+    '  var reAccount = /(?:小红书号|小红书账号)[：:\\s]*([A-Za-z0-9_\\-]{3,30})/;' +
     '  var accountMatch = bodyText.match(reAccount);' +
     '  if (accountMatch && accountMatch[1]) result.platformAccountId = accountMatch[1];' +
+    '  if (!result.platformAccountId) {' +
+    '    try {' +
+    '      var divs = document.querySelectorAll("div, span, p");' +
+    '      for (var di = 0; di < divs.length; di++) {' +
+    '        var txt = (divs[di].textContent || "").trim();' +
+    '        var m = txt.match(/(?:小红书号|小红书账号)[：:\\s]*([A-Za-z0-9_\\-]{3,30})/);' +
+    '        if (m && m[1]) { result.platformAccountId = m[1]; break; }' +
+    '      }' +
+    '    } catch(e) {}' +
+    '  }' +
     // 粉丝（两种格式）
     '  if (result.fansCount === null) {' +
     '    var fm1 = bodyText.match(/(粉丝数|粉丝)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百]?)/);' +
