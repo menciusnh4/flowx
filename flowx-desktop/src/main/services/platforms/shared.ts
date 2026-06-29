@@ -1236,6 +1236,179 @@ export async function cdpClickPublishButton(
  * @param hasContentBefore 正文是否有内容（有则先输入换行符再输入标签）
  * @param log 日志函数
  */
+
+/**
+ * 通过 CDP 方式填写正文内容（支持换行）
+ * 适用于 ACE / ProseMirror 等结构化编辑器，insertHTML/insertText 的换行不生效的场景
+ * 方案：JS 逐行写入文本，行之间用 CDP Enter 键换行，确保生成正确的行结构
+ * @param win BrowserWindow 实例
+ * @param content 正文内容（含 \n 换行）
+ * @param targetKind 目标编辑器类型：'prosemirror' | 'plain-ce' | 'auto'
+ * @param log 日志函数
+ * @returns { ok: boolean, method: string, isContentEditable: boolean }
+ */
+export async function cdpFillContentWithNewlines(
+  win: BrowserWindow,
+  content: string,
+  targetKind: 'prosemirror' | 'plain-ce' | 'auto',
+  log: (level: PublishLogEntry['level'], stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<{ ok: boolean; method: string; isContentEditable: boolean }> {
+  // 确保 CDP 已 attached
+  try {
+    if (!win.webContents.debugger.isAttached()) {
+      await win.webContents.debugger.attach('1.3');
+    }
+  } catch {
+    // 已 attached 或 attach 失败，继续尝试
+  }
+
+  const sendEnterKey = async () => {
+    const VK_RETURN = 13;
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: VK_RETURN,
+      nativeVirtualKeyCode: VK_RETURN,
+    }).catch(() => {});
+    await sleep(30);
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: VK_RETURN,
+      nativeVirtualKeyCode: VK_RETURN,
+    }).catch(() => {});
+  };
+
+  // 第一步：用 JS 找到编辑器、聚焦、清空、写入第一行
+  const lines = content.split('\n');
+  const firstLine = lines[0] || '';
+  const restLines = lines.slice(1);
+
+  const prepareScript = `(function(){
+    try {
+      var content = ${JSON.stringify(firstLine)};
+      var targetKind = ${JSON.stringify(targetKind)};
+      var all = document.querySelectorAll('[contenteditable]');
+      var candidates = [];
+      for (var i = 0; i < all.length; i++) {
+        var ce = all[i].getAttribute && all[i].getAttribute('contenteditable');
+        if (ce === 'false' || ce === null) continue;
+        candidates.push(all[i]);
+      }
+      if (candidates.length === 0) return { ok: false, reason: 'no-ce' };
+      var target = null;
+      var method = '';
+
+      if (targetKind === 'prosemirror') {
+        // 只找 ProseMirror/tiptap
+        for (var j = 0; j < candidates.length; j++) {
+          var cls = String(candidates[j].className || '');
+          if (/tiptap|ProseMirror|prosemirror/i.test(cls)) {
+            target = candidates[j];
+            method = 'prosemirror';
+            break;
+          }
+        }
+      } else if (targetKind === 'plain-ce') {
+        // 只找非 ProseMirror 的普通 contenteditable（内容最多的那个）
+        var plainCandidates = [];
+        for (var k = 0; k < candidates.length; k++) {
+          var cls2 = String(candidates[k].className || '');
+          if (!/tiptap|ProseMirror|prosemirror/i.test(cls2)) {
+            var txt = (candidates[k].innerText || candidates[k].textContent || '').trim();
+            plainCandidates.push({ el: candidates[k], len: txt.length });
+          }
+        }
+        if (plainCandidates.length > 0) {
+          plainCandidates.sort(function(a, b) { return b.len - a.len; });
+          target = plainCandidates[0].el;
+          method = 'plain-ce';
+        }
+      } else {
+        // auto：优先找内容最多的那个
+        var withContent = [];
+        for (var m = 0; m < candidates.length; m++) {
+          var t = (candidates[m].innerText || candidates[m].textContent || '').trim();
+          withContent.push({ el: candidates[m], len: t.length });
+        }
+        if (withContent.length > 0) {
+          withContent.sort(function(a, b) { return b.len - a.len; });
+          target = withContent[0].el;
+          method = 'auto';
+        }
+      }
+
+      if (!target) return { ok: false, reason: 'no-match' };
+
+      // 聚焦 + 清空 + 写入第一行
+      target.focus();
+      try { document.execCommand('selectAll'); document.execCommand('delete'); } catch(e) {}
+      if (content) {
+        try {
+          document.execCommand('insertText', false, content);
+        } catch(e2) {
+          target.textContent = content;
+          try {
+            var ev = document.createEvent('Event');
+            ev.initEvent('input', true, true);
+            target.dispatchEvent(ev);
+          } catch(e3) {}
+        }
+      }
+      // 光标移到末尾
+      try {
+        var range = document.createRange();
+        range.selectNodeContents(target);
+        range.collapse(false);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch(e4) {}
+      return { ok: true, method: method };
+    } catch(e) { return { ok: false, err: String(e) }; }
+  })()`;
+
+  try {
+    const res: any = await win.webContents.executeJavaScript(prepareScript);
+    if (!res || !res.ok) {
+      log('warn', 'cdp-fill-content', `编辑器准备失败: ${res && (res.reason || res.err)}`);
+      return { ok: false, method: 'failed', isContentEditable: false };
+    }
+    const method = res.method || 'plain-ce';
+    log('info', 'cdp-fill-content', `第一行已写入 (${method}), 剩余 ${restLines.length} 行`);
+    await sleep(100);
+
+    // 第二步：逐行 CDP Enter 换行 + JS 写入文字
+    for (let li = 0; li < restLines.length; li++) {
+      // CDP Enter 键换行（生成正确的行结构）
+      await sendEnterKey();
+      await sleep(80);
+
+      // JS 写入该行文字
+      const lineText = restLines[li];
+      if (lineText) {
+        const escapedLine = JSON.stringify(lineText);
+        const insertLineScript = `(function(){
+          try {
+            var ok = document.execCommand('insertText', false, ${escapedLine});
+            return { ok: !!ok };
+          } catch(e) { return { ok: false, err: String(e) }; }
+        })()`;
+        await win.webContents.executeJavaScript(insertLineScript).catch(() => {});
+        await sleep(30);
+      }
+    }
+
+    log('info', 'cdp-fill-content', `✅ 正文填写完成，共 ${lines.length} 行`);
+    return { ok: true, method: method, isContentEditable: true };
+  } catch (err) {
+    log('error', 'cdp-fill-content', `CDP正文填写失败: ${(err as Error).message}`);
+    return { ok: false, method: 'error', isContentEditable: false };
+  }
+}
+
 export async function cdpInsertTagsWithSpace(
   win: BrowserWindow,
   tags: string[],

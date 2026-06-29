@@ -2,7 +2,7 @@ import type { BrowserWindow } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { PlatformAdapter, ExtractedAccountInfo, LoginCheckResult, ProgressCallback } from './types';
-import { sleep, makePublishLogger, makePublishWindow, attachNavigationTracker, evalJS, makeFailedResult, uploadViaCDP, waitForUploadComplete, buildPageStructureProbe, cdpInsertTagsWithSpace } from './shared';
+import { sleep, makePublishLogger, makePublishWindow, attachNavigationTracker, evalJS, makeFailedResult, uploadViaCDP, waitForUploadComplete, buildPageStructureProbe, cdpInsertTagsWithSpace, cdpFillContentWithNewlines } from './shared';
 import { registerPlatform } from './registry';
 import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities, ContentType } from '../../../types';
 
@@ -383,21 +383,29 @@ function buildFillContentScript(content: string): string {
     // 2) 普通 contenteditable
     if (!foundTarget) {
       try {
-        var ce2 = document.querySelectorAll('[contenteditable]');
-        for (var i2 = 0; i2 < ce2.length; i2++) {
-          var e2 = ce2[i2];
-          var ceVal2 = e2.getAttribute && e2.getAttribute('contenteditable');
-          if (ceVal2 === 'false') continue;
-          var cls2 = String(e2.className || '');
-          if (/tiptap|ProseMirror|prosemirror/i.test(cls2)) continue;
-          e2.focus();
-          try { document.execCommand('selectAll'); document.execCommand('delete'); } catch (eX2) {}
-          document.execCommand('insertText', false, content);
-          foundTarget = e2;
+        var ceList = document.querySelectorAll('[contenteditable]');
+        for (var ci = 0; ci < ceList.length; ci++) {
+          var ceEl = ceList[ci];
+          var ceVal = ceEl.getAttribute && ceEl.getAttribute('contenteditable');
+          if (ceVal === 'false') continue;
+          var ceCls = String(ceEl.className || '');
+          if (/tiptap|ProseMirror|prosemirror/i.test(ceCls)) continue;
+          ceEl.focus();
+          try { document.execCommand('selectAll'); document.execCommand('delete'); } catch (eDel) {}
+          // 用 insertHTML 插入，将换行符转为 <br> 标签
+          // insertText 插入 \n 在 contenteditable 中不会产生真正的换行
+          var htmlContent = content.replace(/\\n/g, '<br>');
+          var insertOk = false;
+          try { insertOk = document.execCommand('insertHTML', false, htmlContent); } catch (eIH) {}
+          if (!insertOk) {
+            // 兜底：insertText 方式（虽然换行可能丢失，但至少内容能写入）
+            try { document.execCommand('insertText', false, content); } catch (eIT) {}
+          }
+          foundTarget = ceEl;
           foundKind = 'plain-ce';
           break;
         }
-      } catch (e2) {}
+      } catch (eCE) {}
     }
 
     // 3) 兜底 textarea
@@ -3039,16 +3047,66 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
       await sleep(800);
     }
     if (baseContent || douyinTagList.length > 0) {
-      const script2 = buildFillContentScript(baseContent);
-      const res2: any = await evalJS(win, script2, 'fill-content', log).catch(function () { return null; });
-      if (!res2 || !res2.ok) {
+      // 探测编辑器类型：如果是普通 contenteditable（ACE 编辑器），用 CDP Enter 方式换行更可靠
+      let contentResult: any = null;
+      if (baseContent) {
+        const probeScript = `(function(){
+          try {
+            var ce = document.querySelectorAll('[contenteditable]');
+            var plainCE = null;
+            var pmCE = null;
+            for (var i = 0; i < ce.length; i++) {
+              var val = ce[i].getAttribute && ce[i].getAttribute('contenteditable');
+              if (val === 'false' || val === null) continue;
+              var cls = String(ce[i].className || '');
+              if (/tiptap|ProseMirror|prosemirror/i.test(cls)) {
+                if (!pmCE) pmCE = ce[i];
+              } else {
+                // 普通 contenteditable，找内容区域（非标题）
+                var txt = (ce[i].innerText || ce[i].textContent || '').trim();
+                if (!plainCE || txt.length > (plainCE._len || 0)) {
+                  plainCE = ce[i];
+                  plainCE._len = txt.length;
+                }
+              }
+            }
+            if (pmCE) return { type: 'prosemirror' };
+            if (plainCE) return { type: 'plain-ce' };
+            return { type: 'unknown' };
+          } catch(e) { return { type: 'error', err: String(e) }; }
+        })()`;
+        const probeRes: any = await evalJS(win, probeScript, 'probe-editor', log).catch(() => null);
+        const editorType = probeRes && probeRes.type ? probeRes.type : 'plain-ce';
+        log('info', 'fill', `编辑器类型: ${editorType}`);
+
+        if (editorType === 'plain-ce' || editorType === 'auto') {
+          // 普通 contenteditable（如 ACE 编辑器）：用 CDP Enter 方式换行，确保生成正确的行结构
+          contentResult = await cdpFillContentWithNewlines(win, baseContent, 'plain-ce', log);
+          if (!contentResult || !contentResult.ok) {
+            // CDP 方式失败，降级用 JS 方式
+            log('warn', 'fill', 'CDP正文填写失败，降级用JS方式');
+            const script2 = buildFillContentScript(baseContent);
+            contentResult = await evalJS(win, script2, 'fill-content', log).catch(() => null);
+          }
+        } else {
+          // ProseMirror 或其他：用原 JS 方式
+          const script2 = buildFillContentScript(baseContent);
+          contentResult = await evalJS(win, script2, 'fill-content', log).catch(() => null);
+        }
+      } else {
+        // 没有正文，只有话题，执行一下空内容脚本获取编辑器信息
+        const script2 = buildFillContentScript('');
+        contentResult = await evalJS(win, script2, 'fill-content', log).catch(() => null);
+      }
+
+      if (!contentResult || !contentResult.ok) {
         log('warn', 'fill', '内容填写失败');
       } else {
-        log('info', 'fill', '内容已写入 (' + (res2 && res2.method) + ')');
+        log('info', 'fill', '内容已写入 (' + (contentResult && contentResult.method) + ')');
       }
       await sleep(500);
       // 通过 CDP 真实键盘事件逐个输入话题标签
-      if (douyinTagList.length > 0 && res2 && res2.ok && res2.isContentEditable) {
+      if (douyinTagList.length > 0 && contentResult && contentResult.ok && contentResult.isContentEditable) {
         await cdpInsertTagsWithSpace(win, douyinTagList, baseContent.length > 0, log);
         await sleep(300);
       }
