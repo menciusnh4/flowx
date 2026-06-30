@@ -39,7 +39,8 @@ function getSelectedIds(): string[] {
 }
 
 function selectAll() {
-  currentAccounts.value.forEach((a) => { selectedIds[a.id] = true })
+  // 仅全选分类过滤后的可见账号
+  visibleAccounts.value.forEach((a) => { selectedIds[a.id] = true })
   console.log('[Publish.vue] selectAll ->', getSelectedIds().length)
 }
 
@@ -81,6 +82,30 @@ const currentAccounts = computed(() => {
   if (contentType.value === 'image') return imageAccounts.value
   return articleAccounts.value
 })
+
+// 账号分类筛选与定时发布相关的响应式状态
+const publishFilterCategoryId = ref<string>('')
+const publishTimeType = ref<'now' | 'scheduled'>('now')
+const scheduledTime = ref<Date | null>(null)
+
+// 账号列表根据所选分类过滤后的可见账号列表
+const visibleAccounts = computed(() => {
+  const list = currentAccounts.value
+  if (!publishFilterCategoryId.value) {
+    return list
+  }
+  if (publishFilterCategoryId.value === 'unclassified') {
+    return list.filter((a) => !a.categoryIds || a.categoryIds.length === 0)
+  }
+  return list.filter((a) => a.categoryIds && a.categoryIds.includes(publishFilterCategoryId.value))
+})
+
+// 定时发送：禁止选择过去的日期
+function disabledScheduledDate(time: Date) {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return time.getTime() < today.getTime()
+}
 
 // ======== 内容限制（按平台汇总，取最小值当限制 ========
 //  - 文章（article）：从 meta.articleLimits.content 读取（抖音 8000，小红书不限）
@@ -348,6 +373,20 @@ async function submitPublish() {
     console.warn('[Publish.vue] content over limits:', overLimitPlats)
   }
 
+  // 校验是否属于定时发送，若是则检查日期并获取时间戳
+  let scheduledAt: number | undefined = undefined
+  if (publishTimeType.value === 'scheduled') {
+    if (!scheduledTime.value) {
+      ElMessage.warning('请选择定时发布时间')
+      return
+    }
+    if (scheduledTime.value.getTime() <= Date.now()) {
+      ElMessage.warning('定时发布时间必须是未来的时间')
+      return
+    }
+    scheduledAt = scheduledTime.value.getTime()
+  }
+
   const tags = tagsRaw.value
     .split(/[,，\s]+/)
     .map((t) => t.trim().replace(/^#/, ''))
@@ -362,6 +401,7 @@ async function submitPublish() {
     tags,
     category: '',
     content: content.value,
+    scheduledAt,
   }
   console.log('[Publish.vue] sending request to main process:', {
     contentType: req.contentType,
@@ -536,19 +576,27 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
       <el-divider />
 
       <h2 class="section-title">③ 选择发布账号</h2>
+      <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 13px; color: #606266;">分类筛选：</span>
+        <el-select v-model="publishFilterCategoryId" placeholder="全部分类" clearable style="width: 140px" size="small">
+          <el-option label="全部分类" value="" />
+          <el-option label="未分类" value="unclassified" />
+          <el-option v-for="cat in accountStore.categories" :key="cat.id" :label="cat.name" :value="cat.id" />
+        </el-select>
+      </div>
       <div class="account-actions">
         <el-button size="small" @click="selectAll">全选可见</el-button>
         <el-button size="small" @click="clearSelection">清空</el-button>
-        <span class="hint">已选 {{ getSelectedIds().length }} / {{ currentAccounts.length }}</span>
+        <span class="hint">已选 {{ getSelectedIds().length }} / {{ visibleAccounts.length }}</span>
       </div>
 
-      <div v-if="currentAccounts.length === 0" class="empty">
+      <div v-if="visibleAccounts.length === 0" class="empty">
         <el-empty description="没有可用账号，请先在账号管理授权" />
       </div>
 
       <div v-else class="account-grid">
         <div
-          v-for="a in currentAccounts"
+          v-for="a in visibleAccounts"
           :key="a.id"
           class="account-card"
           :class="{ selected: !!selectedIds[a.id] }"
@@ -578,9 +626,30 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
 
       <el-divider />
 
+      <h2 class="section-title">④ 发布设置</h2>
+      <el-form label-width="80px" style="margin-bottom: 20px;">
+        <el-form-item label="发布时间">
+          <el-radio-group v-model="publishTimeType" size="default">
+            <el-radio value="now">立即发布</el-radio>
+            <el-radio value="scheduled">定时发布</el-radio>
+          </el-radio-group>
+          
+          <el-date-picker
+            v-if="publishTimeType === 'scheduled'"
+            v-model="scheduledTime"
+            type="datetime"
+            placeholder="选择发布时间"
+            :disabled-date="disabledScheduledDate"
+            style="margin-left: 16px; width: 220px;"
+          />
+        </el-form-item>
+      </el-form>
+
+      <el-divider />
+
       <div class="submit-row">
-        <el-button type="primary" :loading="submitting" :disabled="currentAccounts.length === 0" @click="submitPublish">
-          一键发布到 {{ getSelectedIds().length }} 个账号
+        <el-button type="primary" :loading="submitting" :disabled="visibleAccounts.length === 0" @click="submitPublish">
+          {{ publishTimeType === 'scheduled' ? '定时发布到' : '一键发布到' }} {{ getSelectedIds().length }} 个账号
         </el-button>
         <el-button @click="toggleDebug" :type="showDebug ? 'warning' : 'default'">
           {{ showDebug ? '隐藏调试日志' : '调试模式' }}（{{ publishStore.logs.length }}）

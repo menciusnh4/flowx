@@ -70,13 +70,27 @@
             </el-space>
           </template>
         </el-table-column>
-        <el-table-column label="创建时间" width="160">
-          <template #default="{ row }">{{ fmt(row.createdAt) }}</template>
+        <el-table-column label="时间" width="180">
+          <template #default="{ row }">
+            <div style="font-size:13px; color:#303133">创建：{{ fmt(row.createdAt) }}</div>
+            <div v-if="row.request?.scheduledAt" style="font-size:12px; color:#e6a23c; margin-top:3px">
+              定时：{{ fmt(row.request.scheduledAt) }}
+            </div>
+          </template>
         </el-table-column>
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" link @click="showDetail(row)">
               <el-icon><View /></el-icon>&nbsp;详情
+            </el-button>
+            <el-button
+              v-if="row.status === 'scheduled'"
+              size="small"
+              type="danger"
+              link
+              @click="cancelTask(row)"
+            >
+              <el-icon><CircleClose /></el-icon>&nbsp;取消发布
             </el-button>
             <el-button
               v-if="hasFailedItems(row)"
@@ -154,6 +168,9 @@
           </el-descriptions-item>
           <el-descriptions-item label="更新时间">
             {{ fmt(detailData.task.updatedAt) }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailData.task.request?.scheduledAt" label="定时发布" :span="2">
+            <span style="color:#e6a23c; font-weight:600">{{ fmt(detailData.task.request.scheduledAt) }}</span>
           </el-descriptions-item>
           <el-descriptions-item v-if="detailData.task.request?.tags?.length" label="标签" :span="2">
             <el-tag v-for="t in detailData.task.request.tags" :key="t" size="small" style="margin-right:4px">
@@ -257,7 +274,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { View, RefreshRight, Delete, Refresh } from '@element-plus/icons-vue';
+import { View, RefreshRight, Delete, Refresh, CircleClose } from '@element-plus/icons-vue';
 import { usePublishStore } from '../stores/publish';
 import { useAccountStore } from '../stores/account';
 import { electronApi } from '../utils/electron';
@@ -428,6 +445,26 @@ async function deleteTask(task: any) {
     await refresh();
   } catch (err) {
     ElMessage.error('删除失败: ' + (err as Error).message);
+  }
+}
+
+/**
+ * 取消定时发布任务
+ */
+async function cancelTask(row: any) {
+  try {
+    await ElMessageBox.confirm(`确定取消任务「${row.id}」的定时发布吗？`, '取消定时发布', {
+      type: 'warning',
+    });
+  } catch {
+    return;
+  }
+  try {
+    await publishStore.cancelTask(row.id as string);
+    ElMessage.success('已取消发布');
+    await refresh();
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e));
   }
 }
 

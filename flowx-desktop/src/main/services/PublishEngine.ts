@@ -40,6 +40,8 @@ class PublishEngineClass {
   private activeCount = 0;
   // 记录每个 taskId 累计通知次数（调试用）
   private notifyCounters = new Map<string, number>();
+  // 存储定时发布任务的定时器句柄，用于支持级联取消
+  private scheduledTimers = new Map<string, NodeJS.Timeout>();
 
   init() {
     if (this.ready) return;
@@ -49,14 +51,51 @@ class PublishEngineClass {
 
     const tasks = getStore().get(TASKS_KEY) as PublishTask[] | undefined;
     if (tasks) {
+      let tasksChanged = false;
       for (const t of tasks) {
-        if (t.status === 'queued' || t.status === 'running') t.status = 'failed';
-        for (const item of t.items) {
-          if (item.status === 'queued' || item.status === 'running') item.status = 'failed';
+        if (t.status === 'queued' || t.status === 'running') {
+          t.status = 'failed';
+          for (const item of t.items) {
+            if (item.status === 'queued' || item.status === 'running') item.status = 'failed';
+          }
+          tasksChanged = true;
+        } else if (t.status === 'scheduled') {
+          // 处理软件重启时定时任务的恢复
+          if (t.request?.scheduledAt) {
+            if (t.request.scheduledAt > Date.now()) {
+              // 时间还没到，重新拉起定时器
+              const delay = t.request.scheduledAt - Date.now();
+              const timer = setTimeout(() => {
+                this.scheduledTimers.delete(t.id);
+                this.runTask(t.id);
+              }, delay);
+              this.scheduledTimers.set(t.id, timer);
+              logger.info(`[PublishEngine] 恢复定时任务 ${t.id}，将在 ${Math.round(delay / 1000)} 秒后执行`);
+            } else {
+              // 时间已经过了，置为 failed
+              t.status = 'failed';
+              for (const item of t.items) {
+                if (item.status === 'scheduled') {
+                  item.status = 'failed';
+                  item.message = '在应用关闭期间错过了预定的发布时间';
+                }
+              }
+              tasksChanged = true;
+              logger.warn(`[PublishEngine] 定时任务 ${t.id} 的预定发布时间已过，标记为 failed`);
+            }
+          } else {
+            t.status = 'failed';
+            for (const item of t.items) {
+              if (item.status === 'scheduled') item.status = 'failed';
+            }
+            tasksChanged = true;
+          }
         }
         this.running.set(t.id, t);
       }
-      getStore().set(TASKS_KEY, tasks);
+      if (tasksChanged) {
+        getStore().set(TASKS_KEY, tasks);
+      }
     }
     logger.info('[PublishEngine] 初始化完成，并发数:', this.concurrency);
     writePublishLog({
@@ -159,7 +198,11 @@ class PublishEngineClass {
         message: `定时任务，将在 ${Math.round(delay / 1000)}s 后执行`,
         data: { scheduledAt: request.scheduledAt },
       });
-      setTimeout(() => this.runTask(taskId), delay);
+      const timer = setTimeout(() => {
+        this.scheduledTimers.delete(taskId);
+        this.runTask(taskId);
+      }, delay);
+      this.scheduledTimers.set(taskId, timer);
       return taskId;
     }
 
@@ -235,9 +278,20 @@ class PublishEngineClass {
   cancel(taskId: string): boolean {
     const task = this.running.get(taskId);
     if (!task) return false;
+    // 如果是定时发布的任务且定时器存在，则清理掉它
+    const timer = this.scheduledTimers.get(taskId);
+    if (timer) {
+      clearTimeout(timer);
+      this.scheduledTimers.delete(taskId);
+    }
     this.queue = this.queue.filter((x) => x.taskId !== taskId);
     for (const item of task.items) {
-      if (item.status === 'queued' || item.status === 'running') item.status = 'cancelled';
+      if (item.status === 'queued' || item.status === 'running' || item.status === 'scheduled') {
+        item.status = 'cancelled';
+      }
+    }
+    if (task.status === 'scheduled') {
+      task.status = 'cancelled';
     }
     this.aggregateTaskStatus(task);
     this.persist();
@@ -353,6 +407,10 @@ class PublishEngineClass {
     // 如果任务正在运行，不允许删除
     if (task.status === 'running' || task.status === 'queued') {
       throw new Error('任务正在执行中，无法删除');
+    }
+    // 如果是定时发布的任务，联动执行取消
+    if (task.status === 'scheduled') {
+      this.cancel(taskId);
     }
     this.running.delete(taskId);
     this.persist();
