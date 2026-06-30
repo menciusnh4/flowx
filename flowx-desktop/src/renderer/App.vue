@@ -27,6 +27,14 @@
           <el-icon><Clock /></el-icon>
           <span>发布历史</span>
         </el-menu-item>
+        <el-sub-menu index="/settings">
+          <template #title>
+            <el-icon><Setting /></el-icon>
+            <span>系统配置</span>
+          </template>
+          <el-menu-item index="/settings/environments">环境配置</el-menu-item>
+          <el-menu-item index="/settings/proxies">代理 IP 设置</el-menu-item>
+        </el-sub-menu>
       </el-menu>
       <div style="font-size: 12px; color: #909399">
         v{{ version || '0.1.0' }}

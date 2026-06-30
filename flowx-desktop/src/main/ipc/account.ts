@@ -14,17 +14,17 @@ export function registerAccountIpc(): void {
   safeInvoke('account:get', (id: string) => AccountService.getAccount(id));
 
   // 启动授权流程：打开浏览器弹窗让用户登录，返回新账号
-  safeInvoke('account:beginAuth', (platform: PlatformType) =>
-    AccountService.beginAuthorization(platform),
+  safeInvoke('account:beginAuth', (platform: PlatformType, envId?: string | null) =>
+    AccountService.beginAuthorization(platform, envId),
   );
 
   // 删除账号
   safeInvoke('account:delete', (id: string) => AccountService.deleteAccount(id));
 
-  // 更新账号（昵称/备注/分类）
+  // 更新账号（昵称/备注/分类/环境）
   safeInvoke(
     'account:update',
-    (id: string, patch: { nickname?: string; remark?: string; categoryIds?: string[] }) =>
+    (id: string, patch: { nickname?: string; remark?: string; categoryIds?: string[]; envId?: string | null }) =>
       AccountService.updateAccount(id, patch),
   );
 

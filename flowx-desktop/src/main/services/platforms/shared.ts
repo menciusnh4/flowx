@@ -1,6 +1,8 @@
 import { BrowserWindow, session as electronSession } from 'electron';
 import type { PublishLogEntry, PublishItemProgress, PublishRequest, PlatformType, ContentType } from '../../../types';
 import { getAppIcon } from '../../windows/MainWindow';
+import { getStore } from '../../store/SecureStore';
+import { BrowserEnvService } from '../BrowserEnvService';
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -162,6 +164,20 @@ export async function evalJS(
 
 /** 创建使用特定账号 partition 的浏览器窗口（发布流程统一入口） */
 export function makePublishWindow(accountId: string, title: string): BrowserWindow {
+  const partition = `persist:account_${accountId}`;
+  const sess = electronSession.fromPartition(partition);
+  const store = getStore();
+  const accounts = store.get('accounts') as any[] | undefined;
+  const cred = accounts?.find((a) => a.id === accountId);
+  const envId = cred?.envId;
+
+  // 异步应用指纹与代理配置，确保在网络请求发起前生效
+  if (envId) {
+    BrowserEnvService.applyEnvironment(sess, envId).catch((err) => {
+      console.error(`[PublishWindow] 环境隔离设置失败: ${err.message}`);
+    });
+  }
+
   const win = new BrowserWindow({
     width: 1280,
     height: 900,
@@ -172,7 +188,7 @@ export function makePublishWindow(accountId: string, title: string): BrowserWind
     show: true,
     icon: getAppIcon(),
     webPreferences: {
-      partition: `persist:account_${accountId}`,
+      partition,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,

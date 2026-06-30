@@ -9,6 +9,8 @@ const routes: RouteRecordRaw[] = [
   { path: '/accounts', name: 'accounts', component: () => import('@/pages/AccountPanel.vue'), meta: { title: '账号管理' } },
   { path: '/publish', name: 'publish', component: () => import('@/pages/Publish.vue'), meta: { title: '一键发布' } },
   { path: '/history', name: 'history', component: () => import('@/pages/History.vue'), meta: { title: '发布历史' } },
+  { path: '/settings/environments', name: 'environments', component: () => import('@/pages/BrowserEnvPanel.vue'), meta: { title: '环境配置' } },
+  { path: '/settings/proxies', name: 'proxies', component: () => import('@/pages/ProxyPanel.vue'), meta: { title: '代理 IP 设置' } },
 ];
 
 export const router = createRouter({

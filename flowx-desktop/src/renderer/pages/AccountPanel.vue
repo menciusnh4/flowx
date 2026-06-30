@@ -95,6 +95,14 @@
             <span v-else style="color:#c0c4cc; font-size:12px">未分类</span>
           </template>
         </el-table-column>
+        <el-table-column label="浏览器环境" min-width="140">
+          <template #default="{ row }">
+            <el-tag v-if="row.envId" type="success" size="small" effect="plain">
+              {{ getEnvName(row.envId) }}
+            </el-tag>
+            <span v-else style="color:#c0c4cc; font-size:12px">本机直连</span>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="80">
           <template #default="{ row }">
             <el-tag v-if="row.status === 'active'" type="success" size="small">正常</el-tag>
@@ -178,6 +186,13 @@
           </el-radio>
         </el-space>
       </el-radio-group>
+      <div style="margin-top: 20px; border-top: 1px solid var(--el-border-color-lighter); padding-top: 16px;">
+        <span style="font-size:13px; font-weight:500; display:block; margin-bottom:8px; color: #606266">绑定浏览器环境（隔离指纹与代理 IP）</span>
+        <el-select v-model="authEnvId" placeholder="选择绑定的浏览器指纹与代理（可选）" clearable style="width:100%">
+          <el-option label="使用本机直连出网" value="" />
+          <el-option v-for="env in envStore.environments" :key="env.id" :label="env.name" :value="env.id" />
+        </el-select>
+      </div>
       <template #footer>
         <el-button @click="authVisible = false">取消</el-button>
         <el-button type="primary" @click="startAuth" :loading="authing">开始授权</el-button>
@@ -196,6 +211,12 @@
         <el-form-item label="所属分类">
           <el-select v-model="editRow.categoryIds" placeholder="选择所属分类（最多5个）" multiple :multiple-limit="5" clearable style="width:100%">
             <el-option v-for="cat in accountStore.categories" :key="cat.id" :label="cat.name" :value="cat.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="浏览器环境">
+          <el-select v-model="editRow.envId" placeholder="选择关联的浏览器环境与代理 IP" clearable style="width:100%">
+            <el-option label="使用本机直连" value="" />
+            <el-option v-for="env in envStore.environments" :key="env.id" :label="env.name" :value="env.id" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -240,21 +261,26 @@ import { onMounted, reactive, ref, computed } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh, Link, Monitor, Setting, Folder } from '@element-plus/icons-vue';
 import { useAccountStore } from '../stores/account';
+import { useEnvStore } from '../stores/env';
 import { electronApi } from '../utils/electron';
 import type { AccountInfo, AccountCategory } from '../../types';
 
 const accountStore = useAccountStore();
+const envStore = useEnvStore();
+
 const authVisible = ref(false);
 const authPlatform = ref<string>('xiaohongshu');
+const authEnvId = ref<string>(''); // 授权绑定的环境 id
 const authing = ref(false);
 const refreshingId = ref<string>('');
 const openingId = ref<string>('');
 const editVisible = ref(false);
-const editRow = reactive<{ id: string; nickname: string; remark: string; categoryIds: string[] }>({
+const editRow = reactive<{ id: string; nickname: string; remark: string; categoryIds: string[]; envId: string }>({
   id: '',
   nickname: '',
   remark: '',
   categoryIds: [],
+  envId: '',
 });
 const saving = ref(false);
 const checkAllLoading = ref(false);
@@ -308,6 +334,9 @@ function fmt(t: number) {
 function platformName(p: string) {
   return accountStore.platforms.find((x) => x.key === p)?.name || p;
 }
+function getEnvName(envId: string) {
+  return envStore.environments.find((e) => e.id === envId)?.name || '未知环境';
+}
 function platformIcon(p: string) {
   return accountStore.platforms.find((x) => x.key === p)?.icon || '';
 }
@@ -335,13 +364,14 @@ async function openAuthDialog() {
     return;
   }
   authPlatform.value = accountStore.platforms[0].key;
+  authEnvId.value = ''; // 重置授权时绑定的环境
   authVisible.value = true;
 }
 
 async function startAuth() {
   authing.value = true;
   try {
-    const acc = await electronApi.beginAuth(authPlatform.value as any);
+    const acc = await electronApi.beginAuth(authPlatform.value as any, authEnvId.value || null);
     ElMessage.success(`已授权: ${acc.nickname}`);
     authVisible.value = false;
     await accountStore.refreshAccounts();
@@ -390,6 +420,7 @@ function editRemark(row: AccountInfo) {
   editRow.nickname = row.nickname;
   editRow.remark = row.remark || '';
   editRow.categoryIds = row.categoryIds ? [...row.categoryIds] : [];
+  editRow.envId = row.envId || '';
   editVisible.value = true;
 }
 
@@ -400,6 +431,7 @@ async function saveEdit() {
       nickname: editRow.nickname,
       remark: editRow.remark,
       categoryIds: [...editRow.categoryIds],
+      envId: editRow.envId || null,
     });
     editVisible.value = false;
     ElMessage.success('已更新');
@@ -541,6 +573,7 @@ onMounted(async () => {
   await accountStore.loadPlatforms();
   await accountStore.refreshAccounts();
   await accountStore.loadCategories();
+  envStore.loadAll().catch(() => {});
   // 异步加载健康检测配置（不阻塞 UI）
   accountStore.loadHealthCheckConfig().catch(() => {});
 });

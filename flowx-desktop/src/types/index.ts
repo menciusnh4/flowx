@@ -95,6 +95,8 @@ export interface AccountInfo {
   remark?: string;
   /** 账号所属分类的 id 列表 */
   categoryIds?: string[];
+  /** 账号绑定的浏览器环境配置 id */
+  envId?: string | null;
   /** 账号支持的发布能力（根据 platform 推断） */
   capabilities: AccountCapabilities;
 }
@@ -145,6 +147,8 @@ export interface AccountCredential {
   lastChecked?: number;
   /** 账号所属分类的 id 列表 */
   categoryIds?: string[];
+  /** 账号绑定的浏览器环境配置 id */
+  envId?: string | null;
 }
 
 /** 发布内容请求 */
@@ -279,4 +283,25 @@ export interface UpdateInfo {
   version?: string;
   releaseNotes?: string;
   downloadUrl?: string;
+}
+
+/** 代理 IP 配置 */
+export interface ProxyConfig {
+  id: string;
+  name: string;
+  type: 'http' | 'socks5';
+  host: string;
+  port: number;
+  username?: string;
+  password?: string;
+  createdAt: number;
+}
+
+/** 浏览器环境配置 */
+export interface BrowserEnvironment {
+  id: string;
+  name: string;
+  userAgent: string;
+  proxyId?: string | null;
+  createdAt: number;
 }

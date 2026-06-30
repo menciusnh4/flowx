@@ -2,6 +2,7 @@ import { session, BrowserWindow } from 'electron';
 import crypto from 'crypto';
 import { getStore, encrypt, decrypt } from '../store/SecureStore';
 import { logger } from '../utils/logger';
+import { BrowserEnvService } from './BrowserEnvService';
 import { PLATFORMS } from './PlatformRegistry';
 import { getPlatform, getAllPlatforms, applyDouyinAntiCrash } from './platforms';
 import { getAppIcon } from '../windows/MainWindow';
@@ -165,6 +166,9 @@ export class AccountService {
     logger.info(`[Account-Health] 🔍 开始检测 (${cred.platform} / ${cred.nickname})`);
 
     const partition = `persist:account_${id}`;
+    const sess = session.fromPartition(partition);
+    await BrowserEnvService.applyEnvironment(sess, cred.envId);
+
     const win = new BrowserWindow({
       width: 1280, height: 880,
       title: `检测登录态 - ${cred.nickname || id}`,
@@ -299,7 +303,7 @@ export class AccountService {
   //        · 读 partition 里所有 cookies（完整属性：secure/httpOnly/sameSite/expires）
   //        · 加密保存
   // -----------------------------------------------------------------------
-  static async beginAuthorization(platformKey: PlatformType): Promise<AccountInfo> {
+  static async beginAuthorization(platformKey: PlatformType, envId?: string | null): Promise<AccountInfo> {
     const platform = getPlatform(platformKey);
     if (!platform) throw new Error(`未知平台: ${platformKey}`);
     const strategy = platform.meta;
@@ -313,6 +317,9 @@ export class AccountService {
     logger.info(`[Account-Auth]   partition  = ${partition}`);
     logger.info(`[Account-Auth]   authUrl    = ${strategy.authUrl}`);
     logger.info('='.repeat(70) + '\n');
+
+    const sess = session.fromPartition(partition);
+    await BrowserEnvService.applyEnvironment(sess, envId);
 
     const authWin = new BrowserWindow({
       width: 1280,
@@ -593,6 +600,7 @@ export class AccountService {
             authUrl: strategy.authUrl,
             authorizedAt: Date.now(),
             expiresAt: Date.now() + 14 * 24 * 3600 * 1000,
+            envId: envId || undefined,
           };
 
           this.saveCredential(credential);
@@ -720,7 +728,7 @@ export class AccountService {
 
   static updateAccount(
     id: string,
-    patch: Partial<Pick<AccountInfo, 'nickname' | 'remark' | 'categoryIds'>>,
+    patch: Partial<Pick<AccountInfo, 'nickname' | 'remark' | 'categoryIds' | 'envId'>>,
   ): AccountInfo | null {
     const list = this.loadCredentials();
     const c = list.find((a) => a.id === id);
@@ -743,6 +751,9 @@ export class AccountService {
       // 清理原有的单分类遗留字段（若有）
       delete (c as any).categoryId;
     }
+    if (patch.envId !== undefined) {
+      c.envId = patch.envId;
+    }
     this.saveCredentials(list);
     return this.toInfo(c);
   }
@@ -764,6 +775,9 @@ export class AccountService {
 
     // Step 1: 打开浏览器窗口，用已有 partition 访问创作中心首页
     const partition = `persist:account_${c.id}`;
+    const sess = session.fromPartition(partition);
+    await BrowserEnvService.applyEnvironment(sess, c.envId);
+
     const win = new BrowserWindow({
       width: 1280,
       height: 880,
@@ -930,6 +944,7 @@ export class AccountService {
         ...cred,
         id: list[idx].id, // 保持原账号 id 不变
         categoryIds: list[idx].categoryIds || cred.categoryIds, // 关键：保留原账号的分类绑定
+        envId: list[idx].envId || cred.envId, // 保留原账号的环境绑定
       };
       logger.info(`[Account-Auth] 🔄 检测到重复账号(${cred.platform})，更新已有记录而非新增`);
     } else {
@@ -968,6 +983,7 @@ export class AccountService {
       remark,
       capabilities,
       categoryIds,
+      envId: c.envId,
     };
   }
 
@@ -1007,6 +1023,9 @@ export class AccountService {
 
     // 2. 打开 BrowserWindow，使用同一 partition（这样 cookies + localStorage + session 都共享）
     const partition = `persist:account_${accountId}`;
+    const sess = session.fromPartition(partition);
+    await BrowserEnvService.applyEnvironment(sess, cred.envId);
+
     const win = new BrowserWindow({
       width: 1360,
       height: 880,

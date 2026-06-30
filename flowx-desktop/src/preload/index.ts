@@ -15,6 +15,8 @@ import type {
   PagedResult,
   PublishStats,
   AccountCategory,
+  ProxyConfig,
+  BrowserEnvironment,
 } from '../types';
 
 // Preload 脚本：通过 contextBridge 暴露安全 API
@@ -47,12 +49,12 @@ contextBridge.exposeInMainWorld('electron', {
     listPlatforms: (): Promise<PlatformMeta[]> => invoke('account:listPlatforms'),
     list: (): Promise<AccountInfo[]> => invoke('account:list'),
     get: (id: string): Promise<AccountInfo | null> => invoke('account:get', id),
-    beginAuth: (platform: PlatformType): Promise<AccountInfo> =>
-      invoke('account:beginAuth', platform),
+    beginAuth: (platform: PlatformType, envId?: string | null): Promise<AccountInfo> =>
+      invoke('account:beginAuth', platform, envId),
     delete: (id: string): Promise<boolean> => invoke('account:delete', id),
     update: (
       id: string,
-      patch: { nickname?: string; remark?: string; categoryIds?: string[] },
+      patch: { nickname?: string; remark?: string; categoryIds?: string[]; envId?: string | null },
     ): Promise<AccountInfo | null> => invoke('account:update', id, patch),
     refresh: (id: string): Promise<AccountInfo> => invoke('account:refresh', id),
     openCreator: (
@@ -139,6 +141,19 @@ contextBridge.exposeInMainWorld('electron', {
   update: {
     check: (): Promise<UpdateInfo> => invoke('update:check'),
   },
+
+  // ========== 系统环境配置与指纹代理 ==========
+  env: {
+    listProxies: (): Promise<ProxyConfig[]> => invoke('env:listProxies'),
+    createProxy: (data: Omit<ProxyConfig, 'id' | 'createdAt'>): Promise<ProxyConfig> => invoke('env:createProxy', data),
+    updateProxy: (id: string, patch: Partial<Omit<ProxyConfig, 'id' | 'createdAt'>>): Promise<ProxyConfig | null> => invoke('env:updateProxy', id, patch),
+    deleteProxy: (id: string): Promise<boolean> => invoke('env:deleteProxy', id),
+
+    listEnvironments: (): Promise<BrowserEnvironment[]> => invoke('env:listEnvironments'),
+    createEnvironment: (data: Omit<BrowserEnvironment, 'id' | 'createdAt'>): Promise<BrowserEnvironment> => invoke('env:createEnvironment', data),
+    updateEnvironment: (id: string, patch: Partial<Omit<BrowserEnvironment, 'id' | 'createdAt'>>): Promise<BrowserEnvironment | null> => invoke('env:updateEnvironment', id, patch),
+    deleteEnvironment: (id: string): Promise<boolean> => invoke('env:deleteEnvironment', id),
+  },
 });
 
 // 便于在 Vue 组件中做类型推断
@@ -149,11 +164,11 @@ declare global {
         listPlatforms: () => Promise<PlatformMeta[]>;
         list: () => Promise<AccountInfo[]>;
         get: (id: string) => Promise<AccountInfo | null>;
-        beginAuth: (platform: PlatformType) => Promise<AccountInfo>;
+        beginAuth: (platform: PlatformType, envId?: string | null) => Promise<AccountInfo>;
         delete: (id: string) => Promise<boolean>;
         update: (
           id: string,
-          patch: { nickname?: string; remark?: string },
+          patch: { nickname?: string; remark?: string; categoryIds?: string[]; envId?: string | null },
         ) => Promise<AccountInfo | null>;
         refresh: (id: string) => Promise<AccountInfo>;
         openCreator: (
@@ -201,6 +216,17 @@ declare global {
       };
       update: {
         check: () => Promise<UpdateInfo>;
+      };
+      env: {
+        listProxies: () => Promise<ProxyConfig[]>;
+        createProxy: (data: Omit<ProxyConfig, 'id' | 'createdAt'>) => Promise<ProxyConfig>;
+        updateProxy: (id: string, patch: Partial<Omit<ProxyConfig, 'id' | 'createdAt'>>) => Promise<ProxyConfig | null>;
+        deleteProxy: (id: string) => Promise<boolean>;
+
+        listEnvironments: () => Promise<BrowserEnvironment[]>;
+        createEnvironment: (data: Omit<BrowserEnvironment, 'id' | 'createdAt'>) => Promise<BrowserEnvironment>;
+        updateEnvironment: (id: string, patch: Partial<Omit<BrowserEnvironment, 'id' | 'createdAt'>>) => Promise<BrowserEnvironment | null>;
+        deleteEnvironment: (id: string) => Promise<boolean>;
       };
     };
   }

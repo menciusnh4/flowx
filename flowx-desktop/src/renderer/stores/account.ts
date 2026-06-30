@@ -31,8 +31,8 @@ export const useAccountStore = defineStore('account', {
         this.loading = false;
       }
     },
-    async beginAuth(platform: PlatformType) {
-      const acc = await electronApi.beginAuth(platform);
+    async beginAuth(platform: PlatformType, envId?: string | null) {
+      const acc = await electronApi.beginAuth(platform, envId);
       await this.refreshAccounts();
       return acc;
     },
@@ -40,7 +40,7 @@ export const useAccountStore = defineStore('account', {
       await electronApi.deleteAccount(id);
       await this.refreshAccounts();
     },
-    async updateAccount(id: string, patch: { nickname?: string; remark?: string; categoryIds?: string[] }) {
+    async updateAccount(id: string, patch: { nickname?: string; remark?: string; categoryIds?: string[]; envId?: string | null }) {
       await electronApi.updateAccount(id, patch);
       await this.refreshAccounts();
     },

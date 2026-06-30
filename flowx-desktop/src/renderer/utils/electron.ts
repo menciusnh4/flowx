@@ -16,6 +16,8 @@ import type {
   PagedResult,
   PublishStats,
   AccountCategory,
+  ProxyConfig,
+  BrowserEnvironment,
 } from '../../types';
 
 type StatusCb = (evt: unknown) => void;
@@ -32,15 +34,15 @@ export const electronApi = {
   async getAccount(id: string): Promise<AccountInfo | null> {
     return invokeElectron('account.get', 'account:get', id);
   },
-  async beginAuth(platform: PlatformType): Promise<AccountInfo> {
-    return invokeElectron('account.beginAuth', 'account:beginAuth', platform);
+  async beginAuth(platform: PlatformType, envId?: string | null): Promise<AccountInfo> {
+    return invokeElectron('account.beginAuth', 'account:beginAuth', platform, envId);
   },
   async deleteAccount(id: string): Promise<boolean> {
     return invokeElectron('account.delete', 'account:delete', id);
   },
   async updateAccount(
     id: string,
-    patch: { nickname?: string; remark?: string; categoryIds?: string[] },
+    patch: { nickname?: string; remark?: string; categoryIds?: string[]; envId?: string | null },
   ): Promise<AccountInfo | null> {
     return invokeElectron('account.update', 'account:update', id, patch);
   },
@@ -168,6 +170,30 @@ export const electronApi = {
   // 更新
   async checkUpdate(): Promise<UpdateInfo> {
     return invokeElectron('update.check', 'update:check');
+  },
+  async listProxies(): Promise<ProxyConfig[]> {
+    return invokeElectron('env.listProxies', 'env:listProxies');
+  },
+  async createProxy(data: Omit<ProxyConfig, 'id' | 'createdAt'>): Promise<ProxyConfig> {
+    return invokeElectron('env.createProxy', 'env:createProxy', data);
+  },
+  async updateProxy(id: string, patch: Partial<Omit<ProxyConfig, 'id' | 'createdAt'>>): Promise<ProxyConfig | null> {
+    return invokeElectron('env.updateProxy', 'env:updateProxy', id, patch);
+  },
+  async deleteProxy(id: string): Promise<boolean> {
+    return invokeElectron('env.deleteProxy', 'env:deleteProxy', id);
+  },
+  async listEnvironments(): Promise<BrowserEnvironment[]> {
+    return invokeElectron('env.listEnvironments', 'env:listEnvironments');
+  },
+  async createEnvironment(data: Omit<BrowserEnvironment, 'id' | 'createdAt'>): Promise<BrowserEnvironment> {
+    return invokeElectron('env.createEnvironment', 'env:createEnvironment', data);
+  },
+  async updateEnvironment(id: string, patch: Partial<Omit<BrowserEnvironment, 'id' | 'createdAt'>>): Promise<BrowserEnvironment | null> {
+    return invokeElectron('env.updateEnvironment', 'env:updateEnvironment', id, patch);
+  },
+  async deleteEnvironment(id: string): Promise<boolean> {
+    return invokeElectron('env.deleteEnvironment', 'env:deleteEnvironment', id);
   },
 };
 
