@@ -10,6 +10,7 @@ import type {
   AccountInfo,
   PlatformType,
   HealthCheckConfig,
+  AccountCategory,
 } from '../../types';
 
 // =======================================================================
@@ -22,6 +23,7 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
 // =======================================================================
 const STORAGE_KEY = 'accounts';
 const HEALTH_CHECK_CONFIG_KEY = 'healthCheckConfig';
+const CATEGORIES_STORAGE_KEY = 'categories';
 
 const DEFAULT_HEALTH_CHECK_CONFIG: HealthCheckConfig = {
   intervalMs: 60 * 60 * 1000, // 1 小时
@@ -718,7 +720,7 @@ export class AccountService {
 
   static updateAccount(
     id: string,
-    patch: Partial<Pick<AccountInfo, 'nickname' | 'remark'>>,
+    patch: Partial<Pick<AccountInfo, 'nickname' | 'remark' | 'categoryIds'>>,
   ): AccountInfo | null {
     const list = this.loadCredentials();
     const c = list.find((a) => a.id === id);
@@ -735,6 +737,11 @@ export class AccountService {
         secure: false,
         httpOnly: false,
       });
+    }
+    if (patch.categoryIds !== undefined) {
+      c.categoryIds = (patch.categoryIds || []).slice(0, 5);
+      // 清理原有的单分类遗留字段（若有）
+      delete (c as any).categoryId;
     }
     this.saveCredentials(list);
     return this.toInfo(c);
@@ -922,6 +929,7 @@ export class AccountService {
       list[idx] = {
         ...cred,
         id: list[idx].id, // 保持原账号 id 不变
+        categoryIds: list[idx].categoryIds || cred.categoryIds, // 关键：保留原账号的分类绑定
       };
       logger.info(`[Account-Auth] 🔄 检测到重复账号(${cred.platform})，更新已有记录而非新增`);
     } else {
@@ -940,6 +948,9 @@ export class AccountService {
     const p = getPlatform(c.platform);
     const capabilities = p ? p.capabilities : { publishVideo: true, publishImage: false, publishArticle: false };
 
+    // 兼容老版本单分类数据
+    const categoryIds = c.categoryIds || ((c as any).categoryId ? [(c as any).categoryId] : []);
+
     return {
       id: c.id,
       platform: c.platform,
@@ -956,6 +967,7 @@ export class AccountService {
       lastChecked: c.lastChecked,
       remark,
       capabilities,
+      categoryIds,
     };
   }
 
@@ -1059,6 +1071,88 @@ export class AccountService {
     );
 
     return { ok: true, url: homeUrl, injected: ok, skipped, failed: fail };
+  }
+
+  // ============================= 分类管理 CRUD =============================
+
+  /**
+   * 获取所有分类列表
+   */
+  static listCategories(): AccountCategory[] {
+    const store = getStore();
+    return (store.get(CATEGORIES_STORAGE_KEY as any) as AccountCategory[]) || [];
+  }
+
+  /**
+   * 创建新的账号分类
+   */
+  static createCategory(name: string): AccountCategory {
+    const store = getStore();
+    const categories = this.listCategories();
+    // 校验分类名是否重复（忽略两端空格）
+    const trimmedName = name.trim();
+    if (categories.some((c) => c.name.trim() === trimmedName)) {
+      throw new Error(`分类名称「${trimmedName}」已存在`);
+    }
+    const newCategory: AccountCategory = {
+      id: genId('cat'),
+      name: trimmedName,
+      createdAt: Date.now(),
+    };
+    categories.push(newCategory);
+    store.set(CATEGORIES_STORAGE_KEY as any, categories);
+    logger.info(`[Account] 新建分类: ${trimmedName} (id=${newCategory.id})`);
+    return newCategory;
+  }
+
+  /**
+   * 更新已有账号分类名称
+   */
+  static updateCategory(id: string, name: string): AccountCategory | null {
+    const store = getStore();
+    const categories = this.listCategories();
+    // 校验除当前分类外是否重名
+    const trimmedName = name.trim();
+    if (categories.some((c) => c.id !== id && c.name.trim() === trimmedName)) {
+      throw new Error(`分类名称「${trimmedName}」已存在`);
+    }
+    const c = categories.find((x) => x.id === id);
+    if (!c) return null;
+    c.name = trimmedName;
+    store.set(CATEGORIES_STORAGE_KEY as any, categories);
+    logger.info(`[Account] 更新分类: id=${id}, name=${trimmedName}`);
+    return c;
+  }
+
+  /**
+   * 删除账号分类（解绑所有使用该分类的账号）
+   */
+  static deleteCategory(id: string): boolean {
+    const store = getStore();
+    const categories = this.listCategories();
+    const idx = categories.findIndex((x) => x.id === id);
+    if (idx < 0) return false;
+    categories.splice(idx, 1);
+    store.set(CATEGORIES_STORAGE_KEY as any, categories);
+
+    // 清空绑定了此分类的账号
+    const accounts = AccountService.loadCredentials();
+    let changed = false;
+    for (const acc of accounts) {
+      if ((acc as any).categoryId === id) {
+        delete (acc as any).categoryId;
+        changed = true;
+      }
+      if (acc.categoryIds && acc.categoryIds.includes(id)) {
+        acc.categoryIds = acc.categoryIds.filter((cid) => cid !== id);
+        changed = true;
+      }
+    }
+    if (changed) {
+      AccountService.saveCredentials(accounts);
+    }
+    logger.info(`[Account] 删除分类: id=${id} (解绑账号数=${changed})`);
+    return true;
   }
 }
 

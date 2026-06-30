@@ -15,6 +15,7 @@ import type {
   HealthCheckConfig,
   PagedResult,
   PublishStats,
+  AccountCategory,
 } from '../../types';
 
 type StatusCb = (evt: unknown) => void;
@@ -39,7 +40,7 @@ export const electronApi = {
   },
   async updateAccount(
     id: string,
-    patch: { nickname?: string; remark?: string },
+    patch: { nickname?: string; remark?: string; categoryIds?: string[] },
   ): Promise<AccountInfo | null> {
     return invokeElectron('account.update', 'account:update', id, patch);
   },
@@ -55,6 +56,20 @@ export const electronApi = {
     error?: string;
   }> {
     return invokeElectron('account.openCreator', 'account:openCreator', accountId);
+  },
+
+  // 分类管理
+  async listCategories(): Promise<AccountCategory[]> {
+    return invokeElectron('account.listCategories', 'account:listCategories');
+  },
+  async createCategory(name: string): Promise<AccountCategory> {
+    return invokeElectron('account.createCategory', 'account:createCategory', name);
+  },
+  async updateCategory(id: string, name: string): Promise<AccountCategory | null> {
+    return invokeElectron('account.updateCategory', 'account:updateCategory', id, name);
+  },
+  async deleteCategory(id: string): Promise<boolean> {
+    return invokeElectron('account.deleteCategory', 'account:deleteCategory', id);
   },
 
   /** 静默检测单个账号的登录态（不弹用户可编辑的窗口） */

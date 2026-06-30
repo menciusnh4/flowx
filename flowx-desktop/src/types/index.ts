@@ -93,8 +93,17 @@ export interface AccountInfo {
   lastChecked?: number;
   /** 备注（可选） */
   remark?: string;
+  /** 账号所属分类的 id 列表 */
+  categoryIds?: string[];
   /** 账号支持的发布能力（根据 platform 推断） */
   capabilities: AccountCapabilities;
+}
+
+/** 账号分类 */
+export interface AccountCategory {
+  id: string;
+  name: string;
+  createdAt: number;
 }
 
 /** 平台授权凭证（仅主进程可见，加密存储） */
@@ -134,6 +143,8 @@ export interface AccountCredential {
   expiresAt?: number;
   /** 最近一次健康检测的时间戳（毫秒），由 checkAccountHealth 维护 */
   lastChecked?: number;
+  /** 账号所属分类的 id 列表 */
+  categoryIds?: string[];
 }
 
 /** 发布内容请求 */

@@ -14,6 +14,7 @@ import type {
   HealthCheckConfig,
   PagedResult,
   PublishStats,
+  AccountCategory,
 } from '../types';
 
 // Preload 脚本：通过 contextBridge 暴露安全 API
@@ -51,7 +52,7 @@ contextBridge.exposeInMainWorld('electron', {
     delete: (id: string): Promise<boolean> => invoke('account:delete', id),
     update: (
       id: string,
-      patch: { nickname?: string; remark?: string },
+      patch: { nickname?: string; remark?: string; categoryIds?: string[] },
     ): Promise<AccountInfo | null> => invoke('account:update', id, patch),
     refresh: (id: string): Promise<AccountInfo> => invoke('account:refresh', id),
     openCreator: (
@@ -76,6 +77,14 @@ contextBridge.exposeInMainWorld('electron', {
     /** 更新健康检测配置（同时持久化保存 + 重启定时器） */
     setHealthCheckConfig: (cfg: { intervalMs: number; initialDelayMs?: number; enabled?: boolean }): Promise<HealthCheckConfig> =>
       invoke('account:setHealthCheckConfig', cfg),
+
+    // ========== 分类管理 ==========
+    listCategories: (): Promise<AccountCategory[]> => invoke('account:listCategories'),
+    createCategory: (name: string): Promise<AccountCategory> =>
+      invoke('account:createCategory', name),
+    updateCategory: (id: string, name: string): Promise<AccountCategory | null> =>
+      invoke('account:updateCategory', id, name),
+    deleteCategory: (id: string): Promise<boolean> => invoke('account:deleteCategory', id),
   },
 
   // ========== 发布相关 ==========

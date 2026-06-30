@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { electronApi } from '../utils/electron';
-import type { AccountInfo, PlatformMeta, PlatformType, HealthCheckConfig } from '../../types';
+import type { AccountInfo, PlatformMeta, PlatformType, HealthCheckConfig, AccountCategory } from '../../types';
 
 export const useAccountStore = defineStore('account', {
   state: () => ({
@@ -9,6 +9,7 @@ export const useAccountStore = defineStore('account', {
     platforms: [] as PlatformMeta[],
     error: '' as string,
     healthCheckConfig: null as HealthCheckConfig | null,
+    categories: [] as AccountCategory[],
   }),
   getters: {
     activeAccounts: (s) => s.accounts.filter((a) => a.status === 'active'),
@@ -39,7 +40,7 @@ export const useAccountStore = defineStore('account', {
       await electronApi.deleteAccount(id);
       await this.refreshAccounts();
     },
-    async updateAccount(id: string, patch: { nickname?: string; remark?: string }) {
+    async updateAccount(id: string, patch: { nickname?: string; remark?: string; categoryIds?: string[] }) {
       await electronApi.updateAccount(id, patch);
       await this.refreshAccounts();
     },
@@ -47,6 +48,29 @@ export const useAccountStore = defineStore('account', {
       const acc = await electronApi.refreshToken(id);
       await this.refreshAccounts();
       return acc;
+    },
+
+    // ========== 分类管理 Action ==========
+    async loadCategories() {
+      try {
+        this.categories = await electronApi.listCategories();
+      } catch (e) {
+        this.error = e instanceof Error ? e.message : String(e);
+      }
+    },
+    async createCategory(name: string) {
+      await electronApi.createCategory(name);
+      await this.loadCategories();
+    },
+    async updateCategory(id: string, name: string) {
+      await electronApi.updateCategory(id, name);
+      await this.loadCategories();
+      await this.refreshAccounts();
+    },
+    async deleteCategory(id: string) {
+      await electronApi.deleteCategory(id);
+      await this.loadCategories();
+      await this.refreshAccounts();
     },
 
     /** 静默检测单个账号的登录状态（不弹用户可编辑的窗口） */

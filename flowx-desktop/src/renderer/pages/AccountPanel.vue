@@ -12,6 +12,9 @@
           <el-button type="primary" @click="openAuthDialog">
             <el-icon><Plus /></el-icon>&nbsp; 授权新账号
           </el-button>
+          <el-button @click="openCategoryDialog">
+            <el-icon><Folder /></el-icon>&nbsp; 分类管理
+          </el-button>
           <el-button @click="refresh">
             <el-icon><Refresh /></el-icon>&nbsp; 刷新
           </el-button>
@@ -24,9 +27,18 @@
         </el-space>
       </div>
 
+      <div style="display:flex; align-items:center; gap:8px; margin-top: 16px;">
+        <span style="font-size: 13px; color: #606266;">分类筛选：</span>
+        <el-select v-model="filterCategoryId" placeholder="全部" clearable style="width: 140px" size="small">
+          <el-option label="全部分类" value="" />
+          <el-option label="未分类" value="unclassified" />
+          <el-option v-for="cat in accountStore.categories" :key="cat.id" :label="cat.name" :value="cat.id" />
+        </el-select>
+      </div>
+
       <el-table
         v-loading="accountStore.loading"
-        :data="accountStore.accounts"
+        :data="filteredAccounts"
         border
         stripe
         style="margin-top: 12px"
@@ -71,6 +83,18 @@
             <span v-else style="color:#c0c4cc; font-size:12px">—</span>
           </template>
         </el-table-column>
+        <el-table-column label="分类" min-width="120">
+          <template #default="{ row }">
+            <template v-if="row.categoryIds && row.categoryIds.length > 0">
+              <el-space wrap :size="4">
+                <el-tag v-for="cid in row.categoryIds" :key="cid" type="info" size="small">
+                  {{ getCategoryName(cid) }}
+                </el-tag>
+              </el-space>
+            </template>
+            <span v-else style="color:#c0c4cc; font-size:12px">未分类</span>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="80">
           <template #default="{ row }">
             <el-tag v-if="row.status === 'active'" type="success" size="small">正常</el-tag>
@@ -91,20 +115,29 @@
             <span v-else style="font-size:12px; color:#c0c4cc">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column label="操作" width="210" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" type="success" @click="openCreator(asAccount(row))" :loading="openingId === asAccount(row).id">
-              <el-icon><Link /></el-icon>&nbsp;创作中心
-            </el-button>
-            <el-button size="small" type="warning" @click="refreshToken(asAccount(row))" :loading="refreshingId === asAccount(row).id" title="打开平台页面，刷新账号信息/粉丝数/关注数/获赞数">刷新</el-button>
-            <el-button size="small" type="danger" @click="remove(asAccount(row))">删除</el-button>
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <div style="display: flex; gap: 6px;">
+                <el-button size="small" type="success" style="width: 105px; margin: 0;" @click="openCreator(asAccount(row))" :loading="openingId === asAccount(row).id">
+                  <el-icon><Link /></el-icon>&nbsp;创作中心
+                </el-button>
+                <el-button size="small" type="primary" style="width: 75px; margin: 0;" @click="editRemark(asAccount(row))">
+                  编辑
+                </el-button>
+              </div>
+              <div style="display: flex; gap: 6px;">
+                <el-button size="small" type="warning" style="width: 105px; margin: 0;" @click="refreshToken(asAccount(row))" :loading="refreshingId === asAccount(row).id" title="打开平台页面，刷新账号信息/粉丝数/关注数/获赞数">刷新</el-button>
+                <el-button size="small" type="danger" style="width: 75px; margin: 0;" @click="remove(asAccount(row))">删除</el-button>
+              </div>
+            </div>
           </template>
         </el-table-column>
       </el-table>
 
-      <div v-if="accountStore.accounts.length === 0 && !accountStore.loading" class="empty-hint">
-        还没有账号，点击右上角"授权新账号"开始。
-        <div style="font-size:12px; color:#909399; margin-top:6px">
+      <div v-if="filteredAccounts.length === 0 && !accountStore.loading" class="empty-hint">
+        {{ filterCategoryId ? '当前分类下没有账号。' : '还没有账号，点击右上角"授权新账号"开始。' }}
+        <div v-if="!filterCategoryId" style="font-size:12px; color:#909399; margin-top:6px">
           授权会弹出平台登录窗口，扫码完成后点击右上角红色"✅ 登录完成，保存账号"按钮，或直接关闭窗口即可。
         </div>
       </div>
@@ -151,14 +184,19 @@
       </template>
     </el-dialog>
 
-    <!-- 编辑备注对话框 -->
+    <!-- 编辑账号对话框 -->
     <el-dialog v-model="editVisible" title="编辑账号" width="400px">
-      <el-form label-width="70px">
+      <el-form label-width="80px">
         <el-form-item label="昵称">
           <el-input v-model="editRow.nickname" placeholder="自定义昵称" />
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="editRow.remark" placeholder="如：日常号/广告号" />
+        </el-form-item>
+        <el-form-item label="所属分类">
+          <el-select v-model="editRow.categoryIds" placeholder="选择所属分类（最多5个）" multiple :multiple-limit="5" clearable style="width:100%">
+            <el-option v-for="cat in accountStore.categories" :key="cat.id" :label="cat.name" :value="cat.id" />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -166,16 +204,44 @@
         <el-button type="primary" @click="saveEdit" :loading="saving">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 分类管理对话框 -->
+    <el-dialog v-model="categoryDialogVisible" title="分类管理" width="500px" destroy-on-close>
+      <div style="margin-bottom: 16px; display: flex; gap: 8px;">
+        <el-input v-model="newCategoryName" placeholder="输入新分类名称" @keyup.enter="createCategory" />
+        <el-button type="primary" @click="createCategory" :loading="creatingCategory">新建分类</el-button>
+      </div>
+      <el-table :data="accountStore.categories" border size="small" style="width: 100%" max-height="300px">
+        <el-table-column label="分类名称">
+          <template #default="{ row }">
+            <el-input v-if="editingCategoryId === asCategory(row).id" v-model="editingCategoryName" size="small" @keyup.enter="saveCategoryName(asCategory(row))" />
+            <span v-else>{{ asCategory(row).name }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="150" align="center">
+          <template #default="{ row }">
+            <template v-if="editingCategoryId === asCategory(row).id">
+              <el-button size="small" type="success" link @click="saveCategoryName(asCategory(row))">保存</el-button>
+              <el-button size="small" link @click="editingCategoryId = ''">取消</el-button>
+            </template>
+            <template v-else>
+              <el-button size="small" type="primary" link @click="startEditCategory(asCategory(row))">编辑</el-button>
+              <el-button size="small" type="danger" link @click="deleteCategory(asCategory(row))">删除</el-button>
+            </template>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, reactive, ref, computed } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Refresh, Link, Monitor, Setting } from '@element-plus/icons-vue';
+import { Plus, Refresh, Link, Monitor, Setting, Folder } from '@element-plus/icons-vue';
 import { useAccountStore } from '../stores/account';
 import { electronApi } from '../utils/electron';
-import type { AccountInfo } from '../../types';
+import type { AccountInfo, AccountCategory } from '../../types';
 
 const accountStore = useAccountStore();
 const authVisible = ref(false);
@@ -184,7 +250,12 @@ const authing = ref(false);
 const refreshingId = ref<string>('');
 const openingId = ref<string>('');
 const editVisible = ref(false);
-const editRow = reactive<{ id: string; nickname: string; remark: string }>({ id: '', nickname: '', remark: '' });
+const editRow = reactive<{ id: string; nickname: string; remark: string; categoryIds: string[] }>({
+  id: '',
+  nickname: '',
+  remark: '',
+  categoryIds: [],
+});
 const saving = ref(false);
 const checkAllLoading = ref(false);
 const healthCheckDialogVisible = ref(false);
@@ -203,6 +274,30 @@ const healthCheckForm = reactive({
   intervalMinutes: 60,
   initialDelayMinutes: 5,
 });
+
+// 分类管理相关的状态
+const filterCategoryId = ref<string>('');
+const categoryDialogVisible = ref(false);
+const newCategoryName = ref('');
+const creatingCategory = ref(false);
+const editingCategoryId = ref('');
+const editingCategoryName = ref('');
+
+// 根据分类过滤账号
+const filteredAccounts = computed(() => {
+  if (!filterCategoryId.value) {
+    return accountStore.accounts;
+  }
+  if (filterCategoryId.value === 'unclassified') {
+    return accountStore.accounts.filter((a) => !a.categoryIds || a.categoryIds.length === 0);
+  }
+  return accountStore.accounts.filter((a) => a.categoryIds && a.categoryIds.includes(filterCategoryId.value));
+});
+
+// 获取分类名称辅助函数
+function getCategoryName(id: string) {
+  return accountStore.categories.find((c) => c.id === id)?.name || '未知分类';
+}
 
 function fmt(t: number) {
   if (!t) return '—';
@@ -226,6 +321,11 @@ function formatCount(n: number | undefined): string {
 /** 类型辅助：将 el-table 默认的 DefaultRow 断言为 AccountInfo */
 function asAccount(row: unknown): AccountInfo {
   return row as AccountInfo;
+}
+
+/** 类型辅助：将 el-table 默认的 DefaultRow 断言为 AccountCategory */
+function asCategory(row: unknown): AccountCategory {
+  return row as AccountCategory;
 }
 
 async function openAuthDialog() {
@@ -289,14 +389,18 @@ function editRemark(row: AccountInfo) {
   editRow.id = row.id;
   editRow.nickname = row.nickname;
   editRow.remark = row.remark || '';
+  editRow.categoryIds = row.categoryIds ? [...row.categoryIds] : [];
   editVisible.value = true;
 }
 
 async function saveEdit() {
   saving.value = true;
   try {
-    await electronApi.updateAccount(editRow.id, { nickname: editRow.nickname, remark: editRow.remark });
-    await accountStore.refreshAccounts();
+    await accountStore.updateAccount(editRow.id, {
+      nickname: editRow.nickname,
+      remark: editRow.remark,
+      categoryIds: [...editRow.categoryIds],
+    });
     editVisible.value = false;
     ElMessage.success('已更新');
   } catch (e) {
@@ -372,9 +476,71 @@ async function saveHealthCheckConfig() {
   }
 }
 
+// 分类管理操作
+function openCategoryDialog() {
+  categoryDialogVisible.value = true;
+}
+
+async function createCategory() {
+  const name = newCategoryName.value.trim();
+  if (!name) {
+    ElMessage.warning('请输入分类名称');
+    return;
+  }
+  creatingCategory.value = true;
+  try {
+    await accountStore.createCategory(name);
+    newCategoryName.value = '';
+    ElMessage.success('创建成功');
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    creatingCategory.value = false;
+  }
+}
+
+function startEditCategory(row: { id: string; name: string }) {
+  editingCategoryId.value = row.id;
+  editingCategoryName.value = row.name;
+}
+
+async function saveCategoryName(row: { id: string }) {
+  const name = editingCategoryName.value.trim();
+  if (!name) {
+    ElMessage.warning('分类名称不能为空');
+    return;
+  }
+  try {
+    await accountStore.updateCategory(row.id, name);
+    editingCategoryId.value = '';
+    ElMessage.success('已保存');
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e));
+  }
+}
+
+async function deleteCategory(row: { id: string; name: string }) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除分类「${row.name}」吗？\n删除后绑定该分类的账号将变更为"未分类"。`,
+      '删除分类',
+      { type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+  try {
+    await accountStore.deleteCategory(row.id);
+    ElMessage.success('已删除');
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e));
+  }
+}
+
 onMounted(async () => {
   await accountStore.loadPlatforms();
   await accountStore.refreshAccounts();
+  await accountStore.loadCategories();
   // 异步加载健康检测配置（不阻塞 UI）
   accountStore.loadHealthCheckConfig().catch(() => {});
 });

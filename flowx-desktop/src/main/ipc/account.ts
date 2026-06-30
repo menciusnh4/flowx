@@ -21,10 +21,10 @@ export function registerAccountIpc(): void {
   // 删除账号
   safeInvoke('account:delete', (id: string) => AccountService.deleteAccount(id));
 
-  // 更新账号（昵称/备注）
+  // 更新账号（昵称/备注/分类）
   safeInvoke(
     'account:update',
-    (id: string, patch: { nickname?: string; remark?: string }) =>
+    (id: string, patch: { nickname?: string; remark?: string; categoryIds?: string[] }) =>
       AccountService.updateAccount(id, patch),
   );
 
@@ -58,4 +58,16 @@ export function registerAccountIpc(): void {
     (cfg: { intervalMs: number; initialDelayMs?: number; enabled?: boolean }) =>
       AccountService.setHealthCheckConfig(cfg),
   );
+
+  // 获取所有分类
+  safeInvoke('account:listCategories', () => AccountService.listCategories());
+
+  // 创建分类
+  safeInvoke('account:createCategory', (name: string) => AccountService.createCategory(name));
+
+  // 修改分类
+  safeInvoke('account:updateCategory', (id: string, name: string) => AccountService.updateCategory(id, name));
+
+  // 删除分类
+  safeInvoke('account:deleteCategory', (id: string) => AccountService.deleteCategory(id));
 }

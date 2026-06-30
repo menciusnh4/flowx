@@ -1,7 +1,7 @@
 import { safeStorage, app } from 'electron';
 import Store from 'electron-store';
 import { logger } from '../utils/logger';
-import type { AccountCredential, PublishTask } from '../../types';
+import type { AccountCredential, PublishTask, AccountCategory } from '../../types';
 
 // 本地加密存储（主进程单例）
 // - accounts: 账号列表（含凭证）
@@ -17,6 +17,7 @@ interface StoreSchema {
     theme?: 'light' | 'dark' | 'auto';
     autoPublishConcurrency?: number;
   };
+  categories: AccountCategory[];
 }
 
 let store: Store<StoreSchema> | null = null;
@@ -32,6 +33,7 @@ export function initStore() {
       accounts: [],
       publishTasks: [],
       settings: { theme: 'auto', autoPublishConcurrency: 3 },
+      categories: [],
     },
   });
 
