@@ -38,7 +38,7 @@ nsis:
   shortcutName: FlowX
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
-  deleteAppDataOnUninstall: false
+  deleteAppDataOnUninstall: true
 mac:
   icon: build/icon.png
   target: dmg
