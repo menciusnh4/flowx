@@ -167,6 +167,22 @@ export class BrowserEnvService {
       } catch (err) {
         logger.warn('[BrowserEnv] 清理代理失败', err);
       }
+
+      // 🛡️ 强制净化默认的 User-Agent（抹除 Electron 与 flowx-desktop 等爬虫痕迹，防止微信视频号官方风控拒绝二维码加载）
+      try {
+        const defaultUA = sess.getUserAgent();
+        if (defaultUA.indexOf('Electron/') !== -1 || defaultUA.indexOf('flowx-desktop/') !== -1) {
+          const cleanUA = defaultUA
+            .replace(/Electron\/[0-9\.]+\s?/g, '')
+            .replace(/flowx-desktop\/[0-9\.]+\s?/g, '');
+          sess.setUserAgent(cleanUA);
+          logger.info(`[BrowserEnv] 已为未绑定环境的 Session 净化注入标准 UA: "${cleanUA}"`);
+        }
+      } catch (uaErr) {
+        const fallbackUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+        sess.setUserAgent(fallbackUA);
+        logger.info(`[BrowserEnv] 为未绑定环境的 Session 注入兜底 UA: "${fallbackUA}"`);
+      }
       return;
     }
 

@@ -2,6 +2,7 @@ import { app, shell } from 'electron';
 import { getStore } from '../store/SecureStore';
 import { logger, writePublishLog, getPublishLogPath, getMainLogPath, queryPublishLogs, clearPublishLogs } from '../utils/logger';
 import { AccountService, injectAccountCookies } from './AccountService';
+import { getPlatform } from './platforms';
 import type {
   PublishItemProgress,
   PublishRequest,
@@ -516,8 +517,12 @@ class PublishEngineClass {
     });
 
     try {
+      // 获取平台的主域 homeUrl 作为注入上下文目标地址
+      const platform = getPlatform(item.platform as any);
+      const homeUrl = platform?.meta.homeUrl;
+
       // 注入 cookies 到该账号的 partition
-      const cookieResult = await injectAccountCookies(accountId);
+      const cookieResult = await injectAccountCookies(accountId, homeUrl);
       writePublishLog({
         ts: Date.now(),
         level: 'info',

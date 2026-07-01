@@ -171,12 +171,10 @@ export function makePublishWindow(accountId: string, title: string): BrowserWind
   const cred = accounts?.find((a) => a.id === accountId);
   const envId = cred?.envId;
 
-  // 异步应用指纹与代理配置，确保在网络请求发起前生效
-  if (envId) {
-    BrowserEnvService.applyEnvironment(sess, envId).catch((err) => {
-      console.error(`[PublishWindow] 环境隔离设置失败: ${err.message}`);
-    });
-  }
+  // 异步应用指纹与代理配置，确保在网络请求发起前生效（无条件执行，以确保未绑定环境时亦会净化默认 UA 特征）
+  BrowserEnvService.applyEnvironment(sess, envId).catch((err) => {
+    console.error(`[PublishWindow] 环境隔离设置失败: ${err.message}`);
+  });
 
   const win = new BrowserWindow({
     width: 1280,
@@ -479,6 +477,33 @@ export async function uploadViaCDP(
         await win.webContents.debugger.sendCommand('DOM.setFileInputFiles', params);
         log('info', 'upload', `✅ [${source}] DOM.setFileInputFiles 返回成功`);
 
+        // 🔑 物理派发 change 和 input 事件（通过 Runtime.callFunctionOn 强行穿透任何 iframe 和隔离环境）
+        try {
+          let targetObjectId = objectId;
+          if (nodeId !== undefined && nodeId !== null) {
+            const resNode = await win.webContents.debugger.sendCommand('DOM.resolveNode', { nodeId }).catch(() => null);
+            if (resNode && resNode.object) {
+              targetObjectId = resNode.object.objectId;
+            }
+          }
+          if (targetObjectId) {
+            await win.webContents.debugger.sendCommand('Runtime.callFunctionOn', {
+              objectId: targetObjectId,
+              functionDeclaration: `
+                function() {
+                  try {
+                    this.dispatchEvent(new Event('change', { bubbles: true }));
+                    this.dispatchEvent(new Event('input', { bubbles: true }));
+                  } catch(e) {}
+                }
+              `
+            }).catch(() => null);
+            log('info', 'upload', `[${source}] 通过 Runtime.callFunctionOn 物理派发事件完成`);
+          }
+        } catch (callErr) {
+          log('warn', 'upload', `[${source}] Runtime.callFunctionOn 派发失败: ${(callErr as Error).message}`);
+        }
+
         // 🔑 触发 change 和 input 事件（让页面 JS/框架检测到文件变化）
         try {
           log('info', 'upload', `[${source}] 触发 change/input 事件…`);
@@ -544,11 +569,33 @@ export async function uploadViaCDP(
     //   - 视频发布：点击"上传视频 / 点击上传"按钮
     //   - 图文发布：优先点击"上传图文 / 上传图片 / 图片上传"按钮
     //   - 通用兜底：_upload-btn / upload-btn class 或"上传"文本
+    let hasInputAlready = false;
     try {
-      const isImage = contentType === 'image' || contentType === 'article';
-      log('info', 'upload', `[A] 点击上传按钮（contentType=${contentType || 'video'}，${isImage ? '图文模式' : '视频模式'}）…`);
-      const clickScript = `
-        (function () {
+      hasInputAlready = await win.webContents.executeJavaScript(`
+        (function() {
+          if (document.querySelector('input[type="file"]')) return true;
+          var iframes = document.querySelectorAll('iframe');
+          for (var i = 0; i < iframes.length; i++) {
+            try {
+              var idoc = iframes[i].contentDocument || (iframes[i].contentWindow && iframes[i].contentWindow.document);
+              if (idoc && idoc.querySelector('input[type="file"]')) return true;
+            } catch(e) {}
+          }
+          return false;
+        })()
+      `).catch(() => false);
+    } catch (e) {
+      // ignore
+    }
+
+    if (hasInputAlready) {
+      log('info', 'upload', '[A] 页面已存在现成的 file input 节点，跳过步骤 A 按钮点击以防止误触跳转');
+    } else {
+      try {
+        const isImage = contentType === 'image' || contentType === 'article';
+        log('info', 'upload', `[A] 点击上传按钮（contentType=${contentType || 'video'}，${isImage ? '图文模式' : '视频模式'}）…`);
+        const clickScript = `
+          (function () {
           var isImageMode = ${isImage ? 'true' : 'false'};
           var candidates = [];
           // 判断元素是否在 aria-hidden=true 的区域内（如 ant-tabs-tabpane 非活动 tab）
@@ -648,8 +695,9 @@ export async function uploadViaCDP(
       const clickVal = clickRes && clickRes.result && clickRes.result.value ? clickRes.result.value : null;
       log('info', 'upload', `[A] 点击结果: ${clickVal ? JSON.stringify(clickVal).slice(0, 300) : 'unknown'}`);
       await sleep(1500);
-    } catch (err) {
-      log('warn', 'upload', `[A] 点击上传按钮异常: ${(err as Error).message}`);
+      } catch (err) {
+        log('warn', 'upload', `[A] 点击上传按钮异常: ${(err as Error).message}`);
+      }
     }
 
     // 步骤 B：用多种 CDP 方式查找 input[type=file] 并注入文件

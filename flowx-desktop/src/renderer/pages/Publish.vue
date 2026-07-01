@@ -163,7 +163,12 @@ const titleMaxLength = computed(() => {
     if (isArticle) {
       limit = meta.articleLimits?.title
     } else {
-      limit = meta.contentLimits?.title
+      // 🔑 微信视频号特异性字数限制：视频短标题限制 16 字，图文限制 22 字
+      if (a.platform === 'wechat_channels' && contentType.value === 'video') {
+        limit = 16
+      } else {
+        limit = meta.contentLimits?.title
+      }
     }
     if (typeof limit === 'number') {
       min = Math.min(min, limit)
