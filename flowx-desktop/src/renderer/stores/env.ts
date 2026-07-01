@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { electronApi } from '../utils/electron';
-import type { ProxyConfig, BrowserEnvironment } from '../../types';
+import type { ProxyConfig, BrowserEnvironment, ProxyTestResult } from '../../types';
 
 export const useEnvStore = defineStore('env', {
   state: () => ({
@@ -71,6 +71,13 @@ export const useEnvStore = defineStore('env', {
       } finally {
         this.loading = false;
       }
+    },
+
+    /**
+     * 测试代理 IP 是否可用
+     */
+    async testProxy(id: string): Promise<ProxyTestResult> {
+      return electronApi.testProxy(id);
     },
 
     // ==================== 浏览器环境缓存操作 ====================

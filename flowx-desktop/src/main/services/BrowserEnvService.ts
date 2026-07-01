@@ -1,6 +1,7 @@
 import { getStore } from '../store/SecureStore';
 import { logger } from '../utils/logger';
-import type { ProxyConfig, BrowserEnvironment } from '../../types';
+import { session, net } from 'electron';
+import type { ProxyConfig, BrowserEnvironment, ProxyTestResult } from '../../types';
 
 const PROXIES_KEY = 'proxies';
 const ENVIRONMENTS_KEY = 'environments';
@@ -76,6 +77,143 @@ export class BrowserEnvService {
     }
     logger.info(`[BrowserEnv] 删除代理成功: id=${id} (解绑环境数=${envsChanged})`);
     return true;
+  }
+
+  /**
+   * 测试代理 IP 是否可用
+   * 通过创建临时 session 并使用代理发起 HTTP 请求来验证
+   * @param proxyId 代理配置 ID
+   * @param testUrl 测试 URL，默认使用 httpbin.org/ip
+   * @param timeoutMs 超时时间（毫秒），默认 10 秒
+   */
+  static async testProxy(
+    proxyId: string,
+    testUrl = 'https://httpbin.org/ip',
+    timeoutMs = 10000,
+  ): Promise<ProxyTestResult> {
+    const proxy = this.listProxies().find((p) => p.id === proxyId);
+    if (!proxy) {
+      return {
+        ok: false,
+        latency: -1,
+        targetUrl: testUrl,
+        error: '代理配置不存在',
+      };
+    }
+
+    const partition = `persist:proxy_test_${proxyId}_${Date.now()}`;
+    const sess = session.fromPartition(partition) as any;
+
+    try {
+      // 配置代理
+      const proxyRules = `${proxy.type}://${proxy.host}:${proxy.port}`;
+      await sess.setProxy({ proxyRules });
+
+      // 配置代理认证（如果需要）
+      if (proxy.username && proxy.password) {
+        sess.removeAllListeners('login');
+        sess.on('login', (event: any, _details: any, authInfo: any, callback: any) => {
+          if (authInfo.isProxy) {
+            event.preventDefault();
+            callback(proxy.username, proxy.password);
+          }
+        });
+      }
+
+      const startTime = Date.now();
+
+      // 使用 net 模块通过 session 发起请求
+      return await new Promise<ProxyTestResult>((resolve) => {
+        const req = net.request({
+          url: testUrl,
+          session: sess,
+          method: 'GET',
+        });
+
+        const timeoutTimer = setTimeout(() => {
+          req.abort();
+          resolve({
+            ok: false,
+            latency: -1,
+            targetUrl: testUrl,
+            error: `请求超时（${timeoutMs}ms）`,
+          });
+        }, timeoutMs);
+
+        req.on('response', (response: any) => {
+          const latency = Date.now() - startTime;
+          clearTimeout(timeoutTimer);
+
+          let body = '';
+          response.on('data', (chunk: Buffer) => {
+            body += chunk.toString('utf-8');
+          });
+
+          response.on('end', () => {
+            const statusCode = response.statusCode;
+            if (statusCode >= 200 && statusCode < 300) {
+              let outboundIp: string | undefined;
+              try {
+                const json = JSON.parse(body);
+                outboundIp = json.origin || json.ip;
+              } catch {
+                // 解析失败也不影响测试结果
+              }
+              logger.info(`[BrowserEnv] 代理测试成功: ${proxy.name} (${proxy.host}:${proxy.port}), 延迟=${latency}ms`);
+              resolve({
+                ok: true,
+                latency,
+                targetUrl: testUrl,
+                outboundIp,
+              });
+            } else {
+              resolve({
+                ok: false,
+                latency,
+                targetUrl: testUrl,
+                error: `HTTP 状态码: ${statusCode}`,
+              });
+            }
+          });
+        });
+
+        req.on('error', (err: Error) => {
+          clearTimeout(timeoutTimer);
+          const latency = Date.now() - startTime;
+          logger.warn(`[BrowserEnv] 代理测试失败: ${proxy.name} (${proxy.host}:${proxy.port}), 错误=${err.message}`);
+          resolve({
+            ok: false,
+            latency,
+            targetUrl: testUrl,
+            error: err.message || '网络请求失败',
+          });
+        });
+
+        req.on('abort', () => {
+          clearTimeout(timeoutTimer);
+        });
+
+        req.end();
+      });
+    } catch (err) {
+      logger.error(`[BrowserEnv] 代理测试异常: ${proxy.name}`, err);
+      return {
+        ok: false,
+        latency: -1,
+        targetUrl: testUrl,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    } finally {
+      // 清理临时 session 的缓存，释放资源
+      try {
+        sess.removeAllListeners('login');
+        // 异步清理缓存，不阻塞返回
+        sess.clearCache().catch(() => {});
+        sess.clearStorageData({ storages: ['cookies', 'localstorage'] }).catch(() => {});
+      } catch {
+        // 清理失败忽略
+      }
+    }
   }
 
   // ==================== 浏览器环境配置 CRUD ====================

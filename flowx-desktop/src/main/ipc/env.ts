@@ -1,6 +1,6 @@
 import { safeInvoke } from './index';
 import { BrowserEnvService } from '../services/BrowserEnvService';
-import type { ProxyConfig, BrowserEnvironment } from '../../types';
+import type { ProxyConfig, BrowserEnvironment, ProxyTestResult } from '../../types';
 
 export function registerEnvIpc(): void {
   // ==================== 代理 IP 配置 IPC 监听 ====================
@@ -19,6 +19,10 @@ export function registerEnvIpc(): void {
 
   safeInvoke('env:deleteProxy', (id: string) => {
     return BrowserEnvService.deleteProxy(id);
+  });
+
+  safeInvoke('env:testProxy', (id: string, testUrl?: string, timeoutMs?: number): Promise<ProxyTestResult> => {
+    return BrowserEnvService.testProxy(id, testUrl, timeoutMs);
   });
 
   // ==================== 浏览器环境配置 IPC 监听 ====================

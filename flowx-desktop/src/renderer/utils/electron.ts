@@ -18,6 +18,7 @@ import type {
   AccountCategory,
   ProxyConfig,
   BrowserEnvironment,
+  ProxyTestResult,
 } from '../../types';
 
 type StatusCb = (evt: unknown) => void;
@@ -182,6 +183,9 @@ export const electronApi = {
   },
   async deleteProxy(id: string): Promise<boolean> {
     return invokeElectron('env.deleteProxy', 'env:deleteProxy', id);
+  },
+  async testProxy(id: string, testUrl?: string, timeoutMs?: number): Promise<ProxyTestResult> {
+    return invokeElectron('env.testProxy', 'env:testProxy', id, testUrl, timeoutMs);
   },
   async listEnvironments(): Promise<BrowserEnvironment[]> {
     return invokeElectron('env.listEnvironments', 'env:listEnvironments');

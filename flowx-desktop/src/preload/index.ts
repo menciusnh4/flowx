@@ -17,6 +17,7 @@ import type {
   AccountCategory,
   ProxyConfig,
   BrowserEnvironment,
+  ProxyTestResult,
 } from '../types';
 
 // Preload 脚本：通过 contextBridge 暴露安全 API
@@ -148,6 +149,8 @@ contextBridge.exposeInMainWorld('electron', {
     createProxy: (data: Omit<ProxyConfig, 'id' | 'createdAt'>): Promise<ProxyConfig> => invoke('env:createProxy', data),
     updateProxy: (id: string, patch: Partial<Omit<ProxyConfig, 'id' | 'createdAt'>>): Promise<ProxyConfig | null> => invoke('env:updateProxy', id, patch),
     deleteProxy: (id: string): Promise<boolean> => invoke('env:deleteProxy', id),
+    testProxy: (id: string, testUrl?: string, timeoutMs?: number): Promise<ProxyTestResult> =>
+      invoke('env:testProxy', id, testUrl, timeoutMs),
 
     listEnvironments: (): Promise<BrowserEnvironment[]> => invoke('env:listEnvironments'),
     createEnvironment: (data: Omit<BrowserEnvironment, 'id' | 'createdAt'>): Promise<BrowserEnvironment> => invoke('env:createEnvironment', data),
@@ -222,6 +225,7 @@ declare global {
         createProxy: (data: Omit<ProxyConfig, 'id' | 'createdAt'>) => Promise<ProxyConfig>;
         updateProxy: (id: string, patch: Partial<Omit<ProxyConfig, 'id' | 'createdAt'>>) => Promise<ProxyConfig | null>;
         deleteProxy: (id: string) => Promise<boolean>;
+        testProxy: (id: string, testUrl?: string, timeoutMs?: number) => Promise<ProxyTestResult>;
 
         listEnvironments: () => Promise<BrowserEnvironment[]>;
         createEnvironment: (data: Omit<BrowserEnvironment, 'id' | 'createdAt'>) => Promise<BrowserEnvironment>;

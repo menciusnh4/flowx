@@ -24,10 +24,39 @@
             <span>{{ row.username || '—' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="认证密码" min-width="130">
+        <el-table-column label="状态" width="200">
           <template #default="{ row }">
-            <span v-if="row.password" style="font-family: monospace">******</span>
-            <span v-else>—</span>
+            <div class="status-cell">
+              <template v-if="testingIds.has(row.id)">
+                <el-icon class="loading-icon"><Loading /></el-icon>
+                <span class="status-text">测试中...</span>
+              </template>
+              <template v-else-if="testResults[row.id]">
+                <template v-if="testResults[row.id].ok">
+                  <el-tag type="success" size="small" effect="light">
+                    <el-icon><Check /></el-icon>
+                    可用
+                  </el-tag>
+                  <span class="latency-text">{{ testResults[row.id].latency }}ms</span>
+                </template>
+                <template v-else>
+                  <el-tooltip :content="testResults[row.id].error" placement="top">
+                    <el-tag type="danger" size="small" effect="light">
+                      <el-icon><Close /></el-icon>
+                      不可用
+                    </el-tag>
+                  </el-tooltip>
+                </template>
+                <template v-if="testResults[row.id].outboundIp">
+                  <el-tooltip :content="'出口IP: ' + testResults[row.id].outboundIp" placement="top">
+                    <span class="ip-text">{{ testResults[row.id].outboundIp }}</span>
+                  </el-tooltip>
+                </template>
+              </template>
+              <template v-else>
+                <el-tag type="info" size="small" effect="plain">未测试</el-tag>
+              </template>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="创建时间" width="160">
@@ -35,8 +64,17 @@
             {{ formatTime(row.createdAt) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
+            <el-button
+              size="small"
+              type="success"
+              link
+              :loading="testingIds.has(row.id)"
+              @click="handleTest(asProxy(row).id)"
+            >
+              测试
+            </el-button>
             <el-button size="small" type="primary" link @click="openEditDialog(asProxy(row))">编辑</el-button>
             <el-popconfirm title="删除该代理，会同时解除所有关联环境的代理配置，确认删除？" @confirm="handleDelete(asProxy(row).id)">
               <template #reference>
@@ -48,7 +86,7 @@
       </el-table>
 
       <div v-if="envStore.proxies.length === 0 && !envStore.loading" class="empty-hint">
-        暂无代理配置，点击右上角“添加代理 IP”创建。
+        暂无代理配置，点击右上角"添加代理 IP"创建。
       </div>
     </div>
 
@@ -88,9 +126,9 @@
 <script setup lang="ts">
 import { ref, onMounted, reactive } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Plus } from '@element-plus/icons-vue';
+import { Plus, Loading, Check, Close } from '@element-plus/icons-vue';
 import { useEnvStore } from '../stores/env';
-import type { ProxyConfig } from '../../types';
+import type { ProxyConfig, ProxyTestResult } from '../../types';
 
 const envStore = useEnvStore();
 const dialogVisible = ref(false);
@@ -98,6 +136,10 @@ const isEdit = ref(false);
 const editingId = ref('');
 const saving = ref(false);
 const formRef = ref<any>(null);
+
+// 测试相关状态
+const testingIds = ref<Set<string>>(new Set());
+const testResults = ref<Record<string, ProxyTestResult>>({});
 
 const form = reactive({
   name: '',
@@ -161,6 +203,8 @@ async function handleSave() {
 
     if (isEdit.value) {
       await envStore.updateProxy(editingId.value, payload);
+      // 编辑后清除旧的测试结果
+      delete testResults.value[editingId.value];
       ElMessage.success('代理 IP 修改成功');
     } else {
       await envStore.createProxy(payload);
@@ -178,12 +222,39 @@ async function handleDelete(id: string) {
   try {
     const ok = await envStore.deleteProxy(id);
     if (ok) {
+      // 删除测试结果缓存
+      delete testResults.value[id];
       ElMessage.success('代理 IP 已成功删除');
     } else {
       ElMessage.error('代理 IP 删除失败');
     }
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function handleTest(id: string) {
+  if (testingIds.value.has(id)) return;
+
+  testingIds.value.add(id);
+  try {
+    const result = await envStore.testProxy(id);
+    testResults.value[id] = result;
+    if (result.ok) {
+      ElMessage.success(`代理测试成功，延迟 ${result.latency}ms`);
+    } else {
+      ElMessage.error(`代理测试失败：${result.error}`);
+    }
+  } catch (err) {
+    testResults.value[id] = {
+      ok: false,
+      latency: -1,
+      targetUrl: '',
+      error: err instanceof Error ? err.message : String(err),
+    };
+    ElMessage.error(`测试异常：${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    testingIds.value.delete(id);
   }
 }
 
@@ -211,5 +282,43 @@ function formatTime(ts: number): string {
   color: #909399;
   font-size: 14px;
   padding: 40px 0;
+}
+.status-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.loading-icon {
+  animation: rotate 1s linear infinite;
+  color: #409eff;
+}
+.status-text {
+  font-size: 12px;
+  color: #909399;
+}
+.latency-text {
+  font-size: 12px;
+  color: #67c23a;
+  font-family: monospace;
+}
+.ip-text {
+  font-size: 11px;
+  color: #909399;
+  font-family: monospace;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: middle;
+}
+@keyframes rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

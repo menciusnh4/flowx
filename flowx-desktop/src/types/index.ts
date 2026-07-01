@@ -297,6 +297,19 @@ export interface ProxyConfig {
   createdAt: number;
 }
 
+/** 代理 IP 测试结果 */
+export interface ProxyTestResult {
+  ok: boolean;
+  /** 延迟（毫秒），失败时为 -1 */
+  latency: number;
+  /** 测试的目标 URL */
+  targetUrl: string;
+  /** 失败原因 */
+  error?: string;
+  /** 返回的 IP 地址（如果能获取到） */
+  outboundIp?: string;
+}
+
 /** 浏览器环境配置 */
 export interface BrowserEnvironment {
   id: string;
