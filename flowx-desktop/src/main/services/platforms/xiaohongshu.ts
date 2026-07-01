@@ -24,6 +24,10 @@ import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabili
 // 通用发布页 URL（视频/图文）
 const PUBLISH_URL = 'https://creator.xiaohongshu.com/publish/publish';
 
+// 图文发布专用 URL（直接打开图文 tab，避免 JS 切换 tab 导致的上传区域不匹配问题）
+const PUBLISH_IMAGE_URL =
+  'https://creator.xiaohongshu.com/publish/publish?source=official&from=menu&target=image';
+
 // 文章（长文）发布专用 URL
 const PUBLISH_ARTICLE_URL =
   'https://creator.xiaohongshu.com/publish/publish?source=official&from=menu&target=article';
@@ -630,10 +634,11 @@ async function runXhsPublish(
     const tracker = attachNavigationTracker(win, log);
     disposeTracker = () => tracker.dispose();
 
-    // 2) 加载发布页
+    // 2) 根据内容类型加载对应发布页
     onProgress(5, '加载发布页…');
-    log('info', 'load', `打开 ${PUBLISH_URL}`);
-    await win.loadURL(PUBLISH_URL).catch((err) => {
+    const targetUrl = contentType === 'image' ? PUBLISH_IMAGE_URL : PUBLISH_URL;
+    log('info', 'load', `打开 ${targetUrl} (contentType=${contentType})`);
+    await win.loadURL(targetUrl).catch((err) => {
       log('warn', 'load', `loadURL 异常: ${err.message}`);
     });
 
@@ -684,8 +689,9 @@ async function runXhsPublish(
       if (!win.isDestroyed()) {
         const currentUrl = win.webContents.getURL();
         if (currentUrl.indexOf('/publish/publish') === -1) {
+          const backUrl = contentType === 'image' ? PUBLISH_IMAGE_URL : PUBLISH_URL;
           log('info', 'login', `当前不在发布页 (${currentUrl})，重新跳转至发布页`);
-          await win.loadURL(PUBLISH_URL).catch(() => {});
+          await win.loadURL(backUrl).catch(() => {});
         }
       }
       await tracker.waitForStable(1500, 15000);
@@ -696,32 +702,78 @@ async function runXhsPublish(
 
     onProgress(25, '已登录，准备上传内容…');
 
-    // 5) 图文模式：尝试切换到"图文"tab
+    // 5) 图文模式：确保当前处于图文 tab，等待图文上传区域渲染
     if (contentType === 'image') {
-      log('info', 'tab', '切换到图文 tab…');
-      const tabSwitchScript =
-        '(function(){' +
-        'var targets = ["图文", "图片", "上传图文"];' +
-        'var found = null;' +
-        'try {' +
-        // ⚠️ 外层用 \' 转义单引号，CSS 选择器内部用双引号
-        '  var nodes = document.querySelectorAll(\'button, a, [role="tab"], [role="button"], div, span\');' +
-        '  for (var i = 0; i < nodes.length; i++) {' +
-        '    var txt = ((nodes[i].innerText || nodes[i].textContent || "").replace(/\\s+/g, "").trim());' +
-        '    for (var k = 0; k < targets.length; k++) {' +
-        '      if (txt === targets[k] || txt.indexOf(targets[k]) !== -1) { found = nodes[i]; break; }' +
-        '    }' +
-        '    if (found) break;' +
-        '  }' +
-        '} catch(e) {}' +
-        'if (!found) return { switched: false };' +
-        'try { found.click(); } catch(e) {}' +
-        'try { found.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); } catch(e) {}' +
-        'return { switched: true, text: (found.innerText || "").slice(0, 40) };' +
-        '})()';
-      const tabRes: any = await evalJS(win, tabSwitchScript, '切换图文 tab', log).catch(() => null);
-      log('info', 'tab', `tab 切换结果: ${JSON.stringify(tabRes)}`);
-      await sleep(1500);
+      log('info', 'tab', '确保处于图文发布 tab…');
+
+      // 检测是否已经在图文 tab（通过 URL 参数或页面内容判断）
+      const checkImageTabScript = `
+        (function(){
+          try {
+            // 方法1：检查 URL 是否有 target=image
+            if (window.location.href.indexOf('target=image') !== -1) return { isImageTab: true, reason: 'url_target_image' };
+            // 方法2：检查页面上是否有图文上传相关的元素或文本
+            var bodyText = (document.body.innerText || '').replace(/\\s+/g, '');
+            // 检查是否有"上传图文"且没有"上传视频"在显著位置
+            var hasUploadImageText = bodyText.indexOf('上传图文') !== -1 || bodyText.indexOf('上传图片') !== -1;
+            // 检查是否有图片格式的 file input
+            var imageInputs = document.querySelectorAll('input[type="file"][accept*="image"]');
+            if (imageInputs && imageInputs.length > 0) return { isImageTab: true, reason: 'image_input_found', count: imageInputs.length };
+            if (hasUploadImageText) return { isImageTab: true, reason: 'upload_image_text' };
+            return { isImageTab: false, bodyText: bodyText.slice(0, 200) };
+          } catch(e) { return { isImageTab: false, error: String(e) }; }
+        })()
+      `;
+
+      // 先检查当前是否已经在图文 tab
+      let tabCheck: any = await evalJS(win, checkImageTabScript, '检测图文 tab', log).catch(() => null);
+      log('info', 'tab', `初始 tab 检测: ${JSON.stringify(tabCheck)}`);
+
+      // 如果不在图文 tab，尝试点击切换
+      if (!tabCheck || !tabCheck.isImageTab) {
+        log('info', 'tab', '当前不在图文 tab，尝试切换…');
+        const tabSwitchScript =
+          '(function(){' +
+          'var targets = ["图文", "图片", "上传图文"];' +
+          'var found = null;' +
+          'try {' +
+          '  var nodes = document.querySelectorAll(\'button, a, [role="tab"], [role="button"], div, span\');' +
+          '  for (var i = 0; i < nodes.length; i++) {' +
+          '    var txt = ((nodes[i].innerText || nodes[i].textContent || "").replace(/\\s+/g, "").trim());' +
+          '    for (var k = 0; k < targets.length; k++) {' +
+          '      if (txt === targets[k] || txt.indexOf(targets[k]) !== -1) { found = nodes[i]; break; }' +
+          '    }' +
+          '    if (found) break;' +
+          '  }' +
+          '} catch(e) {}' +
+          'if (!found) return { switched: false };' +
+          'try { found.click(); } catch(e) {}' +
+          'try { found.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); } catch(e) {}' +
+          'return { switched: true, text: (found.innerText || "").slice(0, 40) };' +
+          '})()';
+        const tabRes: any = await evalJS(win, tabSwitchScript, '切换图文 tab', log).catch(() => null);
+        log('info', 'tab', `tab 切换结果: ${JSON.stringify(tabRes)}`);
+      }
+
+      // 等待图文上传区域渲染（最多等待 8 秒，轮询检测 image 类型的 file input）
+      log('info', 'tab', '等待图文上传区域渲染…');
+      const waitStart = Date.now();
+      const waitTimeout = 8000;
+      let imageInputReady = false;
+      while (Date.now() - waitStart < waitTimeout) {
+        await sleep(1000);
+        const check: any = await win.webContents.executeJavaScript(checkImageTabScript).catch(() => null);
+        if (check && check.isImageTab) {
+          imageInputReady = true;
+          log('info', 'tab', `图文上传区域已就绪 (${check.reason})`);
+          break;
+        }
+      }
+      if (!imageInputReady) {
+        log('warn', 'tab', '等待图文上传区域超时，继续尝试上传…');
+      }
+      // 额外等待一下确保 DOM 稳定
+      await sleep(1000);
     }
 
     // 6) 通过 CDP 注入文件 → 上传
