@@ -705,7 +705,139 @@ async function runKuaishouPublish(
     }
 
     onProgress(25, `开始上传 ${mediaFiles.length} 个${isImage ? '图片' : '视频'}…`);
-    const uploadOk = await uploadViaCDP(win, mediaFiles, log, contentType);
+
+    // 🔑 快手图文上传：优先使用 FileChooser 拦截 + 点击上传按钮的方式
+    // 问题背景：快手使用 Element UI 的 el-upload 组件，
+    //          直接用 DOM.setFileInputFiles 设置 files 不会触发组件内部的上传逻辑，
+    //          导致文件已注入但页面无反应。
+    // 解决方案：模拟用户真实操作流程 — 点击上传按钮 + FileChooser 拦截选文件，
+    //          组件会认为是用户手动选择的，正常触发上传。
+    // 视频发布继续使用通用 uploadViaCDP。
+    let uploadOk = false;
+    if (isImage && win) {
+      const browserWin = win; // 保存引用，避免 TypeScript null 检查问题
+      log('info', 'upload', '[快手图文] 使用 FileChooser 拦截方式上传图片…');
+      try {
+        await browserWin.webContents.debugger.attach('1.3');
+      } catch { /* 可能已 attached */ }
+
+      try {
+        // 步骤 1：启用 FileChooser 拦截
+        // 注意：Page.setInterceptFileChooserDialog 的正确参数是 { enabled: true }
+        // 拦截后，当页面触发文件选择时会发出 Page.fileChooserOpened 事件
+        await browserWin.webContents.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true });
+        log('info', 'upload', '[快手图文] FileChooser 拦截已启用');
+
+        // 步骤 2：监听 fileChooserOpened 事件，收到后用 handleFileChooser 填入文件
+        let fileChooserHandled = false;
+        const fileChooserPromise = new Promise<boolean>((resolve) => {
+          const handler = (_event: any, method: string, params: any) => {
+            if (method === 'Page.fileChooserOpened') {
+              log('info', 'upload', `[快手图文] 收到 fileChooserOpened 事件 (mode=${params?.mode})`);
+              // 用 handleFileChooser 填入文件路径
+              browserWin.webContents.debugger.sendCommand('Page.handleFileChooser', {
+                action: 'accept',
+                files: mediaFiles,
+              }).then(() => {
+                log('info', 'upload', '[快手图文] handleFileChooser 调用成功');
+                fileChooserHandled = true;
+                browserWin.webContents.debugger.off('message', handler);
+                resolve(true);
+              }).catch((err: Error) => {
+                log('warn', 'upload', `[快手图文] handleFileChooser 失败: ${err.message}`);
+                browserWin.webContents.debugger.off('message', handler);
+                resolve(false);
+              });
+            }
+          };
+          browserWin.webContents.debugger.on('message', handler);
+          // 超时保护：10 秒内没收到 fileChooserOpened 则认为失败
+          setTimeout(() => {
+            if (!fileChooserHandled) {
+              try { browserWin.webContents.debugger.off('message', handler); } catch { /* ignore */ }
+              resolve(false);
+            }
+          }, 10000);
+        });
+
+        // 步骤 3：点击图文 tab 内的"上传图片"按钮
+        const clickScript = `
+          (function(){
+            try {
+              // 优先找当前激活 tab 内的上传按钮
+              var activeTab = document.querySelector('.ant-tabs-tabpane-active, [aria-hidden="false"]');
+              var scope = activeTab || document;
+              var btns = scope.querySelectorAll('button, [role="button"]');
+              for (var i = 0; i < btns.length; i++) {
+                var txt = (btns[i].innerText || btns[i].textContent || '').replace(/\\s+/g, '').trim();
+                if (txt === '上传图片' || txt.indexOf('上传图片') !== -1 || txt.indexOf('上传图文') !== -1) {
+                  btns[i].click();
+                  return { clicked: true, text: txt, method: 'text-match' };
+                }
+              }
+              // 兜底：找 class 含 upload-btn 的按钮
+              var classBtns = scope.querySelectorAll('[class*="upload-btn"], [class*="_upload-btn"]');
+              if (classBtns && classBtns.length > 0) {
+                classBtns[0].click();
+                return { clicked: true, method: 'class-match', className: classBtns[0].className.slice(0, 50) };
+              }
+              // 再兜底：找包含"上传"和"图片"文本的元素点击
+              var allElems = scope.querySelectorAll('div, span, p, a');
+              for (var j = 0; j < allElems.length; j++) {
+                var t = (allElems[j].innerText || allElems[j].textContent || '').replace(/\\s+/g, '').trim();
+                if ((t.indexOf('上传') !== -1 && t.indexOf('图片') !== -1) || t === '上传图片') {
+                  allElems[j].click();
+                  return { clicked: true, method: 'text-fallback', text: t };
+                }
+              }
+              return { clicked: false, reason: 'no-button-found' };
+            } catch(e) { return { clicked: false, error: String(e) }; }
+          })()
+        `;
+        const clickRes: any = await browserWin.webContents.debugger.sendCommand('Runtime.evaluate', {
+          expression: clickScript,
+          returnByValue: true,
+        }).catch(() => null);
+        const cv = clickRes && clickRes.result && clickRes.result.value ? clickRes.result.value : null;
+        log('info', 'upload', `[快手图文] 点击上传按钮结果: ${cv ? JSON.stringify(cv).slice(0, 200) : 'unknown'}`);
+
+        if (cv && cv.clicked) {
+          // 等待 FileChooser 被处理
+          const chooserResult = await fileChooserPromise;
+          // 关闭拦截
+          try {
+            await browserWin.webContents.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => {});
+          } catch { /* ignore */ }
+
+          if (chooserResult) {
+            log('info', 'upload', '[快手图文] FileChooser 处理成功，等待上传…');
+            // 给一点时间让上传开始
+            await sleep(2000);
+            uploadOk = true;
+          } else {
+            log('warn', 'upload', '[快手图文] FileChooser 处理失败或超时，回退到 CDP 注入方式');
+          }
+        } else {
+          // 没点到按钮，关闭拦截
+          try {
+            await browserWin.webContents.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => {});
+          } catch { /* ignore */ }
+          log('warn', 'upload', '[快手图文] 未找到上传按钮，回退到 CDP 注入方式');
+        }
+      } catch (err) {
+        log('warn', 'upload', `[快手图文] FileChooser 方式异常: ${(err as Error).message}，回退到 CDP 注入方式`);
+        // 确保拦截已关闭
+        try {
+          await browserWin.webContents.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => {});
+        } catch { /* ignore */ }
+      }
+    }
+
+    // 如果 FileChooser 方式失败或不是图文模式，使用通用的 CDP 注入方式
+    if (!uploadOk) {
+      uploadOk = await uploadViaCDP(win, mediaFiles, log, contentType);
+    }
+
     if (!uploadOk) {
       return makeFailedResult(accountId, 'kuaishou', '素材上传失败（CDP 注入未返回成功）', startedAt);
     }
