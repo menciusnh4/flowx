@@ -261,7 +261,18 @@ function buildWechatFillScript(title: string, content: string): string {
             if (!titleEl.value) titleEl.value = ${JSON.stringify(title)};
             titleEl.dispatchEvent(new Event('input', { bubbles: true }));
             titleEl.dispatchEvent(new Event('change', { bubbles: true }));
+            // 🔑 微信视频号：触发鼠标移出/失焦事件，确保表单校验生效
+            // 有些组件监听 mouseout/mouseleave/focusout 而非 blur
+            titleEl.dispatchEvent(new Event('blur', { bubbles: true }));
+            titleEl.dispatchEvent(new Event('focusout', { bubbles: true }));
+            titleEl.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+            titleEl.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
             titleEl.blur();
+            // 模拟鼠标移到 body 上（彻底失焦）
+            try {
+              document.body.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+              document.body.click();
+            } catch(e) {}
             r.hasTitle = true;
           }
 
@@ -283,6 +294,11 @@ function buildWechatFillScript(title: string, content: string): string {
             }
             descEl.dispatchEvent(new Event('input', { bubbles: true }));
             descEl.dispatchEvent(new Event('change', { bubbles: true }));
+            // 🔑 微信视频号：描述框也触发失焦/鼠标移出事件
+            descEl.dispatchEvent(new Event('blur', { bubbles: true }));
+            descEl.dispatchEvent(new Event('focusout', { bubbles: true }));
+            descEl.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+            descEl.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
             descEl.blur();
             r.hasDesc = true;
           }
