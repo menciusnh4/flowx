@@ -6,6 +6,7 @@ import { BrowserEnvService } from './BrowserEnvService';
 import { PLATFORMS } from './PlatformRegistry';
 import { getPlatform, getAllPlatforms, applyDouyinAntiCrash } from './platforms';
 import { getAppIcon } from '../windows/MainWindow';
+import { getOrCreateCreatorWindow } from '../windows/CreatorTabWindow';
 import type {
   AccountCredential,
   AccountInfo,
@@ -1004,6 +1005,7 @@ export class AccountService {
    *  - 使用与授权时相同的 partition: persist:account_<id>
    *  - 先注入 cookies，再跳转到 homeUrl
    *  - 返回 { ok, url, injected, skipped, failed, error? } 便于调试
+   *  - 窗口支持多标签页浏览，点击链接在新 tab 中打开
    */
   static async openCreatorPlatform(
     accountId: string,
@@ -1021,44 +1023,13 @@ export class AccountService {
     // 1. 注入 cookies 到该账号的 partition
     const { ok, fail, skipped } = await injectAccountCookies(accountId, homeUrl);
 
-    // 2. 打开 BrowserWindow，使用同一 partition（这样 cookies + localStorage + session 都共享）
-    const partition = `persist:account_${accountId}`;
-    const sess = session.fromPartition(partition);
-    await BrowserEnvService.applyEnvironment(sess, cred.envId);
-
-    const win = new BrowserWindow({
-      width: 1360,
-      height: 880,
-      minWidth: 900,
-      minHeight: 600,
-      title: `创作中心 - ${cred.nickname || cred.platform}`,
-      autoHideMenuBar: true,
-      webPreferences: {
-        partition,
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        spellcheck: false,
-        // ✅ 给渲染进程额外传参数（配合全局 --use-gl=swiftshader 等，双重保险）
-        //    关键：禁用视频解码管道和 GPU 功能，避免视频预览触发 STATUS_ACCESS_VIOLATION
-        additionalArguments: [
-          '--disable-webgl',
-          '--disable-webgl2',
-          '--disable-3d-apis',
-          '--disable-gpu-compositing',
-          '--disable-accelerated-video-decode',
-          '--disable-accelerated-video-encode',
-          '--disable-accelerated-mjpeg-decode',
-          '--disable-accelerated-vpx-decode',
-          '--disable-features=HardwareVideoDecode,HardwareVideoEncoder,VaapiVideoDecoder,VaapiVideoEncoder,MediaFoundationVideoCapture,HardwareProtectedVideoDecode',
-          '--max-active-webgl-contexts=0',
-        ],
-      },
-    });
+    // 2. 打开带 tab 栏的创作中心浏览器窗口
+    const winTitle = `创作中心 - ${cred.nickname || cred.platform}`;
+    const creatorWin = getOrCreateCreatorWindow(accountId, homeUrl, winTitle, cred.envId || undefined);
 
     // ✅ 抖音专属：给创作中心窗口加上反崩溃保护
-    //    抖音视频上传后会触发 ByteNN WASM + WebGL GPU stall 崩溃（GPU stall due to ReadPixels）
     if (cred.platform === 'douyin') {
+      const win = creatorWin.getWindow();
       const creatorLog = (level: 'info' | 'warn' | 'error', stage: string, msg: string, data?: Record<string, unknown>) => {
         const payload = data ? ` | ${JSON.stringify(data).slice(0, 200)}` : '';
         if (level === 'error' || level === 'warn') {
@@ -1068,21 +1039,6 @@ export class AccountService {
         }
       };
       applyDouyinAntiCrash(win, accountId, creatorLog as any);
-    }
-
-    // 3. 加载创作中心首页
-    try {
-      await win.loadURL(homeUrl);
-    } catch (e) {
-      logger.error(`[Account] openCreator loadURL failed: ${(e as Error).message}`);
-      return {
-        ok: false,
-        url: homeUrl,
-        injected: ok,
-        skipped,
-        failed: fail + 1,
-        error: (e as Error).message,
-      };
     }
 
     logger.info(

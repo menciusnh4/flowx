@@ -138,6 +138,34 @@ contextBridge.exposeInMainWorld('electron', {
     closeWindow: (): Promise<boolean> => invoke('system:closeWindow'),
   },
 
+  // ========== 创作中心 Tab 栏（仅供创作中心窗口内部使用）==========
+  creatorTab: {
+    activateTab: (tabId: string): Promise<void> =>
+      invoke('creator-tab:activate', tabId),
+    closeTab: (tabId: string): Promise<void> =>
+      invoke('creator-tab:close', tabId),
+    newTab: (): Promise<void> =>
+      invoke('creator-tab:new'),
+    goBack: (): Promise<void> =>
+      invoke('creator-tab:back'),
+    goForward: (): Promise<void> =>
+      invoke('creator-tab:forward'),
+    reload: (): Promise<void> =>
+      invoke('creator-tab:reload'),
+    goHome: (): Promise<void> =>
+      invoke('creator-tab:home'),
+    onTabsUpdate: (cb: (data: { tabs: Array<{ id: string; title: string; url: string; isLoading: boolean }>; activeId: string }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { tabs: Array<{ id: string; title: string; url: string; isLoading: boolean }>; activeId: string }) => cb(payload);
+      ipcRenderer.on('creator-tabs:update', handler);
+      return () => ipcRenderer.removeListener('creator-tabs:update', handler);
+    },
+    onUrlUpdate: (cb: (data: { tabId: string; url: string; title: string }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { tabId: string; url: string; title: string }) => cb(payload);
+      ipcRenderer.on('creator-tabs:url-update', handler);
+      return () => ipcRenderer.removeListener('creator-tabs:url-update', handler);
+    },
+  },
+
   // ========== 更新 ==========
   update: {
     check: (): Promise<UpdateInfo> => invoke('update:check'),
