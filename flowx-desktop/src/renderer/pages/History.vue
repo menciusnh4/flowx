@@ -78,7 +78,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" link @click="showDetail(row)">
               <el-icon><View /></el-icon>&nbsp;详情
@@ -101,6 +101,15 @@
               @click="retryTask(row)"
             >
               <el-icon><RefreshRight /></el-icon>&nbsp;重试
+            </el-button>
+            <el-button
+              v-if="hasFailedItems(row)"
+              size="small"
+              type="success"
+              link
+              @click="openEditDialog(row)"
+            >
+              <el-icon><Edit /></el-icon>&nbsp;编辑重发
             </el-button>
             <el-popconfirm
               title="确定删除此历史记录？"
@@ -259,6 +268,13 @@
           <el-button @click="detailVisible = false">关闭</el-button>
           <el-button
             v-if="detailData?.task && hasFailedItems(detailData.task)"
+            type="success"
+            @click="openEditDialog(detailData.task)"
+          >
+            <el-icon><Edit /></el-icon>&nbsp;编辑重发
+          </el-button>
+          <el-button
+            v-if="detailData?.task && hasFailedItems(detailData.task)"
             type="warning"
             :loading="retryingId === detailData.task.id"
             @click="retryTask(detailData.task)"
@@ -268,17 +284,110 @@
         </el-space>
       </template>
     </el-dialog>
+
+    <!-- 编辑重发弹窗 -->
+    <el-dialog
+      v-model="editDialogVisible"
+      title="编辑后重新发布"
+      width="560px"
+      destroy-on-close
+    >
+      <div v-if="editTask" class="edit-form">
+        <el-alert
+          type="info"
+          :closable="false"
+          style="margin-bottom: 16px;"
+        >
+          <template #title>
+            将对以下 {{ failedAccounts.length }} 个失败账号重新发布：{{ failedAccountNames }}
+          </template>
+        </el-alert>
+
+        <el-form label-width="80px" label-position="right">
+          <el-form-item label="内容类型">
+            <el-tag :type="contentTypeTagType(editTask.request?.contentType)">
+              {{ contentTypeLabel(editTask.request?.contentType) }}
+            </el-tag>
+            <span style="margin-left: 12px; color: #909399; font-size: 12px;">（不可修改）</span>
+          </el-form-item>
+
+          <el-form-item label="标题">
+            <el-input
+              v-model="editForm.title"
+              placeholder="请输入标题"
+              maxlength="100"
+              show-word-limit
+            />
+          </el-form-item>
+
+          <el-form-item v-if="editForm.contentType !== 'article'" label="素材">
+            <div class="edit-file-list">
+              <div v-for="(f, idx) in editForm.mediaFiles" :key="idx" class="edit-file-item">
+                <span class="file-name">{{ f }}</span>
+                <el-button size="small" type="danger" link @click="removeEditMediaFile(f)">删除</el-button>
+              </div>
+            </div>
+            <el-button size="small" @click="addEditMediaFiles" style="margin-top: 8px;">
+              <el-icon><Plus /></el-icon>&nbsp;添加文件
+            </el-button>
+          </el-form-item>
+
+          <el-form-item v-if="editForm.contentType === 'article'" label="封面图">
+            <div class="edit-file-list">
+              <div v-for="(f, idx) in editForm.mediaFiles" :key="idx" class="edit-file-item">
+                <span class="file-name">{{ idx === 0 ? '📌 封面：' : '' }}{{ f }}</span>
+                <el-button size="small" type="danger" link @click="removeEditMediaFile(f)">删除</el-button>
+              </div>
+            </div>
+            <el-button size="small" @click="addEditMediaFiles" style="margin-top: 8px;">
+              <el-icon><Plus /></el-icon>&nbsp;添加图片
+            </el-button>
+          </el-form-item>
+
+          <el-form-item label="描述">
+            <el-input
+              v-model="editForm.content"
+              type="textarea"
+              :rows="editForm.contentType === 'article' ? 8 : 4"
+              :placeholder="editForm.contentType === 'article'
+                ? '请输入文章正文'
+                : editForm.contentType === 'image'
+                  ? '可选：为图文添加描述文案'
+                  : '可选：为视频添加描述文案'"
+              maxlength="5000"
+              show-word-limit
+            />
+          </el-form-item>
+
+          <el-form-item label="话题">
+            <el-input
+              v-model="editForm.tagsRaw"
+              placeholder="多个话题用空格或逗号分隔，例如：美食探店 上海生活"
+            />
+          </el-form-item>
+        </el-form>
+      </div>
+
+      <template #footer>
+        <el-space>
+          <el-button @click="editDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="editSubmitting" @click="submitEditAndPublish">
+            <el-icon><Promotion /></el-icon>&nbsp;发布
+          </el-button>
+        </el-space>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, computed } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { View, RefreshRight, Delete, Refresh, CircleClose } from '@element-plus/icons-vue';
+import { View, RefreshRight, Delete, Refresh, CircleClose, Edit, Plus, Promotion } from '@element-plus/icons-vue';
 import { usePublishStore } from '../stores/publish';
 import { useAccountStore } from '../stores/account';
 import { electronApi } from '../utils/electron';
-import type { PublishTask, PlatformType, PublishStatus, PublishLogEntry, PublishItemProgress } from '../../types';
+import type { PublishTask, PlatformType, PublishStatus, PublishLogEntry, PublishItemProgress, PublishRequest, ContentType } from '../../types';
 
 const publishStore = usePublishStore();
 const accountStore = useAccountStore();
@@ -286,6 +395,114 @@ const accountStore = useAccountStore();
 const detailVisible = ref(false);
 const detailData = ref<{ task: PublishTask | null; logs: PublishLogEntry[] } | null>(null);
 const retryingId = ref<string | null>(null);
+
+// ========== 编辑重发相关 ==========
+const editDialogVisible = ref(false);
+const editTask = ref<PublishTask | null>(null);
+const editSubmitting = ref(false);
+const editForm = ref({
+  title: '',
+  content: '',
+  tagsRaw: '',
+  mediaFiles: [] as string[],
+  contentType: 'video' as ContentType,
+});
+
+const failedAccounts = computed(() => {
+  if (!editTask.value) return [];
+  return editTask.value.items.filter(
+    (i) => i.status === 'failed' || i.status === 'cancelled'
+  );
+});
+
+const failedAccountNames = computed(() => {
+  return failedAccounts.value
+    .map((i) => nicknameOf(i.accountId))
+    .join('、');
+});
+
+function openEditDialog(task: any) {
+  editTask.value = task as PublishTask;
+  const req = task.request;
+  editForm.value = {
+    title: req?.title || '',
+    content: req?.content || '',
+    tagsRaw: (req?.tags || []).join(' '),
+    mediaFiles: [...(req?.mediaFiles || [])],
+    contentType: req?.contentType || 'video',
+  };
+  editDialogVisible.value = true;
+}
+
+async function addEditMediaFiles() {
+  try {
+    const isArticle = editForm.value.contentType === 'article';
+    const filters = isArticle
+      ? [{ name: '图片', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'] }]
+      : undefined;
+    const r = await electronApi.openFileDialog({ mode: 'files', filters });
+    if (r && !r.canceled && r.filePaths && r.filePaths.length > 0) {
+      editForm.value.mediaFiles = [...editForm.value.mediaFiles, ...r.filePaths];
+      ElMessage.success(`已添加 ${r.filePaths.length} 个文件`);
+    }
+  } catch (e) {
+    ElMessage.error('选择文件失败');
+  }
+}
+
+function removeEditMediaFile(path: string) {
+  editForm.value.mediaFiles = editForm.value.mediaFiles.filter((x) => x !== path);
+}
+
+async function submitEditAndPublish() {
+  if (!editTask.value) return;
+
+  if (!editForm.value.title.trim()) {
+    ElMessage.warning('请输入标题');
+    return;
+  }
+
+  const failedAccountIds = failedAccounts.value.map((i) => i.accountId);
+  if (failedAccountIds.length === 0) {
+    ElMessage.warning('没有需要重发的失败账号');
+    return;
+  }
+
+  if (editForm.value.contentType !== 'article' && editForm.value.mediaFiles.length === 0) {
+    ElMessage.warning('请上传素材文件');
+    return;
+  }
+
+  const tags = editForm.value.tagsRaw
+    .split(/[,，\s]+/)
+    .map((t) => t.trim().replace(/^#/, ''))
+    .filter((t) => t.length > 0);
+
+  const req: PublishRequest = {
+    accountIds: failedAccountIds,
+    title: editForm.value.title.trim(),
+    content: editForm.value.content,
+    mediaFiles: [...editForm.value.mediaFiles],
+    contentType: editForm.value.contentType,
+    tags: tags.length > 0 ? tags : undefined,
+    remark: editTask.value.request?.remark,
+    coverImage: editTask.value.request?.coverImage,
+    category: editTask.value.request?.category,
+  };
+
+  editSubmitting.value = true;
+  try {
+    const newTaskId = await electronApi.submitPublish(req);
+    ElMessage.success(`已创建发布任务，任务ID: ${newTaskId}`);
+    editDialogVisible.value = false;
+    detailVisible.value = false;
+    await refresh();
+  } catch (err) {
+    ElMessage.error('发布失败: ' + (err as Error).message);
+  } finally {
+    editSubmitting.value = false;
+  }
+}
 
 async function refresh() {
   await Promise.all([
@@ -571,5 +788,38 @@ onMounted(async () => {
 
 .log-error .log-msg {
   color: #ef9a9a;
+}
+
+/* 编辑重发表单样式 */
+.edit-form {
+  padding: 0 8px;
+}
+
+.edit-file-list {
+  max-height: 160px;
+  overflow-y: auto;
+  background: #fafafa;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.edit-file-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.edit-file-item:last-child {
+  border-bottom: none;
+}
+
+.edit-file-item .file-name {
+  font-size: 12px;
+  color: #606266;
+  word-break: break-all;
+  flex: 1;
+  margin-right: 8px;
 }
 </style>
