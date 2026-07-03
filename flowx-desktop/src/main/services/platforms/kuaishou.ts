@@ -166,7 +166,7 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
         if (!txt || txt.length > 40) return;
         if (debug.samples.length < 10) debug.samples.push(txt.replace(/\\s+/g, ' '));
         var lab = txt.match(/(粉丝|关注|获赞|点赞)/);
-        var num = txt.match(/(\\d+(?:\\.\\d+)?[万wWkK千]?)/);
+        var num = txt.match(/(\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?[万wWkK千]?)/);
         if (!lab || !num) return;
         var nv = parseCount(num[1]);
         if (nv === null || nv < 0) return;

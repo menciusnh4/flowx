@@ -43,9 +43,12 @@
         stripe
         style="margin-top: 12px"
       >
-        <el-table-column label="平台" width="90">
+        <el-table-column label="平台" width="110">
           <template #default="{ row }">
-            <span>{{ platformIcon(row.platform) }} {{ platformName(row.platform) }}</span>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <img v-if="getPlatformIcon(row.platform)" :src="getPlatformIcon(row.platform)" style="width: 18px; height: 18px; flex-shrink: 0;" />
+              <span style="font-size: 13px;">{{ platformName(row.platform) }}</span>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="账号" min-width="200">
@@ -110,33 +113,39 @@
             <el-tag v-else type="info" size="small">未激活</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="授权时间" width="150">
+        <el-table-column label="授权/检测时间" width="170">
           <template #default="{ row }">
-            {{ fmt(row.authorizedAt) }}
+            <div style="display: flex; flex-direction: column; gap: 2px; font-size: 12px; line-height: 1.6;">
+              <div>
+                <span style="color: #909399;">授权：</span>
+                <span style="color: #303133;">{{ fmt(row.authorizedAt) }}</span>
+              </div>
+              <div>
+                <span style="color: #909399;">检测：</span>
+                <span v-if="row.lastChecked" style="color: #606266;">{{ fmt(row.lastChecked) }}</span>
+                <span v-else style="color: #c0c4cc;">—</span>
+              </div>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="最近检测" width="140">
-          <template #default="{ row }">
-            <span v-if="row.lastChecked" style="font-size:12px; color:#606266">
-              {{ fmt(row.lastChecked) }}
-            </span>
-            <span v-else style="font-size:12px; color:#c0c4cc">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="210" fixed="right">
+        <el-table-column label="操作" width="230" fixed="right">
           <template #default="{ row }">
             <div style="display: flex; flex-direction: column; gap: 6px;">
               <div style="display: flex; gap: 6px;">
-                <el-button size="small" type="success" style="width: 105px; margin: 0;" @click="openCreator(asAccount(row))" :loading="openingId === asAccount(row).id">
-                  <el-icon><Link /></el-icon>&nbsp;创作中心
+                <el-button size="small" type="success" style="width: 108px; margin: 0; justify-content: center;" @click="openCreator(asAccount(row))" :loading="openingId === asAccount(row).id">
+                  <el-icon><Link /></el-icon>创作中心
                 </el-button>
-                <el-button size="small" type="primary" style="width: 75px; margin: 0;" @click="editRemark(asAccount(row))">
-                  编辑
+                <el-button size="small" type="primary" style="width: 108px; margin: 0; justify-content: center;" @click="editRemark(asAccount(row))">
+                  <el-icon><Setting /></el-icon>编辑
                 </el-button>
               </div>
               <div style="display: flex; gap: 6px;">
-                <el-button size="small" type="warning" style="width: 105px; margin: 0;" @click="refreshToken(asAccount(row))" :loading="refreshingId === asAccount(row).id" title="打开平台页面，刷新账号信息/粉丝数/关注数/获赞数">刷新</el-button>
-                <el-button size="small" type="danger" style="width: 75px; margin: 0;" @click="remove(asAccount(row))">删除</el-button>
+                <el-button size="small" type="warning" style="width: 108px; margin: 0; justify-content: center;" @click="refreshToken(asAccount(row))" :loading="refreshingId === asAccount(row).id" title="打开平台页面，刷新账号信息/粉丝数/关注数/获赞数">
+                  <el-icon><Refresh /></el-icon>刷新
+                </el-button>
+                <el-button size="small" type="danger" style="width: 108px; margin: 0; justify-content: center;" @click="remove(asAccount(row))">
+                  <el-icon><Delete /></el-icon>删除
+                </el-button>
               </div>
             </div>
           </template>
@@ -175,14 +184,18 @@
 
     <!-- 选择平台授权对话框 -->
     <el-dialog v-model="authVisible" title="选择平台授权" width="460px">
-      <el-radio-group v-model="authPlatform" style="width:100%">
+      <el-radio-group v-model="authPlatform" class="platform-radio-group">
         <el-space direction="vertical" style="width:100%">
-          <el-radio v-for="p in accountStore.platforms" :key="p.key" :value="p.key" style="width:100%">
-            <span style="font-size:15px; margin-right:4px">{{ p.icon }}</span>
-            {{ p.name }}
-            <span style="color:#909399; font-size:12px; margin-left:8px">
-              已授权 {{ accountStore.byPlatform(p.key).length }} 个账号
-            </span>
+          <el-radio v-for="p in accountStore.platforms" :key="p.key" :value="p.key" class="platform-radio">
+            <div class="platform-option">
+              <div class="platform-icon-wrap">
+                <img v-if="getPlatformIcon(p.key)" :src="getPlatformIcon(p.key)" class="platform-icon" />
+              </div>
+              <span class="platform-name">{{ p.name }}</span>
+              <span class="platform-count">
+                已授权 {{ accountStore.byPlatform(p.key).length }} 个账号
+              </span>
+            </div>
           </el-radio>
         </el-space>
       </el-radio-group>
@@ -259,11 +272,35 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref, computed } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Refresh, Link, Monitor, Setting, Folder } from '@element-plus/icons-vue';
+import { Plus, Refresh, Link, Monitor, Setting, Folder, Delete } from '@element-plus/icons-vue';
 import { useAccountStore } from '../stores/account';
 import { useEnvStore } from '../stores/env';
 import { electronApi } from '../utils/electron';
 import type { AccountInfo, AccountCategory } from '../../types';
+
+// 平台图标（SVG/PNG，通过 Vite import 引入
+import iconXiaohongshu from '../assets/xiaohongshu.svg';
+import iconDouyin from '../assets/douyin.svg';
+import iconKuaishou from '../assets/kuaishou.svg';
+import iconBilibili from '../assets/bilibili.svg';
+import iconWechatChannels from '../assets/wechat_channels.svg';
+import iconWeibo from '../assets/weibo.png';
+import iconZhihu from '../assets/zhihu.png';
+
+const PLATFORM_ICONS: Record<string, string> = {
+  xiaohongshu: iconXiaohongshu,
+  douyin: iconDouyin,
+  kuaishou: iconKuaishou,
+  bilibili: iconBilibili,
+  wechat_channels: iconWechatChannels,
+  weibo: iconWeibo,
+  zhihu: iconZhihu,
+};
+
+/** 获取平台图标 URL，找不到则返回空字符串 */
+function getPlatformIcon(p: string): string {
+  return PLATFORM_ICONS[p] || '';
+}
 
 const accountStore = useAccountStore();
 const envStore = useEnvStore();
@@ -583,4 +620,51 @@ onMounted(async () => {
 .panel { background: #fff; border-radius: 12px; padding: 20px; }
 .section-title { font-size: 16px; font-weight: 600; color: #303133; }
 .empty-hint { padding: 60px 16px; text-align: center; color: #909399; font-size: 14px; }
+
+/* 授权对话框 - 平台选项统一样式 */
+.platform-radio-group {
+  width: 280px;
+}
+.platform-radio {
+  width: 100%;
+  margin-right: 0;
+}
+.platform-radio :deep(.el-radio__label) {
+  padding-left: 8px;
+  width: calc(100% - 20px);
+}
+.platform-option {
+  display: flex;
+  align-items: center;
+  height: 32px;
+}
+.platform-icon-wrap {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-right: 10px;
+}
+.platform-icon {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: left center;
+  display: block;
+}
+.platform-name {
+  font-size: 14px;
+  color: #303133;
+  font-weight: 500;
+  min-width: 72px;
+}
+.platform-count {
+  color: #909399;
+  font-size: 12px;
+  margin-left: 8px;
+}
 </style>
