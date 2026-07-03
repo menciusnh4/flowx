@@ -171,6 +171,18 @@ contextBridge.exposeInMainWorld('electron', {
     check: (): Promise<UpdateInfo> => invoke('update:check'),
   },
 
+  // ========== 对外 API 服务 ==========
+  apiServer: {
+    getConfig: (): Promise<{ enabled: boolean; port: number; apiKey: string }> =>
+      invoke('apiServer:getConfig'),
+    saveConfig: (config: { enabled?: boolean; port?: number; apiKey?: string }): Promise<{ config: { enabled: boolean; port: number; apiKey: string }; running: boolean }> =>
+      invoke('apiServer:saveConfig', config),
+    status: (): Promise<{ running: boolean; config: { enabled: boolean; port: number; apiKey: string } }> =>
+      invoke('apiServer:status'),
+    start: (): Promise<{ running: boolean }> => invoke('apiServer:start'),
+    stop: (): Promise<{ running: boolean }> => invoke('apiServer:stop'),
+  },
+
   // ========== 系统环境配置与指纹代理 ==========
   env: {
     listProxies: (): Promise<ProxyConfig[]> => invoke('env:listProxies'),

@@ -172,6 +172,23 @@ export const electronApi = {
   async checkUpdate(): Promise<UpdateInfo> {
     return invokeElectron('update.check', 'update:check');
   },
+
+  // 对外 API 服务
+  async getApiServerConfig(): Promise<{ enabled: boolean; port: number; apiKey: string }> {
+    return invokeElectron('apiServer.getConfig', 'apiServer:getConfig');
+  },
+  async saveApiServerConfig(cfg: { enabled?: boolean; port?: number; apiKey?: string }): Promise<{ config: { enabled: boolean; port: number; apiKey: string }; running: boolean }> {
+    return invokeElectron('apiServer.saveConfig', 'apiServer:saveConfig', cfg);
+  },
+  async getApiServerStatus(): Promise<{ running: boolean; config: { enabled: boolean; port: number; apiKey: string } }> {
+    return invokeElectron('apiServer.getStatus', 'apiServer:status');
+  },
+  async startApiServer(): Promise<{ running: boolean }> {
+    return invokeElectron('apiServer.start', 'apiServer:start');
+  },
+  async stopApiServer(): Promise<{ running: boolean }> {
+    return invokeElectron('apiServer.stop', 'apiServer:stop');
+  },
   async listProxies(): Promise<ProxyConfig[]> {
     return invokeElectron('env.listProxies', 'env:listProxies');
   },

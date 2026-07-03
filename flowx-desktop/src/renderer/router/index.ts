@@ -11,6 +11,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/history', name: 'history', component: () => import('@/pages/History.vue'), meta: { title: '发布历史' } },
   { path: '/settings/environments', name: 'environments', component: () => import('@/pages/BrowserEnvPanel.vue'), meta: { title: '环境配置' } },
   { path: '/settings/proxies', name: 'proxies', component: () => import('@/pages/ProxyPanel.vue'), meta: { title: '代理 IP 设置' } },
+  { path: '/settings/api', name: 'api', component: () => import('@/pages/ApiPanel.vue'), meta: { title: '对外接口' } },
 ];
 
 export const router = createRouter({

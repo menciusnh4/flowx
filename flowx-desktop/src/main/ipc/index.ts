@@ -3,6 +3,7 @@ import { registerAccountIpc } from './account';
 import { registerPublishIpc } from './publish';
 import { registerSystemIpc } from './system';
 import { registerEnvIpc } from './env';
+import { registerApiServerIpc } from './apiServer';
 import { logger } from '../utils/logger';
 
 // 注册所有 IPC 监听
@@ -11,6 +12,7 @@ export function registerAllIpc(): void {
   registerPublishIpc();
   registerSystemIpc();
   registerEnvIpc();
+  registerApiServerIpc();
   logger.info('[IPC] 所有通道已注册');
 }
 

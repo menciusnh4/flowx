@@ -6,6 +6,7 @@ import { setupLogger, logger } from './utils/logger';
 import { initStore } from './store/SecureStore';
 import { AccountService } from './services/AccountService';
 import { PublishEngine } from './services/PublishEngine';
+import { ApiServer } from './services/ApiServer';
 
 // FlowX 主进程入口
 // 负责: 窗口管理、IPC 注册、服务初始化、生命周期事件
@@ -93,6 +94,9 @@ async function bootstrap() {
   // 初始化业务服务
   AccountService.init();
   PublishEngine.init();
+
+  // 启动对外 API 服务（如果配置了启用）
+  ApiServer.getInstance().startIfEnabled();
 
   // 创建主窗口（等待 Vite dev server 就绪后才加载）
   await createMainWindow();

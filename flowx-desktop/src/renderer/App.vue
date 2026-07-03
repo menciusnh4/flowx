@@ -34,6 +34,7 @@
           </template>
           <el-menu-item index="/settings/environments">环境配置</el-menu-item>
           <el-menu-item index="/settings/proxies">代理 IP 设置</el-menu-item>
+          <el-menu-item index="/settings/api">对外接口</el-menu-item>
         </el-sub-menu>
       </el-menu>
       <div style="font-size: 12px; color: #909399">
