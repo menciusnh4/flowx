@@ -286,6 +286,13 @@ async function pickArticleCover() {
 async function submitPublish() {
   console.log('[Publish.vue] submitPublish clicked')
 
+  // 防止重复提交：进入即锁定
+  if (submitting.value) {
+    console.warn('[Publish.vue] 重复提交被拦截')
+    return
+  }
+  submitting.value = true
+
   if (!title.value.trim()) {
     ElMessage.warning('请输入标题')
     console.warn('[Publish.vue] missing title, abort')
@@ -415,7 +422,6 @@ async function submitPublish() {
     mediaCount: req.mediaFiles.length,
   })
 
-  submitting.value = true
   try {
     const taskId = await publishStore.submit(req)
     console.log('[Publish.vue] submitPublish success, taskId=', taskId)
@@ -653,7 +659,7 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
       <el-divider />
 
       <div class="submit-row">
-        <el-button type="primary" :loading="submitting" :disabled="visibleAccounts.length === 0" @click="submitPublish">
+        <el-button type="primary" :loading="submitting" :disabled="submitting || visibleAccounts.length === 0" @click="submitPublish">
           {{ publishTimeType === 'scheduled' ? '定时发布到' : '一键发布到' }} {{ getSelectedIds().length }} 个账号
         </el-button>
         <el-button @click="toggleDebug" :type="showDebug ? 'warning' : 'default'">
