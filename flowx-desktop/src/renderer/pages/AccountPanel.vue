@@ -286,6 +286,7 @@ import iconBilibili from '../assets/bilibili.svg';
 import iconWechatChannels from '../assets/wechat_channels.svg';
 import iconWeibo from '../assets/weibo.png';
 import iconZhihu from '../assets/zhihu.png';
+import iconToutiao from '../assets/toutiao.png';
 
 const PLATFORM_ICONS: Record<string, string> = {
   xiaohongshu: iconXiaohongshu,
@@ -295,6 +296,7 @@ const PLATFORM_ICONS: Record<string, string> = {
   wechat_channels: iconWechatChannels,
   weibo: iconWeibo,
   zhihu: iconZhihu,
+  toutiao: iconToutiao,
 };
 
 /** 获取平台图标 URL，找不到则返回空字符串 */
@@ -413,7 +415,11 @@ async function startAuth() {
     authVisible.value = false;
     await accountStore.refreshAccounts();
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e));
+    const msg = e instanceof Error ? e.message : String(e);
+    // 用户主动关闭窗口取消授权，不弹错误提示
+    if (msg !== '用户取消授权') {
+      ElMessage.error(msg);
+    }
   } finally {
     authing.value = false;
   }

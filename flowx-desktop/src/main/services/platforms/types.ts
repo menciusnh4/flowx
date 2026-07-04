@@ -14,8 +14,10 @@ export interface ExtractedAccountInfo {
   nickname: string;
   /** 头像 URL（https:// 开头） */
   avatar?: string;
-  /** 平台内展示的账号标识（如抖音号/小红书号） */
+  /** 平台内展示的账号标识（如抖音号/小红书号/知乎 url_token） */
   platformAccountId?: string;
+  /** 平台唯一用户 ID（如知乎 uid、抖音 sec_user_id），用于账号去重 */
+  userId?: string;
   /** 粉丝数 */
   fansCount?: number;
   /** 关注数 */

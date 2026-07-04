@@ -102,7 +102,7 @@
                     <tr><th>参数名</th><th>类型</th><th>必填</th><th>说明</th></tr>
                   </thead>
                   <tbody>
-                    <tr><td>platform</td><td>string</td><td>否</td><td>按平台过滤，如 douyin、kuaishou、xiaohongshu</td></tr>
+                    <tr><td>platform</td><td>string</td><td>否</td><td>按平台过滤，如 douyin、kuaishou、xiaohongshu、zhihu、toutiao</td></tr>
                     <tr><td>status</td><td>string</td><td>否</td><td>按状态过滤：active / expired / disabled</td></tr>
                   </tbody>
                 </table>

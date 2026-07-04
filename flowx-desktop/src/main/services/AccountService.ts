@@ -408,7 +408,7 @@ export class AccountService {
         });
       };
 
-      const trySave = async () => {
+      const trySave = async (fromClose = false) => {
         // ===== 1. 防抖：正在处理中则直接跳过 =====
         if (isTryingToSave) {
           logger.info('[Account-Auth] ⏳ trySave 已在执行中，跳过重复调用');
@@ -418,13 +418,14 @@ export class AccountService {
 
         try {
           logger.info('\n' + '-'.repeat(70));
-          logger.info(`[Account-Auth] 🔍 开始提取登录态...`);
+          logger.info(`[Account-Auth] 🔍 开始提取登录态...${fromClose ? ' (窗口关闭触发)' : ''}`);
           logger.info('-'.repeat(70));
 
           // -------- Step 1: 确保页面在已登录状态下 --------
           let isLoggedIn = false;
+          const maxTries = fromClose ? 1 : 2; // 关闭窗口时只检测一次，不重试导航
           let tries = 0;
-          while (tries < 2 && !authWin.isDestroyed()) {
+          while (tries < maxTries && !authWin.isDestroyed()) {
             const currentUrl = authWin.webContents.getURL();
             logger.info(`[Account-Auth] 当前 URL: ${currentUrl}`);
 
@@ -436,6 +437,9 @@ export class AccountService {
               break;
             }
 
+            // 关闭窗口触发时不重试导航，直接失败
+            if (fromClose) break;
+
             tries++;
             logger.info(`[Account-Auth]   → 尝试导航到创作者中心首页 (第 ${tries} 次): ${strategy.homeUrl}`);
             const loaded = await loadWithTimeout(strategy.homeUrl, 8000);
@@ -445,6 +449,10 @@ export class AccountService {
           // ========== 关键修复：强制登录态检查 ==========
           // 用户可能没登录就直接关窗 —— 必须拒绝保存空账号
           if (!isLoggedIn) {
+            if (fromClose) {
+              // 用户主动关闭窗口且未登录，视为取消授权
+              throw new Error('用户取消授权');
+            }
             throw new Error(
               `未检测到有效登录态。\n` +
               `请先在窗口中完成扫码/短信登录，确认已进入创作者中心后，\n` +
@@ -459,6 +467,7 @@ export class AccountService {
           let followCount: number | undefined;
           let fansCount: number | undefined;
           let likeCount: number | undefined;
+          let extractedUserId = '';
           try {
             const extracted = await platform.extractPageInfo(authWin);
             nickname = extracted.nickname;
@@ -467,7 +476,8 @@ export class AccountService {
             followCount = extracted.followCount;
             fansCount = extracted.fansCount;
             likeCount = extracted.likeCount;
-            logger.info(`[Account-Auth] 🔹 平台适配器提取结果: nickname="${nickname}", avatar="${avatar}", id="${platformAccountId}", 关注=${followCount ?? '-'}, 粉丝=${fansCount ?? '-'}, 获赞=${likeCount ?? '-'}`);
+            extractedUserId = extracted.userId || '';
+            logger.info(`[Account-Auth] 🔹 平台适配器提取结果: nickname="${nickname}", avatar="${avatar}", id="${platformAccountId}", userId="${extractedUserId}", 关注=${followCount ?? '-'}, 粉丝=${fansCount ?? '-'}, 获赞=${likeCount ?? '-'}`);
           } catch (e) {
             logger.warn(`[Account-Auth]   → DOM 提取失败: ${(e as Error).message}`);
           }
@@ -482,15 +492,19 @@ export class AccountService {
           }
           logger.info(`[Account-Auth] 🔹 共读取到 ${rawCookies.length} 条 cookies`);
 
-          // -------- Step 4: 从 cookies 拿 userId --------
-          let userId = '';
-          const uidCandidates = ['a1', 'user_id', 'user_key', 'open_id', 'sec_user_id', 'uid'];
-          for (const c of rawCookies) {
-            if (uidCandidates.includes(c.name.toLowerCase()) && c.value) {
-              userId = c.value;
-              logger.info(`[Account-Auth] 🔹 从 cookie "${c.name}" 拿到 userId`);
-              break;
+          // -------- Step 4: 获取 userId（优先使用平台适配器提取的，再从 cookies 兜底）----------
+          let userId = extractedUserId;
+          if (!userId) {
+            const uidCandidates = ['a1', 'user_id', 'user_key', 'open_id', 'sec_user_id', 'uid', 'z_c0'];
+            for (const c of rawCookies) {
+              if (uidCandidates.includes(c.name.toLowerCase()) && c.value) {
+                userId = c.value;
+                logger.info(`[Account-Auth] 🔹 从 cookie "${c.name}" 拿到 userId`);
+                break;
+              }
             }
+          } else {
+            logger.info(`[Account-Auth] 🔹 从平台适配器拿到 userId: ${userId}`);
           }
 
           // -------- Step 5: 兜底 + 强校验 --------
@@ -680,12 +694,12 @@ export class AccountService {
           .catch(() => { /* 忽略轮询过程中的临时错误 */ });
       }, 500);
 
-      // 用户手动关闭窗口（点击 X 按钮）→ 同样触发保存流程
+      // 用户手动关闭窗口（点击 X 按钮）→ 尝试保存，但只检测一次，不重试导航
       authWin.on('close', (e) => {
         if (!isTryingToSave) {
           e.preventDefault();
-          logger.info(`[Account-Auth] 收到窗口关闭事件 → 开始保存...`);
-          trySave();
+          logger.info(`[Account-Auth] 收到窗口关闭事件 → 尝试保存登录态...`);
+          trySave(true);
         }
       });
 

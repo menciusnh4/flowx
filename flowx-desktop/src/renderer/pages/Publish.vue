@@ -461,14 +461,16 @@ function platformName(p?: string): string {
   if (!p) return '-'
   const map: Record<string, string> = {
     douyin: '抖音', kuaishou: '快手', xiaohongshu: '小红书',
-    bilibili: '哔哩哔哩', video: '视频号',
+    bilibili: '哔哩哔哩', wechat_channels: '微信视频号', video: '视频号',
+    zhihu: '知乎', toutiao: '今日头条',
   }
   return map[p] || p
 }
 
 function iconOf(platform?: string): string {
   const map: Record<string, string> = {
-    douyin: '🎵', kuaishou: '⚡', xiaohongshu: '📕', bilibili: '📺', video: '🎬',
+    douyin: '🎵', kuaishou: '⚡', xiaohongshu: '📕', bilibili: '📺', wechat_channels: '🎬',
+    zhihu: '💡', toutiao: '📰',
   }
   return map[platform ?? ''] || '🔘'
 }
