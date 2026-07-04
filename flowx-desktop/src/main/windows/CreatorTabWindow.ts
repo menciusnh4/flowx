@@ -23,6 +23,10 @@ const TAB_BAR_HOST = 'tabbar';
 
 // 标记协议是否已注册
 let protocolRegistered = false;
+// 标记 IPC handlers 是否已注册
+let ipcHandlersRegistered = false;
+// webContentsId → CreatorTabWindow 实例映射，用于 IPC 路由
+const winByWebContentsId = new Map<number, CreatorTabWindow>();
 
 /**
  * 生成 tab 栏的 HTML 模板
@@ -284,6 +288,68 @@ function registerTabBarProtocol(): void {
 }
 
 /**
+ * 注册 IPC 处理函数（全局只执行一次）
+ * 通过 winByWebContentsId 映射路由到对应窗口实例
+ */
+function ensureIpcHandlersRegistered(): void {
+  if (ipcHandlersRegistered) return;
+  ipcHandlersRegistered = true;
+
+  ipcMain.handle('creator-tab:activate', (e, tabId: string) => {
+    const w = winByWebContentsId.get(e.sender.id);
+    if (w) w.activateTab(tabId);
+  });
+
+  ipcMain.handle('creator-tab:close', (e, tabId: string) => {
+    const w = winByWebContentsId.get(e.sender.id);
+    if (w) w.closeTab(tabId);
+  });
+
+  ipcMain.handle('creator-tab:new', (e) => {
+    const w = winByWebContentsId.get(e.sender.id);
+    if (w) w.createTab(w.homeUrl, '新标签页');
+  });
+
+  ipcMain.handle('creator-tab:back', (e) => {
+    const w = winByWebContentsId.get(e.sender.id);
+    if (w) {
+      const tab = w.getActiveTab();
+      if (tab && tab.view.webContents.canGoBack()) {
+        tab.view.webContents.goBack();
+      }
+    }
+  });
+
+  ipcMain.handle('creator-tab:forward', (e) => {
+    const w = winByWebContentsId.get(e.sender.id);
+    if (w) {
+      const tab = w.getActiveTab();
+      if (tab && tab.view.webContents.canGoForward()) {
+        tab.view.webContents.goForward();
+      }
+    }
+  });
+
+  ipcMain.handle('creator-tab:reload', (e) => {
+    const w = winByWebContentsId.get(e.sender.id);
+    if (w) {
+      const tab = w.getActiveTab();
+      if (tab) tab.view.webContents.reload();
+    }
+  });
+
+  ipcMain.handle('creator-tab:home', (e) => {
+    const w = winByWebContentsId.get(e.sender.id);
+    if (w) {
+      const tab = w.getActiveTab();
+      if (tab && w.homeUrl) {
+        tab.view.webContents.loadURL(w.homeUrl);
+      }
+    }
+  });
+}
+
+/**
  * 带 tab 栏的创作中心浏览器窗口
  *
  * 结构：
@@ -298,7 +364,7 @@ export class CreatorTabWindow {
   private activeTabId: string = '';
   private accountId: string;
   private accountPartition: string;
-  private homeUrl: string = '';
+  homeUrl: string = '';
   private tabBarHeight = 38;
   private toolbarHeight = 36;
 
@@ -335,78 +401,25 @@ export class CreatorTabWindow {
     // 加载 tab 栏页面（使用自定义协议）
     this.win.loadURL(`${TAB_BAR_PROTOCOL}://${TAB_BAR_HOST}/`);
 
+    // 注册 IPC 处理（全局只注册一次）
+    ensureIpcHandlersRegistered();
+
+    // 注册当前窗口到路由表
+    winByWebContentsId.set(this.win.webContents.id, this);
+
     // 监听窗口大小变化，调整 view 位置
     this.win.on('resize', () => {
       this.layoutActiveView();
     });
 
-    // 窗口关闭时清理
+    // 窗口关闭时从路由表移除
     this.win.on('closed', () => {
+      winByWebContentsId.delete(this.win.webContents.id);
       this.cleanup();
     });
 
-    // 注册 IPC 处理
-    this.registerIpcHandlers();
-
     // 创建第一个 tab
     this.createTab(initialUrl, '首页');
-  }
-
-  /**
-   * 注册 IPC 处理函数
-   */
-  private registerIpcHandlers(): void {
-    const winWebContentsId = this.win.webContents.id;
-
-    // 辅助函数：只处理来自当前窗口 tab 栏的消息
-    const isFromThisWindow = (e: Electron.IpcMainInvokeEvent) => {
-      return e.sender.id === winWebContentsId;
-    };
-
-    ipcMain.handle('creator-tab:activate', (e, tabId: string) => {
-      if (!isFromThisWindow(e)) return;
-      this.activateTab(tabId);
-    });
-
-    ipcMain.handle('creator-tab:close', (e, tabId: string) => {
-      if (!isFromThisWindow(e)) return;
-      this.closeTab(tabId);
-    });
-
-    ipcMain.handle('creator-tab:new', (e) => {
-      if (!isFromThisWindow(e)) return;
-      this.createTab(this.homeUrl, '新标签页');
-    });
-
-    ipcMain.handle('creator-tab:back', (e) => {
-      if (!isFromThisWindow(e)) return;
-      const tab = this.getActiveTab();
-      if (tab && tab.view.webContents.canGoBack()) {
-        tab.view.webContents.goBack();
-      }
-    });
-
-    ipcMain.handle('creator-tab:forward', (e) => {
-      if (!isFromThisWindow(e)) return;
-      const tab = this.getActiveTab();
-      if (tab && tab.view.webContents.canGoForward()) {
-        tab.view.webContents.goForward();
-      }
-    });
-
-    ipcMain.handle('creator-tab:reload', (e) => {
-      if (!isFromThisWindow(e)) return;
-      const tab = this.getActiveTab();
-      if (tab) tab.view.webContents.reload();
-    });
-
-    ipcMain.handle('creator-tab:home', (e) => {
-      if (!isFromThisWindow(e)) return;
-      const tab = this.getActiveTab();
-      if (tab && this.homeUrl) {
-        tab.view.webContents.loadURL(this.homeUrl);
-      }
-    });
   }
 
   /**
@@ -534,7 +547,7 @@ export class CreatorTabWindow {
   /**
    * 获取当前激活的 tab
    */
-  private getActiveTab(): TabItem | undefined {
+  getActiveTab(): TabItem | undefined {
     return this.tabs.find((t) => t.id === this.activeTabId);
   }
 
@@ -595,17 +608,7 @@ export class CreatorTabWindow {
    * 清理资源
    */
   private cleanup(): void {
-    // 注意：IPC handle 是全局注册的，多个窗口共享同一个 handle
-    // 最后一个窗口关闭时才移除 handle
-    if (creatorWindows.size <= 1) {
-      ipcMain.removeHandler('creator-tab:activate');
-      ipcMain.removeHandler('creator-tab:close');
-      ipcMain.removeHandler('creator-tab:new');
-      ipcMain.removeHandler('creator-tab:back');
-      ipcMain.removeHandler('creator-tab:forward');
-      ipcMain.removeHandler('creator-tab:reload');
-      ipcMain.removeHandler('creator-tab:home');
-    }
+    // IPC handlers 全局注册一次，应用生命周期内不移除（避免最后一个窗口关闭后再开新窗口失效）
 
     // 销毁所有 tab
     for (const tab of this.tabs) {
