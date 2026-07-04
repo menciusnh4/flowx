@@ -367,6 +367,7 @@ export class CreatorTabWindow {
   homeUrl: string = '';
   private tabBarHeight = 38;
   private toolbarHeight = 36;
+  private disposed = false;
 
   constructor(accountId: string, initialUrl: string, windowTitle: string, envId?: string) {
     this.accountId = accountId;
@@ -409,13 +410,24 @@ export class CreatorTabWindow {
 
     // 监听窗口大小变化，调整 view 位置
     this.win.on('resize', () => {
+      if (this.disposed || this.win.isDestroyed()) return;
       this.layoutActiveView();
     });
 
-    // 窗口关闭时从路由表移除
+    // 缓存 webContents id，closed 事件中无法再访问
+    const wcId = this.win.webContents.id;
+
+    // 窗口即将关闭时，提前清理所有 tabs（此时窗口还未销毁，可以安全操作 views）
+    this.win.on('close', () => {
+      this.disposed = true;
+      this.clearAllTabs();
+      winByWebContentsId.delete(wcId);
+      creatorWindows.delete(this.accountId);
+    });
+
+    // 窗口关闭后（无需额外操作，清理已在 close 中完成）
     this.win.on('closed', () => {
-      winByWebContentsId.delete(this.win.webContents.id);
-      this.cleanup();
+      // 所有清理已在 close 事件中完成，此处仅作占位
     });
 
     // 创建第一个 tab
@@ -423,9 +435,28 @@ export class CreatorTabWindow {
   }
 
   /**
+   * 清理所有 tabs（在窗口 close 阶段调用，此时窗口尚未销毁）
+   */
+  private clearAllTabs(): void {
+    for (const tab of this.tabs) {
+      try {
+        if (!tab.view.webContents.isDestroyed()) {
+          this.win.contentView.removeChildView(tab.view);
+          tab.view.webContents.close();
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    this.tabs = [];
+    this.activeTabId = '';
+  }
+
+  /**
    * 创建一个新 tab
    */
   createTab(url: string, title: string): string {
+    if (this.disposed || this.win.isDestroyed()) return '';
     const tabId = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     const view = new WebContentsView({
@@ -447,24 +478,29 @@ export class CreatorTabWindow {
 
     // 监听页面标题变化
     view.webContents.on('page-title-updated', (_e, newTitle) => {
+      if (this.disposed || this.win.isDestroyed() || view.webContents.isDestroyed()) return;
       tab.title = newTitle || tab.url;
       this.notifyTabsUpdate();
     });
 
     // 监听 URL 变化
     view.webContents.on('did-navigate', (_e, newUrl) => {
+      if (this.disposed || this.win.isDestroyed() || view.webContents.isDestroyed()) return;
       tab.url = newUrl;
       this.notifyUrlUpdate(tabId, newUrl, tab.title);
     });
 
     view.webContents.on('did-navigate-in-page', (_e, newUrl) => {
+      if (this.disposed || this.win.isDestroyed() || view.webContents.isDestroyed()) return;
       tab.url = newUrl;
       this.notifyUrlUpdate(tabId, newUrl, tab.title);
     });
 
     // 拦截新窗口请求 → 在新 tab 中打开
     view.webContents.setWindowOpenHandler(({ url: newUrl }) => {
-      this.createTab(newUrl, '新标签页');
+      if (!this.disposed && !this.win.isDestroyed()) {
+        this.createTab(newUrl, '新标签页');
+      }
       return { action: 'deny' };
     });
 
@@ -491,12 +527,14 @@ export class CreatorTabWindow {
    * 激活指定 tab
    */
   activateTab(tabId: string): void {
+    if (this.disposed || this.win.isDestroyed()) return;
     const tab = this.tabs.find((t) => t.id === tabId);
     if (!tab) return;
+    if (tab.view.webContents.isDestroyed()) return;
 
     // 隐藏当前激活的 tab
     const prevTab = this.getActiveTab();
-    if (prevTab && prevTab.id !== tabId) {
+    if (prevTab && prevTab.id !== tabId && !prevTab.view.webContents.isDestroyed()) {
       prevTab.view.setVisible(false);
     }
 
@@ -511,6 +549,7 @@ export class CreatorTabWindow {
    * 关闭指定 tab
    */
   closeTab(tabId: string): void {
+    if (this.disposed || this.win.isDestroyed()) return;
     const idx = this.tabs.findIndex((t) => t.id === tabId);
     if (idx === -1) return;
 
@@ -555,20 +594,24 @@ export class CreatorTabWindow {
    * 获取 tab 信息列表（用于渲染）
    */
   private getTabInfos(): TabInfo[] {
-    return this.tabs.map((t) => ({
-      id: t.id,
-      title: t.title,
-      url: t.url,
-      isLoading: t.view.webContents.isLoading(),
-    }));
+    return this.tabs
+      .filter((t) => !t.view.webContents.isDestroyed())
+      .map((t) => ({
+        id: t.id,
+        title: t.title,
+        url: t.url,
+        isLoading: t.view.webContents.isLoading(),
+      }));
   }
 
   /**
    * 调整当前激活 view 的位置和大小
    */
   private layoutActiveView(): void {
+    if (this.disposed || this.win.isDestroyed()) return;
     const tab = this.getActiveTab();
     if (!tab) return;
+    if (tab.view.webContents.isDestroyed()) return;
 
     const [width, height] = this.win.getSize();
     const topOffset = this.tabBarHeight + this.toolbarHeight;
@@ -585,7 +628,7 @@ export class CreatorTabWindow {
    * 通知渲染进程 tab 列表更新
    */
   private notifyTabsUpdate(): void {
-    if (this.win.isDestroyed()) return;
+    if (this.disposed || this.win.isDestroyed()) return;
     this.win.webContents.send('creator-tabs:update', {
       tabs: this.getTabInfos(),
       activeId: this.activeTabId,
@@ -596,30 +639,12 @@ export class CreatorTabWindow {
    * 通知渲染进程 URL 更新
    */
   private notifyUrlUpdate(tabId: string, url: string, title: string): void {
-    if (this.win.isDestroyed()) return;
+    if (this.disposed || this.win.isDestroyed()) return;
     this.win.webContents.send('creator-tabs:url-update', {
       tabId,
       url,
       title,
     });
-  }
-
-  /**
-   * 清理资源
-   */
-  private cleanup(): void {
-    // IPC handlers 全局注册一次，应用生命周期内不移除（避免最后一个窗口关闭后再开新窗口失效）
-
-    // 销毁所有 tab
-    for (const tab of this.tabs) {
-      if (!tab.view.webContents.isDestroyed()) {
-        tab.view.webContents.close();
-      }
-    }
-    this.tabs = [];
-    this.activeTabId = '';
-
-    creatorWindows.delete(this.accountId);
   }
 
   /**
