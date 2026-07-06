@@ -791,6 +791,11 @@ async function runXhsPublish(
     // 7) 等待上传完成（5 分钟内）
     onProgress(50, '等待上传完成…');
     const uploadResult = await waitForUploadComplete(win, log, onProgress, 300000, tracker);
+    // 窗口已销毁：立即终止发布流程
+    if (win.isDestroyed() || uploadResult.finalStatus === 'window-destroyed') {
+      log('warn', 'upload', '窗口已被用户关闭，终止发布流程');
+      return makeFailedResult(accountId, 'xiaohongshu', '发布窗口已被关闭，发布已终止', startedAt);
+    }
     if (!uploadResult || !uploadResult.ready) {
       return makeFailedResult(
         accountId,
@@ -1261,6 +1266,11 @@ async function publishArticle(
       if (uploadOk) {
         onProgress(50, '等待上传完成…');
         const uploadResult = await waitForUploadComplete(win, log, onProgress, 300000, tracker);
+        // 窗口已销毁：立即终止发布流程
+        if (win.isDestroyed() || uploadResult.finalStatus === 'window-destroyed') {
+          log('warn', 'upload', '窗口已被用户关闭，终止发布流程');
+          return makeFailedResult(accountId, 'xiaohongshu', '发布窗口已被关闭，发布已终止', startedAt);
+        }
         if (!uploadResult || !uploadResult.ready) {
           log('warn', 'upload', `上传完成检测失败 (status=${uploadResult?.finalStatus || 'unknown'})`);
         }

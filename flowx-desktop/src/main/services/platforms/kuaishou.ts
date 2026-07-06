@@ -845,6 +845,11 @@ async function runKuaishouPublish(
     // ---- 步骤 7：等待上传完成 ----
     onProgress(40, '等待上传完成…');
     const uploadResult = await waitForUploadComplete(win, log, onProgress, 300_000, tracker);
+    // 窗口已销毁：立即终止发布流程
+    if (win.isDestroyed() || uploadResult.finalStatus === 'window-destroyed') {
+      log('warn', 'upload', '窗口已被用户关闭，终止发布流程');
+      return makeFailedResult(accountId, 'kuaishou', '发布窗口已被关闭，发布已终止', startedAt);
+    }
     if (!uploadResult.ready) {
       log('warn', 'upload', `上传完成检测失败: ${uploadResult.finalStatus}`);
       // 软失败：继续往下走（有些平台不会在 DOM 给出明显"完成"信号）

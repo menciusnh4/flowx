@@ -3052,6 +3052,11 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
     if (!uploadOk) return makeFailedResult(accountId, 'douyin', '上传失败', startedAt);
     onProgress(40, '等待上传完成…');
     const uploadResult = await waitForUploadComplete(win, log, onProgress, 300000, tracker);
+    // 窗口已销毁：立即终止发布流程
+    if (win.isDestroyed() || uploadResult.finalStatus === 'window-destroyed') {
+      log('warn', 'upload', '窗口已被用户关闭，终止发布流程');
+      return makeFailedResult(accountId, 'douyin', '发布窗口已被关闭，发布已终止', startedAt);
+    }
     if (!uploadResult.ready) { log('warn', 'upload', '上传完成检测失败: ' + uploadResult.finalStatus); }
     onProgress(60, '上传完成，准备填写内容…');
     await sleep(1500);
@@ -3301,6 +3306,11 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
         } else {
           onProgress(65, '等待上传完成…');
           const uploadResult = await waitForUploadComplete(win, log, onProgress, 300000, tracker);
+          // 窗口已销毁：立即终止发布流程
+          if (win.isDestroyed() || uploadResult.finalStatus === 'window-destroyed') {
+            log('warn', 'upload', '窗口已被用户关闭，终止发布流程');
+            return makeFailedResult(accountId, 'douyin', '发布窗口已被关闭，发布已终止', startedAt);
+          }
           if (!uploadResult.ready) log('warn', 'upload', '正文上传完成检测失败: ' + uploadResult.finalStatus);
         }
       } else {

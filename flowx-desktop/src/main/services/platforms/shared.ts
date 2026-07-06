@@ -98,8 +98,16 @@ export function attachNavigationTracker(
   };
 }
 
-/** 临时错误判断：导航导致的 frame disposed / 空 body 等错误都可重试 */
+/** 判断是否为窗口已销毁的错误（不可重试，应立即终止） */
+export function isWindowDestroyedError(msg: string): boolean {
+  return /Object has been destroyed|window is destroyed|has been destroyed|webContents is destroyed/i.test(msg);
+}
+
+/** 临时错误判断：导航导致的 frame disposed / 空 body 等错误都可重试
+ *  注意：窗口已销毁的错误不属于临时错误，不应重试
+ */
 function isTransientEvalError(msg: string): boolean {
+  if (isWindowDestroyedError(msg)) return false;
   return /frame was disposed|Render frame|navigation|No current|Cannot read property|document.body is null|null object|context is invalid|Execution context was destroyed|No frame|target frame|subframe/i.test(msg);
 }
 
@@ -115,6 +123,11 @@ export async function evalJS(
   let lastErr: unknown = null;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
+    // 窗口已销毁：直接抛出，不重试
+    if (win.isDestroyed()) {
+      log('warn', 'eval-error', `[${desc}] 窗口已销毁，终止执行`);
+      throw new Error(`[${desc}] 失败: Object has been destroyed`);
+    }
     try {
       // 若页面正在加载 / 最近刚刚发生导航 → 先等稳定
       if (win.webContents.isLoading()) {
@@ -1932,6 +1945,11 @@ export async function waitForUploadComplete(
   let lastUrl = '';
 
   while (Date.now() - start < timeoutMs) {
+    // 窗口已销毁：立即返回，不再继续轮询
+    if (win.isDestroyed()) {
+      log('warn', 'poll', `窗口已销毁，终止上传轮询`);
+      return { ready: false, finalStatus: 'window-destroyed' };
+    }
     try {
       // 若页面正在加载 / 跟踪器判定仍在导航 → 先等稳定
       if (tracker && tracker.isNavigating()) {
@@ -1982,7 +2000,13 @@ export async function waitForUploadComplete(
         onProgress(30 + Math.min(30, (Date.now() - start) / 10000 * 10), '上传/处理中…');
       }
     } catch (e) {
-      log('warn', 'poll', `轮询异常: ${(e as Error).message}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      log('warn', 'poll', `轮询异常: ${msg}`);
+      // 窗口已销毁：立即终止轮询
+      if (isWindowDestroyedError(msg) || win.isDestroyed()) {
+        log('warn', 'poll', `检测到窗口已销毁，终止轮询循环`);
+        return { ready: false, finalStatus: 'window-destroyed' };
+      }
     }
 
     await sleep(interval);
@@ -3249,6 +3273,11 @@ export async function runStandardPublish(
     }
 
     const uploadResult = await waitForUploadComplete(win, log, onProgress, 300000, tracker);
+    // 窗口已销毁：立即终止，不再继续后续步骤
+    if (win.isDestroyed() || uploadResult.finalStatus === 'window-destroyed') {
+      log('warn', 'upload', `窗口已被用户关闭，终止发布流程`);
+      return finalize('failed', '发布窗口已被关闭，发布已终止');
+    }
     if (!uploadResult.ready) onProgress(60, '上传未完成，继续尝试填写…');
 
     // 填写内容 —— 先按平台限制截断，避免超长内容被平台暴力截断或拒绝
@@ -3280,13 +3309,29 @@ export async function runStandardPublish(
     // 🔑 策略：按 skipTitle 配置决定是否填写标题
     if (!config.skipTitle && finalTitle) {
       try { await evalJS(win, buildFillTitle(finalTitle), 'fill-title', log); }
-      catch (e) { log('warn', 'fill', `标题填写异常: ${(e as Error).message}`); }
+      catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        log('warn', 'fill', `标题填写异常: ${msg}`);
+        // 窗口已销毁：立即终止
+        if (isWindowDestroyedError(msg) || win.isDestroyed()) {
+          log('warn', 'fill', `窗口已被用户关闭，终止发布流程`);
+          return finalize('failed', '发布窗口已被关闭，发布已终止');
+        }
+      }
     } else if (config.skipTitle) {
       log('info', 'fill', `跳过标题填写（skipTitle=true）`);
     }
     if (finalContent.trim().length > 0) {
       try { await evalJS(win, buildFillContent(finalContent), 'fill-content', log); }
-      catch (e) { log('warn', 'fill', `正文填写异常: ${(e as Error).message}`); }
+      catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        log('warn', 'fill', `正文填写异常: ${msg}`);
+        // 窗口已销毁：立即终止
+        if (isWindowDestroyedError(msg) || win.isDestroyed()) {
+          log('warn', 'fill', `窗口已被用户关闭，终止发布流程`);
+          return finalize('failed', '发布窗口已被关闭，发布已终止');
+        }
+      }
     }
     await sleep(config.fillWaitMs ?? 1500);
 
