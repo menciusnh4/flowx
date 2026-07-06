@@ -199,6 +199,34 @@ const titlePlaceholder = computed(() => {
   return '请输入视频标题'
 })
 const isContentOverLimit = computed(() => content.value.length > platformContentLimit.value.min)
+
+// 话题标签总长度计算（和各平台 prepareTags 逻辑一致：去空、去重、加#、空格连接）
+const tagsLength = computed(() => {
+  if (!tagsRaw.value.trim()) return 0
+  const tagList = tagsRaw.value
+    .split(/[,，\s]+/)
+    .map((t) => t.trim().replace(/^#/, ''))
+    .filter((t) => t.length > 0)
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const t of tagList) {
+    const withHash = '#' + t
+    if (!seen.has(withHash)) {
+      seen.add(withHash)
+      unique.push(withHash)
+    }
+  }
+  if (unique.length === 0) return 0
+  // 标签 + 空格分隔 + （正文非空时前面一个换行符）
+  const joined = unique.join(' ')
+  return joined.length + (content.value.trim().length > 0 ? 1 : 0)
+})
+// 正文 + 话题 是否超限（用于页面实时提示）
+const isContentWithTagsOverLimit = computed(() => {
+  if (getSelectedIds().length === 0) return false
+  const total = content.value.length + tagsLength.value
+  return total > platformContentLimit.value.min
+})
 const kuaishouSelected = computed(() => {
   const ids = getSelectedIds()
   return accountStore.accounts.some((a) => ids.includes(a.id) && a.platform === 'kuaishou')
@@ -229,15 +257,46 @@ const articleMinContentHint = computed(() => {
 })
 
 // ============ 文件操作 ============
+// 图片格式扩展名
+const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp']
+// 视频格式扩展名
+const VIDEO_EXTENSIONS = ['mp4', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'webm', 'm4v', '3gp']
+
 async function pickMediaFiles() {
-  console.log('[Publish.vue] pickMediaFiles start')
+  console.log('[Publish.vue] pickMediaFiles start, contentType=', contentType.value)
   try {
-    const r = await electronApi.openFileDialog({ mode: 'files' })
+    const options: { mode: 'files'; filters?: Electron.FileFilter[] } = { mode: 'files' }
+    // 根据内容类型限制文件选择格式
+    if (contentType.value === 'image') {
+      options.filters = [{ name: '图片文件', extensions: IMAGE_EXTENSIONS }]
+    } else if (contentType.value === 'video') {
+      options.filters = [{ name: '视频文件', extensions: VIDEO_EXTENSIONS }]
+    }
+    const r = await electronApi.openFileDialog(options)
     console.log('[Publish.vue] pickMediaFiles raw=', r)
     if (r && !r.canceled && r.filePaths && r.filePaths.length > 0) {
-      mediaFiles.value = [...mediaFiles.value, ...r.filePaths]
-      console.log('[Publish.vue] pickMediaFiles -> ', mediaFiles.value.length, 'files')
-      ElMessage.success(`已添加 ${r.filePaths.length} 个文件`)
+      // 校验文件格式是否匹配
+      const exts = contentType.value === 'image' ? IMAGE_EXTENSIONS
+        : contentType.value === 'video' ? VIDEO_EXTENSIONS
+        : null
+      if (exts) {
+        const valid = r.filePaths.filter((p) => {
+          const ext = p.split('.').pop()?.toLowerCase() || ''
+          return exts.includes(ext)
+        })
+        const invalid = r.filePaths.length - valid.length
+        if (invalid > 0) {
+          ElMessage.warning(`已过滤 ${invalid} 个不支持的文件格式`)
+        }
+        if (valid.length === 0) return
+        mediaFiles.value = [...mediaFiles.value, ...valid]
+        console.log('[Publish.vue] pickMediaFiles -> ', mediaFiles.value.length, 'files')
+        ElMessage.success(`已添加 ${valid.length} 个文件`)
+      } else {
+        mediaFiles.value = [...mediaFiles.value, ...r.filePaths]
+        console.log('[Publish.vue] pickMediaFiles -> ', mediaFiles.value.length, 'files')
+        ElMessage.success(`已添加 ${r.filePaths.length} 个文件`)
+      }
     }
   } catch (e) {
     console.error('[Publish.vue] pickMediaFiles error', e)
@@ -252,7 +311,10 @@ function removeMediaFile(p: string) {
 
 async function pickCover() {
   try {
-    const r = await electronApi.openFileDialog({ mode: 'file' })
+    const r = await electronApi.openFileDialog({
+      mode: 'file',
+      filters: [{ name: '图片文件', extensions: IMAGE_EXTENSIONS }],
+    })
     if (r && !r.canceled && r.filePaths && r.filePaths.length > 0) {
       coverImage.value = r.filePaths[0]
       console.log('[Publish.vue] pickCover=', coverImage.value)
@@ -291,7 +353,6 @@ async function submitPublish() {
     console.warn('[Publish.vue] 重复提交被拦截')
     return
   }
-  submitting.value = true
 
   if (!title.value.trim()) {
     ElMessage.warning('请输入标题')
@@ -334,38 +395,65 @@ async function submitPublish() {
     }
   }
 
+  // 所有前置校验通过后，才锁定提交状态
+  submitting.value = true
+
   // ===== 字数限制预检：提醒用户 =====
   // 按平台分别检查标题和内容，若任意平台超限，在提交时弹提醒（不阻塞，用户可自己取舍）
-  const overLimitPlats: Array<{ platform: string; titleLen?: number; contentLen?: number; titleMax?: number; contentMax?: number }> = []
+  // 🔑 话题标签追加在正文后面，所以正文限制需要把标签长度也算进去
+  const tagList = tagsRaw.value
+    .split(/[,，\s]+/)
+    .map((t) => t.trim().replace(/^#/, ''))
+    .filter((t) => t.length > 0)
+  // 去重（和各平台 prepareTags 逻辑一致）
+  const seenTags = new Set<string>()
+  const uniqueTags: string[] = []
+  for (const t of tagList) {
+    const withHash = '#' + t
+    if (!seenTags.has(withHash)) {
+      seenTags.add(withHash)
+      uniqueTags.push(withHash)
+    }
+  }
+  // 标签总长度 = 各标签用空格连接 + 正文非空时前面一个换行符
+  const tagsTotalLen = uniqueTags.length > 0
+    ? uniqueTags.join(' ').length + (content.value.trim().length > 0 ? 1 : 0)
+    : 0
+
+  const overLimitPlats: Array<{ platform: string; titleLen?: number; contentLen?: number; titleMax?: number; contentMax?: number; tagsLen?: number; totalLen?: number }> = []
   for (const id of accountIds) {
     const a = accountStore.accounts.find((x) => x.id === id)
     if (!a) continue
     const meta = accountStore.platforms.find((p) => p.key === a.platform)
     if (!meta) continue
     
-    // 检查图文/视频的contentLimits
+    // 检查图文/视频的contentLimits（正文 + 话题标签 一起算）
     if (meta.contentLimits) {
       const tMax = meta.contentLimits.title
       const cMax = meta.contentLimits.content
+      const contentLen = content.value.length
+      const totalContentLen = contentLen + tagsTotalLen
       if ((typeof tMax === 'number' && title.value.length > tMax) ||
-          (typeof cMax === 'number' && content.value.length > cMax)) {
+          (typeof cMax === 'number' && totalContentLen > cMax)) {
         overLimitPlats.push({
           platform: a.platform,
-          titleLen: title.value.length, contentLen: content.value.length,
+          titleLen: title.value.length, contentLen, tagsLen: tagsTotalLen, totalLen: totalContentLen,
           titleMax: tMax, contentMax: cMax,
         })
       }
     }
     
-    // 检查文章模式的articleLimits最大字数
+    // 检查文章模式的articleLimits最大字数（正文 + 话题标签 一起算）
     if (contentType.value === 'article' && meta.articleLimits) {
       const tMax = meta.articleLimits.title
       const cMax = meta.articleLimits.content
+      const contentLen = content.value.length
+      const totalContentLen = contentLen + tagsTotalLen
       if ((typeof tMax === 'number' && title.value.length > tMax) ||
-          (typeof cMax === 'number' && content.value.length > cMax)) {
+          (typeof cMax === 'number' && totalContentLen > cMax)) {
         overLimitPlats.push({
           platform: a.platform,
-          titleLen: title.value.length, contentLen: content.value.length,
+          titleLen: title.value.length, contentLen, tagsLen: tagsTotalLen, totalLen: totalContentLen,
           titleMax: tMax, contentMax: cMax,
         })
       }
@@ -375,14 +463,16 @@ async function submitPublish() {
     const msg = overLimitPlats.map((p) => {
       const parts: string[] = []
       if (typeof p.titleMax === 'number' && p.titleLen! > p.titleMax) parts.push(`标题${p.titleLen}/${p.titleMax}`)
-      if (typeof p.contentMax === 'number' && p.contentLen! > p.contentMax) parts.push(`正文${p.contentLen}/${p.contentMax}`)
+      if (typeof p.contentMax === 'number' && p.totalLen! > p.contentMax) {
+        parts.push(`正文+话题${p.totalLen}/${p.contentMax}（正文${p.contentLen}+话题${p.tagsLen}）`)
+      }
       return `  · ${platformName(p.platform)}：${parts.join('、')}`
     }).join('\n')
     ElMessage.warning({
-      message: `以下平台将截断内容（超出限制自动截断，不影响发布）：\n${msg}`,
-      duration: 5000,
+      message: `以下平台内容将超出字数限制（话题会追加到正文末尾），发布后可能被截断：\n${msg}`,
+      duration: 6000,
     })
-    console.warn('[Publish.vue] content over limits:', overLimitPlats)
+    console.warn('[Publish.vue] content over limits (including tags):', overLimitPlats)
   }
 
   // 校验是否属于定时发送，若是则检查日期并获取时间戳
@@ -570,11 +660,15 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
           <div v-if="kuaishouSelected" class="kuaishou-hint">
             ⚡ 已选快手账号：正文将被限制为 500 字，超出部分将自动截断
           </div>
-          <div v-if="isContentOverLimit" class="over-limit-hint">
+          <div v-if="isContentWithTagsOverLimit" class="over-limit-hint">
+            ⚠️ 正文+话题共 {{ content.length + tagsLength }} 字，超出所选平台最大限制（{{ platformContentLimit.min }} 字），发布后可能被截断
+          </div>
+          <div v-else-if="isContentOverLimit" class="over-limit-hint">
             ⚠️ 当前内容（{{ content.length }} 字）超出所选平台最大限制（{{ platformContentLimit.min }} 字），超出部分将在发布时自动截断
           </div>
           <div v-if="platformContentLimit.platforms.length > 0" class="limits-hint">
             各平台正文限制：{{ platformContentLimit.platforms.map(p => `${platformName(p.platform)} ${p.limit}字`).join(' / ') }}
+            <span v-if="tagsLength > 0">（当前话题约 {{ tagsLength }} 字）</span>
           </div>
           <div v-if="articleMinContentHint" class="min-content-hint">
             {{ articleMinContentHint }}
