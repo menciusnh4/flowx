@@ -1,7 +1,7 @@
 import { safeStorage, app } from 'electron';
 import Store from 'electron-store';
 import { logger } from '../utils/logger';
-import type { AccountCredential, PublishTask, AccountCategory, BrowserEnvironment, ProxyConfig } from '../../types';
+import type { AccountCredential, PublishTask, AccountCategory, BrowserEnvironment, ProxyConfig, PublishDraft } from '../../types';
 
 // 本地加密存储（主进程单例）
 // - accounts: 账号列表（含凭证）
@@ -20,6 +20,7 @@ interface StoreSchema {
   categories: AccountCategory[];
   environments: BrowserEnvironment[];
   proxies: ProxyConfig[];
+  publishDrafts: PublishDraft[];
 }
 
 let store: Store<StoreSchema> | null = null;
@@ -38,6 +39,7 @@ export function initStore() {
       categories: [],
       environments: [],
       proxies: [],
+      publishDrafts: [],
     },
   });
 

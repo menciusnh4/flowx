@@ -207,6 +207,34 @@ export interface PublishTask {
   errorMessage?: string;
 }
 
+/** 发布草稿（保存未发布的内容，随时继续编辑） */
+export interface PublishDraft {
+  id: string;
+  title: string;
+  contentType: ContentType;
+  formData: {
+    title: string;
+    content: string;
+    tagsRaw: string;
+    mediaFiles: string[];
+    coverImage: string;
+    selectedAccountIds: string[];
+    publishTimeType: 'now' | 'scheduled';
+    scheduledTime: number | null;
+  };
+  /** 来源网页 URL（从浏览器提取的草稿有此字段） */
+  sourceUrl?: string;
+  /** 来源网站名称 */
+  sourceSite?: string;
+  /** 封面预览图路径（用于列表缩略图） */
+  coverPreview?: string;
+  /** 正文字数（列表展示用） */
+  wordCount: number;
+  createdAt: number;
+  updatedAt: number;
+  status: 'draft' | 'published';
+}
+
 /** 发布进度查询结果 */
 export interface ProgressInfo {
   taskId: string;
@@ -317,4 +345,75 @@ export interface BrowserEnvironment {
   userAgent: string;
   proxyId?: string | null;
   createdAt: number;
+}
+
+/** 浏览器收藏夹 */
+export interface BrowserBookmark {
+  id: string;
+  title: string;
+  url: string;
+  /** 网站名称/域名（便于展示） */
+  siteName?: string;
+  /** 文件夹 ID，undefined 表示根目录 */
+  folderId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 浏览器收藏夹文件夹 */
+export interface BrowserBookmarkFolder {
+  id: string;
+  name: string;
+  parentId?: string;
+  createdAt: number;
+}
+
+/** 浏览器历史记录 */
+export interface BrowserHistoryItem {
+  id: string;
+  url: string;
+  title: string;
+  /** 访问时间戳（毫秒） */
+  visitTime: number;
+  /** 来源标签页 ID（可选，用于追踪） */
+  viewId?: string;
+}
+
+/** 提取的图片信息 */
+export interface ExtractedImage {
+  url: string;
+  alt: string;
+  width: number;
+  height: number;
+  aspectRatio: number;
+  caption?: string;
+  position: number;
+  isLikelyContent: boolean;
+}
+
+/** 内容提取结果 */
+export interface ExtractedContent {
+  title: string;
+  /** HTML 格式内容（已清理） */
+  content: string;
+  /** 纯文本（已清理格式） */
+  textContent: string;
+  /** 摘要（前 200 字） */
+  excerpt: string;
+  /** 作者/来源 */
+  byline: string;
+  /** 正文字数 */
+  length: number;
+  /** 站点名称 */
+  siteName: string;
+  /** 页面 URL */
+  pageUrl: string;
+  /** 提取到的图片列表（已过滤） */
+  images: ExtractedImage[];
+  /** 提取策略 */
+  extractStrategy?: 'auto' | 'manual' | 'readability' | 'site-rule';
+  /** 置信度评分 0-100 */
+  confidence?: number;
+  /** 是否仅提取了图片（无文本内容） */
+  isImageOnly?: boolean;
 }

@@ -23,6 +23,14 @@
           <el-icon><Promotion /></el-icon>
           <span>一键发布</span>
         </el-menu-item>
+        <el-menu-item index="/drafts">
+          <el-icon><Document /></el-icon>
+          <span>草稿箱</span>
+        </el-menu-item>
+        <el-menu-item index="/browser">
+          <el-icon><Monitor /></el-icon>
+          <span>浏览器</span>
+        </el-menu-item>
         <el-menu-item index="/history">
           <el-icon><Clock /></el-icon>
           <span>发布历史</span>
