@@ -10,120 +10,111 @@
         </el-space>
       </div>
 
-      <el-table
-        v-loading="publishStore.loading"
-        :data="publishStore.history"
-        border
-        stripe
-        style="margin-top: 12px"
-      >
-        <el-table-column label="任务ID" prop="id" width="170" />
-        <el-table-column label="类型" width="90">
-          <template #default="{ row }">
-            <el-tag size="small" :type="contentTypeTagType(row.request?.contentType)">
-              {{ contentTypeLabel(row.request?.contentType) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="标题/备注" min-width="200">
-          <template #default="{ row }">
-            <div style="font-weight:500">{{ row.request?.title || row.request?.remark || '-' }}</div>
-            <div style="color:#909399; font-size:12px">
-              目标账号：{{ row.items.length }} 个
-              <span v-if="row.request?.tags?.length" style="margin-left:8px">
-                标签：{{ formatTags(row.request.tags) }}
-              </span>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag v-if="row.status === 'success'" type="success">成功</el-tag>
-            <el-tag v-else-if="row.status === 'failed'" type="danger">失败</el-tag>
-            <el-tag v-else-if="row.status === 'running'" type="primary">发布中</el-tag>
-            <el-tag v-else-if="row.status === 'cancelled'" type="info">已取消</el-tag>
-            <el-tag v-else-if="row.status === 'scheduled'" type="warning">待发布</el-tag>
-            <el-tag v-else type="info">{{ row.status }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="各账号结果" min-width="240">
-          <template #default="{ row }">
-            <el-space wrap>
-              <el-tag
-                v-for="item in row.items.slice(0, 4)"
-                :key="item.accountId"
-                size="small"
-                :type="itemStatusTagType(item.status)"
-              >
-                {{ nicknameOf(item.accountId) }}
-                <span v-if="item.status === 'success'">✓</span>
-                <span v-else-if="item.status === 'failed'">✗</span>
+      <!-- 任务历史卡片列表 -->
+      <div v-loading="publishStore.loading" class="task-card-list">
+        <div v-for="row in publishStore.history" :key="row.id" class="flow-task-card">
+          <!-- 头部：任务ID、发布类型与时间 -->
+          <div class="task-card-header">
+            <div class="header-left">
+              <span class="task-id-tag">ID: {{ row.id }}</span>
+              <el-tag size="small" :type="contentTypeTagType(row.request?.contentType)">
+                {{ contentTypeLabel(row.request?.contentType) }}
               </el-tag>
-              <el-tooltip
-                v-if="row.items.length > 4"
-                :content="formatAccountList(row.items)"
-              >
-                <span style="color:#909399; font-size:12px; cursor:help">
-                  +{{ row.items.length - 4 }}
-                </span>
-              </el-tooltip>
-            </el-space>
-          </template>
-        </el-table-column>
-        <el-table-column label="时间" width="180">
-          <template #default="{ row }">
-            <div style="font-size:13px; color:#303133">创建：{{ fmt(row.createdAt) }}</div>
-            <div v-if="row.request?.scheduledAt" style="font-size:12px; color:#e6a23c; margin-top:3px">
-              定时：{{ fmt(row.request.scheduledAt) }}
             </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" type="primary" link @click="showDetail(row)">
-              <el-icon><View /></el-icon>&nbsp;详情
-            </el-button>
-            <el-button
-              v-if="row.status === 'scheduled'"
-              size="small"
-              type="danger"
-              link
-              @click="cancelTask(row)"
-            >
-              <el-icon><CircleClose /></el-icon>&nbsp;取消发布
-            </el-button>
-            <el-button
-              v-if="hasFailedItems(row)"
-              size="small"
-              type="warning"
-              link
-              :loading="retryingId === row.id"
-              @click="retryTask(row)"
-            >
-              <el-icon><RefreshRight /></el-icon>&nbsp;重试
-            </el-button>
-            <el-button
-              v-if="hasFailedItems(row)"
-              size="small"
-              type="success"
-              link
-              @click="openEditDialog(row)"
-            >
-              <el-icon><Edit /></el-icon>&nbsp;编辑重发
-            </el-button>
-            <el-popconfirm
-              title="确定删除此历史记录？"
-              @confirm="deleteTask(row)"
-            >
-              <template #reference>
-                <el-button size="small" type="danger" link>
-                  <el-icon><Delete /></el-icon>&nbsp;删除
-                </el-button>
-              </template>
-            </el-popconfirm>
-          </template>
-        </el-table-column>
-      </el-table>
+            <div class="header-right">
+              <div class="task-status-badge">
+                <el-tag :type="statusTagType(row.status)" size="small" effect="dark">
+                  {{ statusLabel(row.status) }}
+                </el-tag>
+              </div>
+              <div class="task-time-info">
+                <span>创建：{{ fmt(row.createdAt) }}</span>
+                <span v-if="row.request?.scheduledAt" class="scheduled-time">
+                  定时：{{ fmt(row.request.scheduledAt) }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 主体：发布内容与目标账号执行状况 -->
+          <div class="task-card-body">
+            <div class="task-main-info">
+              <h3 class="task-title">{{ row.request?.title || row.request?.remark || '无标题发布' }}</h3>
+              <p class="task-desc-preview" v-if="row.request?.content">
+                {{ row.request.content.slice(0, 80) }}{{ row.request.content.length > 80 ? '...' : '' }}
+              </p>
+              <div class="task-meta-tags" v-if="row.request?.tags && row.request.tags.length > 0">
+                <span class="meta-tag" v-for="tag in row.request.tags" :key="tag">#{{ tag }}</span>
+              </div>
+            </div>
+
+            <div class="task-accounts-section">
+              <div class="section-label">分发账号 ({{ row.items.length }})</div>
+              <div class="accounts-badge-grid">
+                <div v-for="item in row.items.slice(0, 6)" :key="item.accountId" class="account-result-badge" :class="'result-' + item.status">
+                  <img v-if="getPlatformIcon(item.platform)" :src="getPlatformIcon(item.platform)" class="badge-icon" />
+                  <span class="badge-name">{{ nicknameOf(item.accountId) }}</span>
+                  <span class="badge-status-icon" v-if="item.status === 'success'">✓</span>
+                  <span class="badge-status-icon" v-else-if="item.status === 'failed'">✗</span>
+                </div>
+                <el-tooltip v-if="row.items.length > 6" :content="formatAccountList(row.items)">
+                  <div class="accounts-more-badge">
+                    +{{ row.items.length - 6 }}
+                  </div>
+                </el-tooltip>
+              </div>
+            </div>
+          </div>
+
+          <!-- 尾部：动作按钮区 -->
+          <div class="task-card-footer">
+            <div class="task-actions-group">
+              <el-button size="small" type="primary" link @click="showDetail(row)">
+                <el-icon><View /></el-icon>&nbsp;查看详情
+              </el-button>
+              <el-button
+                v-if="row.status === 'scheduled'"
+                size="small"
+                type="danger"
+                link
+                @click="cancelTask(row)"
+              >
+                <el-icon><CircleClose /></el-icon>&nbsp;取消发布
+              </el-button>
+              <el-button
+                v-if="hasFailedItems(row)"
+                size="small"
+                type="warning"
+                link
+                :loading="retryingId === row.id"
+                @click="retryTask(row)"
+              >
+                <el-icon><RefreshRight /></el-icon>&nbsp;重试
+              </el-button>
+              <el-button
+                v-if="hasFailedItems(row)"
+                size="small"
+                type="success"
+                link
+                @click="openEditDialog(row)"
+              >
+                <el-icon><Edit /></el-icon>&nbsp;编辑重发
+              </el-button>
+              <el-popconfirm
+                width="200"
+                title="确定删除此发布记录？"
+                @confirm="deleteTask(row)"
+              >
+                <template #reference>
+                  <el-button size="small" type="danger" link>
+                    <el-icon><Delete /></el-icon>&nbsp;删除
+                  </el-button>
+                </template>
+              </el-popconfirm>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div v-if="publishStore.history.length === 0 && !publishStore.loading" class="empty-hint">
         暂无发布记录，请到「一键发布」创建第一个任务。
@@ -153,40 +144,65 @@
     >
       <div v-if="detailData?.task" class="detail-content">
         <!-- 基本信息 -->
-        <el-descriptions :column="2" border size="small" style="margin-bottom:16px">
-          <el-descriptions-item label="任务ID">{{ detailData.task.id }}</el-descriptions-item>
-          <el-descriptions-item label="内容类型">
-            {{ contentTypeLabel(detailData.task.request?.contentType) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="整体状态">
-            <el-tag :type="statusTagType(detailData.task.status)" size="small">
-              {{ statusLabel(detailData.task.status) }}
-            </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="账号数量">
-            {{ detailData.task.items.length }} 个
-          </el-descriptions-item>
-          <el-descriptions-item label="标题" :span="2">
-            {{ detailData.task.request?.title || '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item v-if="detailData.task.request?.remark" label="备注" :span="2">
-            {{ detailData.task.request.remark }}
-          </el-descriptions-item>
-          <el-descriptions-item label="创建时间">
-            {{ fmt(detailData.task.createdAt) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="更新时间">
-            {{ fmt(detailData.task.updatedAt) }}
-          </el-descriptions-item>
-          <el-descriptions-item v-if="detailData.task.request?.scheduledAt" label="定时发布" :span="2">
-            <span style="color:#e6a23c; font-weight:600">{{ fmt(detailData.task.request.scheduledAt) }}</span>
-          </el-descriptions-item>
-          <el-descriptions-item v-if="detailData.task.request?.tags?.length" label="标签" :span="2">
-            <el-tag v-for="t in detailData.task.request.tags" :key="t" size="small" style="margin-right:4px">
-              #{{ t }}
-            </el-tag>
-          </el-descriptions-item>
-        </el-descriptions>
+        <!-- 基本信息 (Grouped Card Dashboard) -->
+        <!-- 任务基本信息扁平化网格 (Flat Metadata Grid) -->
+        <div class="task-metadata-grid">
+          <div class="meta-item">
+            <div class="meta-label">任务ID</div>
+            <div class="meta-value mono">{{ detailData.task.id }}</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">内容类型</div>
+            <div class="meta-value">
+              <el-tag size="small" :type="contentTypeTagType(detailData.task.request?.contentType)">
+                {{ contentTypeLabel(detailData.task.request?.contentType) }}
+              </el-tag>
+            </div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">整体状态</div>
+            <div class="meta-value">
+              <el-tag :type="statusTagType(detailData.task.status)" size="small" effect="dark">
+                {{ statusLabel(detailData.task.status) }}
+              </el-tag>
+            </div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">分发账号数</div>
+            <div class="meta-value font-semibold">{{ detailData.task.items.length }} 个</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">创建时间</div>
+            <div class="meta-value">{{ fmt(detailData.task.createdAt) }}</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">更新时间</div>
+            <div class="meta-value">{{ fmt(detailData.task.updatedAt) }}</div>
+          </div>
+          <div class="meta-item" v-if="detailData.task.request?.scheduledAt">
+            <div class="meta-label">定时发布</div>
+            <div class="meta-value scheduled-time">{{ fmt(detailData.task.request.scheduledAt) }}</div>
+          </div>
+          <div class="meta-item" v-if="detailData.task.request?.tags?.length">
+            <div class="meta-label">标签</div>
+            <div class="meta-value">
+              <span class="meta-tag-bubble" v-for="t in detailData.task.request.tags" :key="t">
+                #{{ t }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 标题与备注 -->
+        <div class="task-title-banner" v-if="detailData.task.request?.title">
+          <div class="banner-label">发布标题</div>
+          <h3 class="banner-title">{{ detailData.task.request.title }}</h3>
+        </div>
+
+        <div class="task-title-banner remark" v-if="detailData.task.request?.remark">
+          <div class="banner-label">发布备注</div>
+          <div class="banner-remark">{{ detailData.task.request.remark }}</div>
+        </div>
 
         <!-- 正文预览 -->
         <div v-if="detailData.task.request?.content" class="detail-section">
@@ -200,7 +216,7 @@
         <!-- 各账号详情 -->
         <div class="detail-section">
           <div class="detail-section-title">各账号执行结果</div>
-          <el-table :data="detailData.task.items" border size="small">
+          <el-table :data="detailData.task.items" size="small">
             <el-table-column label="平台" width="80">
               <template #default="{ row }">
                 {{ platformLabel(row.platform) }}
@@ -391,6 +407,10 @@ import type { PublishTask, PlatformType, PublishStatus, PublishLogEntry, Publish
 
 const publishStore = usePublishStore();
 const accountStore = useAccountStore();
+
+function getPlatformIcon(p: string): string {
+  return accountStore.platforms.find((x) => x.key === p)?.icon || '';
+}
 
 const detailVisible = ref(false);
 const detailData = ref<{ task: PublishTask | null; logs: PublishLogEntry[] } | null>(null);
@@ -695,7 +715,7 @@ onMounted(async () => {
 <style scoped>
 .empty-hint {
   text-align: center;
-  color: #909399;
+  color: #64748b;
   padding: 60px 0;
   font-size: 14px;
 }
@@ -703,91 +723,312 @@ onMounted(async () => {
 .pagination-wrapper {
   display: flex;
   justify-content: center;
-  margin-top: 20px;
+  margin-top: 24px;
   padding: 16px 0;
+}
+
+/* 美化分页组件 */
+.pagination-wrapper :deep(.el-pagination) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 总条数文本 */
+.pagination-wrapper :deep(.el-pagination__total) {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 600;
+  margin-right: 12px;
+}
+
+/* 下拉页码选择器 */
+.pagination-wrapper :deep(.el-select .el-input__wrapper) {
+  border-radius: 8px !important;
+  border: 1px solid rgba(0, 0, 0, 0.05) !important;
+  box-shadow: none !important;
+  background: #ffffff !important;
+  transition: all 0.25s ease;
+  padding: 4px 12px !important;
+}
+
+.pagination-wrapper :deep(.el-select .el-input__wrapper:hover),
+.pagination-wrapper :deep(.el-select .el-input.is-focus .el-input__wrapper) {
+  border-color: rgba(99, 102, 241, 0.3) !important;
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.08) !important;
+}
+
+/* 按钮及页码通用样式 */
+.pagination-wrapper :deep(.el-pagination.is-background .btn-prev),
+.pagination-wrapper :deep(.el-pagination.is-background .btn-next),
+.pagination-wrapper :deep(.el-pagination.is-background .el-pager li) {
+  background: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.05) !important;
+  border-radius: 8px !important;
+  color: #64748b !important;
+  font-weight: 600;
+  min-width: 32px !important;
+  height: 32px !important;
+  line-height: 30px !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  box-sizing: border-box;
+}
+
+/* 页码/按钮 Hover 状态 */
+.pagination-wrapper :deep(.el-pagination.is-background .btn-prev:hover),
+.pagination-wrapper :deep(.el-pagination.is-background .btn-next:hover),
+.pagination-wrapper :deep(.el-pagination.is-background .el-pager li:not(.is-active):hover) {
+  color: #6366f1 !important;
+  background: rgba(99, 102, 241, 0.04) !important;
+  border-color: rgba(99, 102, 241, 0.2) !important;
+  transform: translateY(-1px);
+}
+
+/* 激活选中的页码 */
+.pagination-wrapper :deep(.el-pagination.is-background .el-pager li.is-active) {
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
+  color: #ffffff !important;
+  border-color: transparent !important;
+  box-shadow: 0 4px 10px rgba(99, 102, 241, 0.2) !important;
+  transform: translateY(-1px);
+}
+
+/* 禁用状态 */
+.pagination-wrapper :deep(.el-pagination.is-background .btn-prev:disabled),
+.pagination-wrapper :deep(.el-pagination.is-background .btn-next:disabled) {
+  background: #f8fafc !important;
+  border-color: rgba(0, 0, 0, 0.03) !important;
+  color: #cbd5e1 !important;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+/* 前往页码输入框 */
+.pagination-wrapper :deep(.el-pagination__jump) {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 600;
+  margin-left: 12px;
+}
+
+.pagination-wrapper :deep(.el-pagination__jump .el-input__wrapper) {
+  border-radius: 8px !important;
+  border: 1px solid rgba(0, 0, 0, 0.05) !important;
+  box-shadow: none !important;
+  background: #ffffff !important;
+  transition: all 0.25s ease;
+  width: 44px !important;
+  box-sizing: border-box;
+}
+
+.pagination-wrapper :deep(.el-pagination__jump .el-input__wrapper:hover),
+.pagination-wrapper :deep(.el-pagination__jump .el-input.is-focus .el-input__wrapper) {
+  border-color: rgba(99, 102, 241, 0.3) !important;
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.08) !important;
 }
 
 .detail-content {
   max-height: 60vh;
   overflow-y: auto;
+  box-sizing: border-box;
+  padding-right: 8px;
 }
+
+/* 扁平化元数据网格 */
+.task-metadata-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  background: rgba(99, 102, 241, 0.03);
+  border: 1px solid rgba(99, 102, 241, 0.12);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-sizing: border-box;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.02);
+}
+
+@media (max-width: 600px) {
+  .task-metadata-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.meta-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.meta-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.meta-value.mono {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  color: #475569;
+  font-weight: 500;
+}
+
+.task-title-banner {
+  background: rgba(99, 102, 241, 0.03);
+  border: 1px solid rgba(99, 102, 241, 0.06);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-sizing: border-box;
+}
+
+.task-title-banner.remark {
+  background: rgba(15, 23, 42, 0.02);
+  border-color: rgba(15, 23, 42, 0.04);
+}
+
+.banner-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.banner-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #6366f1;
+}
+
+.banner-remark {
+  font-size: 13px;
+  color: #1e293b;
+  line-height: 1.5;
+}
+
+.scheduled-time {
+  color: #e6a23c;
+  font-weight: 600;
+}
+
+.meta-tag-bubble {
+  display: inline-block;
+  background: rgba(99, 102, 241, 0.06);
+  color: #6366f1;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-right: 6px;
+  border: 1px solid rgba(99, 102, 241, 0.1);
+}
+
 
 .detail-section {
   margin-top: 16px;
 }
 
 .detail-section-title {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 14px;
-  color: #303133;
-  margin-bottom: 8px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid #ebeef5;
+  color: #1e293b;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
 }
 
 .content-preview {
-  background: #f5f7fa;
-  border-radius: 4px;
-  padding: 12px;
+  background: rgba(0, 0, 0, 0.015);
+  border: 1px solid rgba(0, 0, 0, 0.03);
+  border-radius: 8px;
+  padding: 12px 16px;
   font-size: 13px;
-  color: #606266;
+  color: #334155;
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 120px;
+  max-height: 150px;
   overflow-y: auto;
 }
 
+/* 终端风格日志区 */
 .log-container {
-  background: #1e1e1e;
-  border-radius: 4px;
-  padding: 10px;
-  font-family: 'Consolas', 'Monaco', monospace;
+  background: #0f172a;
+  border-radius: 12px;
+  padding: 16px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 12px;
-  max-height: 260px;
+  max-height: 300px;
   overflow-y: auto;
+  line-height: 1.8;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
 .log-line {
-  line-height: 1.6;
-  word-break: break-all;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.log-line:last-child {
+  border-bottom: none;
 }
 
 .log-time {
-  color: #888;
-  margin-right: 6px;
+  color: #64748b;
+  flex-shrink: 0;
 }
 
 .log-level {
-  margin-right: 4px;
+  font-weight: 700;
+  flex-shrink: 0;
 }
 
-.log-info .log-level { color: #4fc3f7; }
-.log-warn .log-level { color: #ffb74d; }
-.log-error .log-level { color: #ef5350; }
-.log-debug .log-level { color: #888; }
+.log-info .log-level { color: #38bdf8; }
+.log-warn .log-level { color: #f59e0b; }
+.log-error .log-level { color: #ef4444; }
+.log-debug .log-level { color: #94a3b8; }
 
 .log-platform {
-  color: #81c784;
-  margin-right: 4px;
+  color: #34d399;
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
 .log-account {
-  color: #ba68c8;
-  margin-right: 4px;
+  color: #c084fc;
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
 .log-stage {
-  color: #ffd54f;
-  margin-right: 4px;
+  color: #fb7185;
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
 .log-msg {
-  color: #e0e0e0;
+  color: #e2e8f0;
 }
 
 .log-error .log-msg {
-  color: #ef9a9a;
+  color: #fca5a5;
 }
 
 /* 编辑重发表单样式 */
@@ -798,17 +1039,18 @@ onMounted(async () => {
 .edit-file-list {
   max-height: 160px;
   overflow-y: auto;
-  background: #fafafa;
-  border-radius: 4px;
-  padding: 8px;
+  background: rgba(0, 0, 0, 0.015);
+  border: 1px solid rgba(0, 0, 0, 0.03);
+  border-radius: 8px;
+  padding: 8px 12px;
 }
 
 .edit-file-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 8px;
-  border-bottom: 1px solid #ebeef5;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.02);
 }
 
 .edit-file-item:last-child {
@@ -816,10 +1058,250 @@ onMounted(async () => {
 }
 
 .edit-file-item .file-name {
-  font-size: 12px;
-  color: #606266;
+  font-size: 13px;
+  color: #475569;
   word-break: break-all;
   flex: 1;
   margin-right: 8px;
+  font-weight: 500;
+}
+
+/* 历史发布卡片流 */
+.task-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.flow-task-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: var(--glass-border);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: var(--glow-shadow-sm);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.flow-task-card:hover {
+  border-color: rgba(99, 102, 241, 0.18);
+  background: rgba(99, 102, 241, 0.04);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px -4px rgba(99, 102, 241, 0.08), 0 4px 12px -6px rgba(0, 0, 0, 0.04);
+}
+
+.task-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-id-tag {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.task-time-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.4;
+  font-weight: 500;
+}
+
+.scheduled-time {
+  color: #d97706;
+  font-weight: 600;
+}
+
+.task-card-body {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.task-main-info {
+  flex: 1;
+  min-width: 280px;
+}
+
+.task-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0 0 6px 0;
+  line-height: 1.4;
+}
+
+.task-desc-preview {
+  font-size: 13px;
+  color: #64748b;
+  margin: 0;
+  line-height: 1.6;
+}
+
+.task-meta-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.meta-tag {
+  font-size: 11px;
+  color: #6366f1;
+  background: rgba(99, 102, 241, 0.06);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.task-accounts-section {
+  min-width: 250px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.section-label {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.accounts-badge-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 账号结果小徽章 */
+.account-result-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.badge-icon {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+}
+
+.result-success {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.04);
+  border-color: rgba(16, 185, 129, 0.1);
+}
+
+.result-failed,
+.result-cancelled {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.04);
+  border-color: rgba(239, 68, 68, 0.1);
+}
+
+.result-running,
+.result-queued {
+  color: #3b82f6;
+  background: rgba(59, 130, 246, 0.04);
+  border-color: rgba(59, 130, 246, 0.1);
+}
+
+.badge-name {
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge-status-icon {
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.accounts-more-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.04);
+  color: #64748b;
+  cursor: help;
+}
+
+.task-card-footer {
+  border-top: 1px solid rgba(0, 0, 0, 0.03);
+  padding-top: 12px;
+  margin-top: auto;
+}
+
+.task-actions-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.task-actions-group :deep(.el-button) {
+  margin: 0 !important;
+  font-weight: 700 !important;
+  font-size: 12px !important;
+  transition: all 0.2s ease !important;
+}
+
+.task-actions-group :deep(.el-button--primary:hover) {
+  color: #6366f1 !important;
+  background-color: rgba(99, 102, 241, 0.06) !important;
+}
+
+.task-actions-group :deep(.el-button--warning:hover) {
+  color: #e6a23c !important;
+  background-color: rgba(230, 162, 60, 0.06) !important;
+}
+
+.task-actions-group :deep(.el-button--success:hover) {
+  color: #10b981 !important;
+  background-color: rgba(16, 185, 129, 0.06) !important;
+}
+
+.task-actions-group :deep(.el-button--danger:hover) {
+  color: #f56c6c !important;
+  background-color: rgba(245, 108, 108, 0.06) !important;
 }
 </style>

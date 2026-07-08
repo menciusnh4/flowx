@@ -41,7 +41,11 @@ nsis:
   deleteAppDataOnUninstall: true
 mac:
   icon: build/icon.png
-  target: dmg
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
   category: public.app-category.productivity
 linux:
   icon: build/icon.png

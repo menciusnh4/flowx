@@ -5,7 +5,6 @@ import { usePublishStore } from '../stores/publish'
 import { useAccountStore } from '../stores/account'
 import { electronApi } from '../utils/electron'
 import type { PublishRequest, PlatformType } from '../../types'
-
 const accountStore = useAccountStore()
 const publishStore = usePublishStore()
 
@@ -591,11 +590,49 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
   <div class="publish-page">
     <div class="panel">
       <h2 class="section-title">① 选择发布类型</h2>
-      <el-radio-group v-model="contentType" size="default">
-        <el-radio-button value="video">视频</el-radio-button>
-        <el-radio-button value="image">图文</el-radio-button>
-        <el-radio-button value="article">文章</el-radio-button>
-      </el-radio-group>
+      <div class="publish-type-selector">
+        <div 
+          class="type-card video-card" 
+          :class="{ active: contentType === 'video' }" 
+          @click="contentType = 'video'"
+        >
+          <div class="type-icon-wrapper video">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect width="14" height="12" x="2" y="6" rx="2" ry="2"/></svg>
+          </div>
+          <div class="type-info">
+            <div class="type-title">视频</div>
+            <div class="type-desc">发布短视频、中视频</div>
+          </div>
+        </div>
+
+        <div 
+          class="type-card image-card" 
+          :class="{ active: contentType === 'image' }" 
+          @click="contentType = 'image'"
+        >
+          <div class="type-icon-wrapper image">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+          </div>
+          <div class="type-info">
+            <div class="type-title">图文</div>
+            <div class="type-desc">多张图片加文本描述</div>
+          </div>
+        </div>
+
+        <div 
+          class="type-card article-card" 
+          :class="{ active: contentType === 'article' }" 
+          @click="contentType = 'article'"
+        >
+          <div class="type-icon-wrapper article">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
+          </div>
+          <div class="type-info">
+            <div class="type-title">文章</div>
+            <div class="type-desc">长文字、排版与封面图</div>
+          </div>
+        </div>
+      </div>
       <el-divider />
 
       <h2 class="section-title">② 标题与内容</h2>
@@ -610,10 +647,15 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
         </el-form-item>
 
         <el-form-item v-if="contentType !== 'article'" label="素材">
-          <el-button @click="pickMediaFiles">选择文件</el-button>
-          <span v-if="mediaFiles.length > 0" style="margin-left:8px; color:#909399; font-size:12px;">
-            已选择 {{ mediaFiles.length }} 个文件
-          </span>
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; width: 100%;">
+            <el-button @click="pickMediaFiles">选择文件</el-button>
+            <span v-if="mediaFiles.length > 0" style="color:#64748b; font-size:12px; font-weight: 500;">
+              已选择 {{ mediaFiles.length }} 个文件
+            </span>
+            <span v-else style="color:#94a3b8; font-size:12px; font-weight: 500;">
+              {{ contentType === 'video' ? '支持 mp4, mov, avi, mkv, flv, webm 等视频格式' : '支持 jpg, jpeg, png, webp, gif, bmp 等图片格式' }}
+            </span>
+          </div>
           <div class="file-list" v-if="mediaFiles.length > 0">
             <div v-for="(f, idx) in mediaFiles" :key="idx" class="file-item">
               <span class="file-name">{{ f }}</span>
@@ -624,10 +666,15 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
 
         <!-- 文章模式：封面图片上传（抖音必填） -->
         <el-form-item v-if="contentType === 'article'" label="封面">
-          <el-button @click="pickArticleCover">选择封面图片</el-button>
-          <span v-if="mediaFiles.length > 0" style="margin-left:8px; color:#909399; font-size:12px;">
-            已选择 {{ mediaFiles.length }} 张图片（第 1 张作为封面）
-          </span>
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; width: 100%;">
+            <el-button @click="pickArticleCover">选择封面图片</el-button>
+            <span v-if="mediaFiles.length > 0" style="color:#64748b; font-size:12px; font-weight: 500;">
+              已选择 {{ mediaFiles.length }} 张图片（第 1 张作为封面）
+            </span>
+            <span v-else style="color:#94a3b8; font-size:12px; font-weight: 500;">
+              支持 jpg, jpeg, png, webp 等图片格式
+            </span>
+          </div>
           <div class="article-cover-hint" v-if="hasDouyinAccount">
             <span style="color:#F56C6C;">⚠️ 已选抖音账号：封面为必填项</span>
           </div>
@@ -640,8 +687,15 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
         </el-form-item>
 
         <el-form-item v-if="contentType === 'video'" label="封面">
-          <el-button @click="pickCover">选择封面</el-button>
-          <span v-if="coverImage" style="margin-left:8px; color:#909399; font-size:12px;">{{ coverImage }}</span>
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; width: 100%;">
+            <el-button @click="pickCover">选择封面</el-button>
+            <span v-if="coverImage" style="color:#64748b; font-size:12px; font-weight: 500;">
+              {{ coverImage }}
+            </span>
+            <span v-else style="color:#94a3b8; font-size:12px; font-weight: 500;">
+              支持 jpg, jpeg, png, webp 等图片格式
+            </span>
+          </div>
         </el-form-item>
 
         <el-form-item label="描述">
@@ -727,7 +781,9 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
               return meta.contentLimits?.content ? `正文最多 ${meta.contentLimits.content} 字` : '';
             })() }}
           </div>
-          <div v-if="selectedIds[a.id]" class="selected-mark">✓</div>
+          <div class="selection-indicator" :class="{ selected: !!selectedIds[a.id] }">
+            <span class="check-icon" v-if="selectedIds[a.id]">✓</span>
+          </div>
         </div>
       </div>
 
@@ -845,106 +901,420 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
 </template>
 
 <style scoped>
-.publish-page {
-  padding: 16px;
+/* 美化发布类型选择卡片 */
+.publish-type-selector {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.type-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  background: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: var(--glow-shadow-sm);
+}
+
+.type-card:not(.active):hover {
+  transform: translateY(-2px);
+  border-color: rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.03);
+}
+
+.type-card.active:hover {
+  transform: translateY(-2px);
+}
+
+/* 视频卡片激活样式 */
+.type-card.video-card.active {
+  border-color: #f97316;
+  background: rgba(249, 115, 22, 0.07);
+  box-shadow: 0 8px 20px rgba(249, 115, 22, 0.12);
+}
+.type-card.video-card.active .type-title {
+  color: #f97316;
+}
+
+/* 图文卡片激活样式 */
+.type-card.image-card.active {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.07);
+  box-shadow: 0 8px 20px rgba(16, 185, 129, 0.12);
+}
+.type-card.image-card.active .type-title {
+  color: #10b981;
+}
+
+/* 文章卡片激活样式 */
+.type-card.article-card.active {
+  border-color: #6366f1;
+  background: rgba(99, 102, 241, 0.07);
+  box-shadow: 0 8px 20px rgba(99, 102, 241, 0.12);
+}
+.type-card.article-card.active .type-title {
+  color: #6366f1;
+}
+
+.type-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  font-size: 20px;
+  transition: all 0.3s ease;
+}
+
+/* 视频图标背景和颜色 */
+.type-icon-wrapper.video {
+  background: rgba(249, 115, 22, 0.08);
+  color: #f97316;
+}
+.type-card.active .type-icon-wrapper.video {
+  background: #f97316;
+  color: #ffffff;
+}
+
+/* 图文图标背景和颜色 */
+.type-icon-wrapper.image {
+  background: rgba(16, 185, 129, 0.08);
+  color: #10b981;
+}
+.type-card.active .type-icon-wrapper.image {
+  background: #10b981;
+  color: #ffffff;
+}
+
+/* 文章图标背景和颜色 */
+.type-icon-wrapper.article {
+  background: rgba(99, 102, 241, 0.08);
+  color: #6366f1;
+}
+.type-card.active .type-icon-wrapper.article {
+  background: #6366f1;
+  color: #ffffff;
+}
+
+.type-info {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 2px;
 }
-.panel {
-  background: #fff;
-  border-radius: 8px;
-  padding: 16px 20px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-}
-.section-title {
+
+.type-title {
   font-size: 14px;
-  font-weight: 600;
-  margin: 0 0 12px;
-  color: #303133;
+  font-weight: 700;
+  color: #1e293b;
+  transition: color 0.3s ease;
 }
-.file-list { margin-top: 8px; max-height: 160px; overflow-y: auto; }
-.file-item { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 12px; color: #606266; }
-.file-name { word-break: break-all; }
-.account-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-.hint { color: #909399; font-size: 12px; }
-.account-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+
+/* 已集成到各卡片激活样式中 */
+
+.type-desc {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.publish-page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.file-list {
+  margin-top: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.file-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 13px;
+  color: #475569;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.02);
+}
+
+.file-item:last-child {
+  border-bottom: none;
+}
+
+.file-name {
+  word-break: break-all;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.account-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.hint {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  margin-left: auto;
+}
+
+/* 账号卡片网络 */
+.account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+}
+
 .account-card {
-  border: 1px solid #e4e7ed;
-  border-radius: 6px;
-  padding: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  border-radius: 12px;
+  padding: 16px;
   cursor: pointer;
   position: relative;
-  transition: all 0.15s;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  background: rgba(255, 255, 255, 0.85);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: var(--glow-shadow-sm);
 }
-.account-card:hover { border-color: #409eff; background: #f4faff; }
-.account-card.selected { border-color: #409eff; background: #ecf5ff; border-width: 2px; padding: 9px; }
-.platform-tag { font-size: 12px; color: #909399; margin-bottom: 4px; }
-.nickname { font-size: 14px; font-weight: 500; color: #303133; }
-.account-id { font-size: 11px; color: #c0c4cc; margin-top: 4px; word-break: break-all; }
-.selected-mark { position: absolute; top: 8px; right: 10px; color: #409eff; font-weight: bold; }
-.submit-row { display: flex; gap: 10px; align-items: center; }
 
-/* ======== 字数限制提示 ======== */
-.kuaishou-hint {
-  font-size: 12px;
-  color: #e6a23c;
-  margin-top: 4px;
-  background: #fdf6ec;
-  border-left: 3px solid #e6a23c;
-  padding: 6px 10px;
-  border-radius: 3px;
+.account-card:hover {
+  border-color: rgba(99, 102, 241, 0.22);
+  background: rgba(99, 102, 241, 0.04);
+  transform: translateY(-4px);
+  box-shadow: 0 12px 28px -6px rgba(99, 102, 241, 0.12), 0 4px 12px -8px rgba(0, 0, 0, 0.04);
 }
-.over-limit-hint {
-  font-size: 12px;
-  color: #f56c6c;
-  margin-top: 4px;
-  background: #fef0f0;
-  border-left: 3px solid #f56c6c;
-  padding: 6px 10px;
-  border-radius: 3px;
+
+.account-card.selected:hover {
+  border-color: #4f46e5;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.04) 0%, #ffffff 100%);
+  box-shadow: 0 16px 36px -6px rgba(99, 102, 241, 0.22), 0 4px 16px -8px rgba(0, 0, 0, 0.08);
 }
-.limits-hint {
+
+.account-card.selected {
+  border-color: #6366f1;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.04) 0%, #ffffff 100%);
+  border-width: 1px;
+  box-shadow: 0 10px 20px -10px rgba(99, 102, 241, 0.15), var(--glow-shadow-md);
+}
+
+.platform-tag {
   font-size: 11px;
-  color: #909399;
-  margin-top: 4px;
+  color: #64748b;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
+
+.nickname {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e293b;
+  margin-top: 2px;
+}
+
+.account-id {
+  font-size: 11px;
+  color: #94a3b8;
+  word-break: break-all;
+  font-family: monospace;
+}
+
+.selection-indicator {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid #cbd5e1;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-sizing: border-box;
+}
+
+.account-card:hover .selection-indicator:not(.selected) {
+  border-color: #6366f1;
+  background: rgba(99, 102, 241, 0.05);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+  transform: scale(1.05);
+}
+
+.selection-indicator.selected {
+  border-color: #6366f1;
+  background: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+.selection-indicator .check-icon {
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 800;
+  transform: scale(0.85);
+  display: inline-block;
+  line-height: 1;
+}
+
+.submit-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+/* ======== 字数限制提示美化（清透现代通知栏） ======== */
+.kuaishou-hint,
+.over-limit-hint,
 .min-content-hint {
   font-size: 12px;
-  color: #409eff;
-  margin-top: 4px;
-  background: #ecf5ff;
-  border-left: 3px solid #409eff;
-  padding: 6px 10px;
-  border-radius: 3px;
-}
-.content-limit-tag {
-  font-size: 11px;
-  color: #909399;
-  margin-top: 4px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-/* 调试日志 */
-.debug-hint { font-size: 12px; color: #909399; margin-bottom: 6px; }
-.debug-actions { margin-bottom: 10px; display: flex; gap: 8px; }
-.debug-log {
-  background: #1e1e1e;
-  color: #d4d4d4;
-  padding: 10px;
-  border-radius: 4px;
-  max-height: 420px;
-  overflow-y: auto;
-  font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 12px;
-  line-height: 1.7;
+.kuaishou-hint {
+  color: #d97706;
+  background: #fef3c7;
+  border: 1px solid rgba(217, 119, 6, 0.1);
 }
-.log-line { display: flex; gap: 6px; flex-wrap: wrap; }
-.log-line.warn { color: #e5c07b; }
-.log-line.error { color: #f48771; }
-.log-time { color: #858585; flex-shrink: 0; }
-.log-level { color: #6a9955; flex-shrink: 0; }
-.log-msg { color: #d4d4d4; }
-.log-data { color: #858585; margin-left: 4px; word-break: break-all; }
-.empty { padding: 20px 0; }
-.task-meta { display: flex; gap: 20px; color: #606266; font-size: 13px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+
+.over-limit-hint {
+  color: #dc2626;
+  background: #fee2e2;
+  border: 1px solid rgba(220, 38, 38, 0.1);
+}
+
+.min-content-hint {
+  color: #2563eb;
+  background: #dbeafe;
+  border: 1px solid rgba(37, 99, 235, 0.1);
+}
+
+.limits-hint {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 6px;
+  font-weight: 500;
+}
+
+.content-limit-tag {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 4px;
+  font-weight: 500;
+}
+
+.article-cover-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* 调试日志终端 */
+.debug-hint {
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 8px;
+}
+
+.debug-actions {
+  margin-bottom: 12px;
+  display: flex;
+  gap: 8px;
+}
+
+.debug-log {
+  background: #0f172a;
+  color: #cbd5e1;
+  padding: 16px;
+  border-radius: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.8;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.log-line {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.log-line:last-child {
+  border-bottom: none;
+}
+
+.log-line.warn {
+  color: #f59e0b;
+}
+
+.log-line.error {
+  color: #ef4444;
+}
+
+.log-time {
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.log-level {
+  color: #10b981;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.log-msg {
+  color: #f1f5f9;
+}
+
+.log-data {
+  color: #94a3b8;
+  margin-left: 4px;
+  word-break: break-all;
+  font-size: 11px;
+}
+
+.empty {
+  padding: 20px 0;
+}
+
+.task-meta {
+  display: flex;
+  gap: 20px;
+  color: #475569;
+  font-size: 13px;
+  margin-bottom: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-weight: 600;
+}
 </style>
