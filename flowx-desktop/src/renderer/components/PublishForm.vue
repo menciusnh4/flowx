@@ -837,19 +837,57 @@ function iconOf(platform?: string): string {
   <div class="publish-form">
     <div class="panel">
       <h2 class="section-title">① 选择发布类型</h2>
-      <el-radio-group v-model="contentType" size="default" @change="notifyChange">
-        <el-radio-button value="video">视频</el-radio-button>
-        <el-radio-button value="image">图文</el-radio-button>
-        <el-radio-button value="article">文章</el-radio-button>
-      </el-radio-group>
+      <div class="publish-type-selector">
+        <div 
+          class="type-card video-card" 
+          :class="{ active: contentType === 'video' }" 
+          @click="contentType = 'video'; notifyChange();"
+        >
+          <div class="type-icon-wrapper video">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect width="14" height="12" x="2" y="6" rx="2" ry="2"/></svg>
+          </div>
+          <div class="type-info">
+            <div class="type-title">视频</div>
+            <div class="type-desc">发布短视频、中视频</div>
+          </div>
+        </div>
+
+        <div 
+          class="type-card image-card" 
+          :class="{ active: contentType === 'image' }" 
+          @click="contentType = 'image'; notifyChange();"
+        >
+          <div class="type-icon-wrapper image">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+          </div>
+          <div class="type-info">
+            <div class="type-title">图文</div>
+            <div class="type-desc">多张图片加文本描述</div>
+          </div>
+        </div>
+
+        <div 
+          class="type-card article-card" 
+          :class="{ active: contentType === 'article' }" 
+          @click="contentType = 'article'; notifyChange();"
+        >
+          <div class="type-icon-wrapper article">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
+          </div>
+          <div class="type-info">
+            <div class="type-title">文章</div>
+            <div class="type-desc">长文字、排版与封面图</div>
+          </div>
+        </div>
+      </div>
       <el-divider />
 
       <div class="section-header">
         <h2 class="section-title">② 标题与内容</h2>
-        <el-button size="small" text type="danger" @click="clearContentSection">清空内容</el-button>
+        <el-button size="small" class="clear-content-btn" @click="clearContentSection">🧹 清空内容</el-button>
       </div>
       <el-form label-width="80px" label-position="right">
-        <el-form-item label="标题">
+        <el-form-item label="标题" class="form-item-title">
           <el-input
             v-model="title"
             :placeholder="titlePlaceholder"
@@ -859,10 +897,13 @@ function iconOf(platform?: string): string {
           />
         </el-form-item>
 
-        <el-form-item v-if="contentType !== 'article'" label="素材">
+        <el-form-item v-if="contentType !== 'article'" label="素材" class="form-item-media">
           <el-button @click="pickMediaFiles">选择文件</el-button>
           <span v-if="mediaFiles.length > 0" style="margin-left:8px; color:#909399; font-size:12px;">
             已选择 {{ mediaFiles.length }} 个文件
+          </span>
+          <span v-else style="margin-left:8px; color:#909399; font-size:12px;">
+            {{ contentType === 'video' ? '（支持 mp4, mov, avi, mkv, flv, webm 等视频格式）' : '（支持 jpg, jpeg, png, webp, gif, bmp 等图片格式）' }}
           </span>
           <div class="file-list" v-if="mediaFiles.length > 0">
             <div v-for="(f, idx) in mediaFiles" :key="idx" class="file-item">
@@ -873,7 +914,7 @@ function iconOf(platform?: string): string {
         </el-form-item>
 
         <!-- 文章模式：封面图片上传 -->
-        <el-form-item v-if="contentType === 'article'" label="封面">
+        <el-form-item v-if="contentType === 'article'" label="封面" class="form-item-cover">
           <div class="article-cover-actions">
             <el-button @click="pickArticleCover">选择封面图片</el-button>
             <el-button
@@ -885,6 +926,9 @@ function iconOf(platform?: string): string {
             >清空图片</el-button>
             <span v-if="mediaFiles.length > 0" style="color:#909399; font-size:12px;">
               已选择 {{ mediaFiles.length }} 张图片（第 1 张作为封面）
+            </span>
+            <span v-else style="color:#909399; font-size:12px; margin-left:8px;">
+              （支持 jpg, jpeg, png, webp 等图片格式，首图将自动被设为封面）
             </span>
           </div>
           <div class="article-cover-hint" v-if="hasDouyinAccount">
@@ -905,12 +949,13 @@ function iconOf(platform?: string): string {
           </div>
         </el-form-item>
 
-        <el-form-item v-if="contentType === 'video'" label="封面">
+        <el-form-item v-if="contentType === 'video'" label="封面" class="form-item-cover">
           <el-button @click="pickCover">选择封面</el-button>
           <span v-if="coverImage" style="margin-left:8px; color:#909399; font-size:12px;">{{ coverImage }}</span>
+          <span v-else style="margin-left:8px; color:#909399; font-size:12px;">（可选，支持 jpg, jpeg, png, webp 等图片格式）</span>
         </el-form-item>
 
-        <el-form-item label="描述">
+        <el-form-item label="描述" class="form-item-desc">
           <el-input
             ref="contentTextareaRef"
             v-model="content"
@@ -944,7 +989,7 @@ function iconOf(platform?: string): string {
         </el-form-item>
 
         <!-- 文章模式：文章摘要 -->
-        <el-form-item v-if="contentType === 'article'" label="摘要">
+        <el-form-item v-if="contentType === 'article'" label="摘要" class="form-item-summary">
           <el-input
             v-model="summary"
             type="textarea"
@@ -956,30 +1001,37 @@ function iconOf(platform?: string): string {
           />
         </el-form-item>
 
-        <el-form-item label="话题">
+        <el-form-item label="话题" class="form-item-tags">
           <el-input v-model="tagsRaw" placeholder="多个话题用空格或逗号分隔，例如：美食探店 上海生活" @input="notifyChange" />
         </el-form-item>
       </el-form>
 
       <el-divider />
 
-      <h2 class="section-title">③ 选择发布账号</h2>
-      <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-        <span style="font-size: 13px; color: #606266;">分类筛选：</span>
-        <el-select v-model="publishFilterCategoryId" placeholder="全部分类" clearable style="width: 140px" size="small">
-          <el-option label="全部分类" value="" />
-          <el-option label="未分类" value="unclassified" />
-          <el-option v-for="cat in accountStore.categories" :key="cat.id" :label="cat.name" :value="cat.id" />
-        </el-select>
+      <div class="section-header">
+        <h2 class="section-title">③ 选择发布账号</h2>
+        <div class="category-filter">
+          <span class="filter-label">分类：</span>
+          <el-select v-model="publishFilterCategoryId" placeholder="全部分类" clearable style="width: 120px" size="small">
+            <el-option label="全部分类" value="" />
+            <el-option label="未分类" value="unclassified" />
+            <el-option v-for="cat in accountStore.categories" :key="cat.id" :label="cat.name" :value="cat.id" />
+          </el-select>
+        </div>
       </div>
+
       <div class="account-actions">
-        <el-button size="small" @click="selectAll">全选可见</el-button>
-        <el-button size="small" @click="clearSelection">清空</el-button>
-        <span class="hint">已选 {{ getSelectedIds().length }} / {{ visibleAccounts.length }}</span>
+        <div class="left-actions">
+          <el-button size="small" class="action-btn" @click="selectAll">全选可见</el-button>
+          <el-button size="small" class="action-btn" @click="clearSelection">清空</el-button>
+        </div>
+        <div class="right-info">
+          <span class="selection-hint">已选 <strong class="highlight">{{ getSelectedIds().length }}</strong> / {{ visibleAccounts.length }}</span>
+        </div>
       </div>
 
       <div v-if="visibleAccounts.length === 0" class="empty">
-        <el-empty description="没有可用账号，请先在账号管理授权" />
+        <el-empty :image-size="80" description="没有可用账号，请先在账号管理授权" />
       </div>
 
       <div v-else class="account-grid">
@@ -1040,7 +1092,7 @@ function iconOf(platform?: string): string {
           {{ submitText || (publishTimeType === 'scheduled' ? '定时发布到' : '一键发布到') + ' ' + getSelectedIds().length + ' 个账号' }}
         </el-button>
         <el-button type="warning" :loading="submitting" :disabled="submitting || visibleAccounts.length === 0" @click="submitTestPublish">
-          🔍 发布测试
+          发布测试
         </el-button>
         <el-button :disabled="submitting" @click="clearForm">清空</el-button>
         <slot name="footer-extra"></slot>
@@ -1056,57 +1108,192 @@ function iconOf(platform?: string): string {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  gap: 10px;
 }
+
 .panel {
-  background: #fff;
-  border-radius: 8px;
-  padding: 16px 20px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  background: var(--glass-bg, #ffffff);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: var(--glass-border, 1px solid rgba(0, 0, 0, 0.05));
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: var(--glow-shadow-sm, 0 4px 20px -2px rgba(0, 0, 0, 0.04));
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
 }
+
 .section-title {
-  font-size: 14px;
-  font-weight: 600;
-  margin: 0 0 12px;
-  color: #303133;
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0 0 16px 0;
+  color: #0f172a;
 }
+
 .section-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
+
 .section-header .section-title {
   margin: 0;
 }
+
+/* 美化发布类型选择卡片 */
+.publish-type-selector {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.type-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  background: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.type-card:not(.active):hover {
+  transform: translateY(-2px);
+  border-color: rgba(99, 102, 241, 0.15);
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 8px 16px rgba(99, 102, 241, 0.04);
+}
+
+.type-card.active:hover {
+  transform: translateY(-2px);
+}
+
+/* 视频卡片激活样式 */
+.type-card.video-card.active {
+  border-color: #f97316;
+  background: rgba(249, 115, 22, 0.07);
+  box-shadow: 0 8px 20px rgba(249, 115, 22, 0.12);
+}
+.type-card.video-card.active .type-title {
+  color: #f97316;
+}
+
+/* 图文卡片激活样式 */
+.type-card.image-card.active {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.07);
+  box-shadow: 0 8px 20px rgba(16, 185, 129, 0.12);
+}
+.type-card.image-card.active .type-title {
+  color: #10b981;
+}
+
+/* 文章卡片激活样式 */
+.type-card.article-card.active {
+  border-color: #6366f1;
+  background: rgba(99, 102, 241, 0.07);
+  box-shadow: 0 8px 20px rgba(99, 102, 241, 0.12);
+}
+.type-card.article-card.active .type-title {
+  color: #6366f1;
+}
+
+.type-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  font-size: 20px;
+  transition: all 0.3s ease;
+}
+
+/* 视频图标背景和颜色 */
+.type-icon-wrapper.video {
+  background: rgba(249, 115, 22, 0.08);
+  color: #f97316;
+}
+.type-card.active .type-icon-wrapper.video {
+  background: #f97316;
+  color: #ffffff;
+}
+
+/* 图文图标背景和颜色 */
+.type-icon-wrapper.image {
+  background: rgba(16, 185, 129, 0.08);
+  color: #10b981;
+}
+.type-card.active .type-icon-wrapper.image {
+  background: #10b981;
+  color: #ffffff;
+}
+
+/* 文章图标背景和颜色 */
+.type-icon-wrapper.article {
+  background: rgba(99, 102, 241, 0.08);
+  color: #6366f1;
+}
+.type-card.active .type-icon-wrapper.article {
+  background: #6366f1;
+  color: #ffffff;
+}
+
+.type-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.type-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e293b;
+  transition: color 0.3s ease;
+}
+
+.type-desc {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+/* 封面与素材图片预览 */
 .article-cover-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
+
 .image-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 12px;
   margin-top: 12px;
 }
+
 .image-item {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
+
 .image-thumb {
   position: relative;
   width: 100%;
   padding-top: 100%;
-  border-radius: 6px;
+  border-radius: 8px;
   overflow: hidden;
-  background: #f5f7fa;
-  border: 1px solid #e4e7ed;
+  background: #f1f5f9;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.02);
 }
+
 .image-thumb img {
   position: absolute;
   top: 0;
@@ -1115,6 +1302,7 @@ function iconOf(platform?: string): string {
   height: 100%;
   object-fit: cover;
 }
+
 .image-loading {
   position: absolute;
   top: 0;
@@ -1124,98 +1312,541 @@ function iconOf(platform?: string): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  color: #909399;
-  background: #f5f7fa;
+  font-size: 11px;
+  color: #64748b;
+  background: #f1f5f9;
 }
+
 .cover-badge {
   position: absolute;
   top: 6px;
   left: 6px;
-  background: #409eff;
+  background: #6366f1;
   color: #fff;
-  font-size: 11px;
+  font-size: 10px;
   padding: 2px 6px;
-  border-radius: 3px;
-  font-weight: 500;
+  border-radius: 4px;
+  font-weight: 700;
+  box-shadow: 0 2px 6px rgba(99, 102, 241, 0.3);
 }
+
 .image-actions {
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-size: 12px;
 }
+
 .image-index {
-  color: #909399;
+  color: #64748b;
   font-size: 11px;
+  font-weight: 500;
 }
-.file-list { margin-top: 8px; max-height: 160px; overflow-y: auto; }
-.file-item { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 12px; color: #606266; }
-.file-name { word-break: break-all; }
-.account-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-.hint { color: #909399; font-size: 12px; }
-.account-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
-.account-card {
-  border: 1px solid #e4e7ed;
+
+.file-list {
+  margin-top: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.5);
+  box-sizing: border-box;
+}
+
+.file-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 13px;
+  color: #475569;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.02);
+}
+
+.file-item:last-child {
+  border-bottom: none;
+}
+
+.file-name {
+  word-break: break-all;
+  font-weight: 500;
+}
+
+.category-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.category-filter .filter-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.account-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+  margin-bottom: 12px;
+}
+
+.left-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.left-actions .action-btn {
   border-radius: 6px;
-  padding: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  height: 24px;
+  border-color: rgba(15, 23, 42, 0.08);
+  background: #ffffff;
+  color: #475569;
+  transition: all 0.25s ease;
+}
+
+.left-actions .action-btn:hover {
+  border-color: #6366f1;
+  color: #6366f1;
+  background: rgba(99, 102, 241, 0.04);
+}
+
+.right-info {
+  display: flex;
+  align-items: center;
+}
+
+.selection-hint {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.selection-hint .highlight {
+  color: #6366f1;
+  font-weight: 700;
+}
+
+/* 账号选择网格与卡片 */
+.account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.account-card {
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  border-radius: 12px;
+  padding: 16px;
   cursor: pointer;
   position: relative;
-  transition: all 0.15s;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  background: rgba(255, 255, 255, 0.85);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: var(--glow-shadow-sm, 0 2px 8px rgba(0, 0, 0, 0.04));
 }
-.account-card:hover { border-color: #409eff; background: #f4faff; }
-.account-card.selected { border-color: #409eff; background: #ecf5ff; border-width: 2px; padding: 9px; }
-.platform-tag { font-size: 12px; color: #909399; margin-bottom: 4px; }
-.nickname { font-size: 14px; font-weight: 500; color: #303133; }
-.account-id { font-size: 11px; color: #c0c4cc; margin-top: 4px; word-break: break-all; }
-.selected-mark { position: absolute; top: 8px; right: 10px; color: #409eff; font-weight: bold; }
-.submit-row { display: flex; gap: 10px; align-items: center; }
+
+.account-card:hover {
+  border-color: rgba(99, 102, 241, 0.22);
+  background: rgba(99, 102, 241, 0.04);
+  transform: translateY(-4px);
+  box-shadow: 0 12px 28px -6px rgba(99, 102, 241, 0.12), 0 4px 12px -8px rgba(0, 0, 0, 0.04);
+}
+
+.account-card.selected:hover {
+  border-color: #4f46e5;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.04) 0%, #ffffff 100%);
+  box-shadow: 0 16px 36px -6px rgba(99, 102, 241, 0.22), 0 4px 16px -8px rgba(0, 0, 0, 0.08);
+}
+
+.account-card.selected {
+  border-color: #6366f1;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.04) 0%, #ffffff 100%);
+  border-width: 1px;
+  box-shadow: 0 10px 20px -10px rgba(99, 102, 241, 0.15), var(--glow-shadow-md, 0 4px 12px rgba(99, 102, 241, 0.08));
+}
+
+.platform-tag {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.nickname {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e293b;
+  margin-top: 2px;
+}
+
+.account-id {
+  font-size: 11px;
+  color: #94a3b8;
+  word-break: break-all;
+  font-family: monospace;
+}
+
+.selected-mark {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #6366f1;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
 .form-footer {
   flex-shrink: 0;
-  padding: 12px 20px;
-  border-top: 1px solid #e4e7ed;
-  background: #fff;
+  padding: 16px 20px;
+  border: 1px solid rgba(15, 23, 42, 0.05);
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: 14px;
   display: flex;
+  justify-content: center;
+  box-shadow: 0 10px 30px -10px rgba(99, 102, 241, 0.08), 0 4px 12px -4px rgba(0, 0, 0, 0.03);
+  margin: 0px 0 16px 0;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.submit-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+/* 按钮样式微调，让它们在排在一起时更精致 */
+.submit-row :deep(.el-button) {
+  border-radius: 10px;
+  font-weight: 600;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  padding: 10px 18px;
+  height: auto;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
 }
 
-/* 字数限制提示 */
-.kuaishou-hint {
-  font-size: 12px;
-  color: #e6a23c;
-  margin-top: 4px;
-  background: #fdf6ec;
-  border-left: 3px solid #e6a23c;
-  padding: 6px 10px;
-  border-radius: 3px;
+.submit-row :deep(.el-button--primary) {
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+  border: none;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.3);
 }
-.over-limit-hint {
-  font-size: 12px;
-  color: #f56c6c;
-  margin-top: 4px;
-  background: #fef0f0;
-  border-left: 3px solid #f56c6c;
-  padding: 6px 10px;
-  border-radius: 3px;
+.submit-row :deep(.el-button--primary:hover) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
 }
-.limits-hint {
-  font-size: 11px;
-  color: #909399;
-  margin-top: 4px;
+
+.submit-row :deep(.el-button--warning) {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  border: none;
+  box-shadow: 0 4px 14px rgba(245, 158, 11, 0.25);
+  color: #ffffff;
 }
+.submit-row :deep(.el-button--warning:hover) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(245, 158, 11, 0.4);
+}
+
+@media (max-width: 768px) {
+  .form-footer {
+    padding: 12px 16px;
+    margin: 0px 0 12px 0;
+    border-radius: 12px;
+  }
+  .submit-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    width: 100%;
+  }
+  /* 让发布主按钮独占一行，显得重点突出 */
+  .submit-row :deep(.el-button:first-child) {
+    grid-column: span 2;
+    padding: 12px;
+    font-size: 14px;
+  }
+  .submit-row :deep(.el-button) {
+    width: 100%;
+    margin: 0 !important;
+    padding: 10px;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .submit-row {
+    grid-template-columns: 1fr;
+  }
+  .submit-row :deep(.el-button:first-child) {
+    grid-column: span 1;
+  }
+}
+
+/* ======== 字数限制提示美化（清透现代通知栏） ======== */
+.kuaishou-hint,
+.over-limit-hint,
 .min-content-hint {
   font-size: 12px;
-  color: #409eff;
-  margin-top: 4px;
-  background: #ecf5ff;
-  border-left: 3px solid #409eff;
-  padding: 6px 10px;
-  border-radius: 3px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
+
+.kuaishou-hint {
+  color: #d97706;
+  background: #fef3c7;
+  border: 1px solid rgba(217, 119, 6, 0.1);
+}
+
+.over-limit-hint {
+  color: #dc2626;
+  background: #fee2e2;
+  border: 1px solid rgba(220, 38, 38, 0.1);
+}
+
+.min-content-hint {
+  color: #2563eb;
+  background: #dbeafe;
+  border: 1px solid rgba(37, 99, 235, 0.1);
+}
+
+.limits-hint {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 6px;
+  font-weight: 500;
+}
+
 .content-limit-tag {
   font-size: 11px;
-  color: #909399;
+  color: #64748b;
   margin-top: 4px;
+  font-weight: 500;
 }
-.empty { padding: 20px 0; }
+
+.empty {
+  padding: 10px 0;
+}
+.empty :deep(.el-empty) {
+  padding: 10px 0;
+}
+.empty :deep(.el-empty__description p) {
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.clear-content-btn {
+  border: 1px solid rgba(239, 68, 68, 0.15) !important;
+  background: rgba(239, 68, 68, 0.04) !important;
+  color: #ef4444 !important;
+  font-weight: 700;
+  font-size: 11px;
+  border-radius: 6px;
+  padding: 4px 10px;
+  height: 24px;
+  transition: all 0.25s ease;
+}
+
+.clear-content-btn:hover {
+  background: #ef4444 !important;
+  color: #ffffff !important;
+  border-color: #ef4444 !important;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
+}
+
+/* ======== 表单标题与配置内容全线高级感美化 ======== */
+:deep(.el-form-item) {
+  margin-bottom: 24px !important;
+}
+
+/* 美化 Element Plus Label 宽度和右对齐 */
+:deep(.el-form-item__label) {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  color: #334155 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  padding-right: 12px !important;
+  box-sizing: border-box !important;
+}
+
+/* 仅在特定配置项的 label 上改为左对齐，并置为 inline-flex 布局，文字与图标居中 */
+:deep(.form-item-title .el-form-item__label),
+:deep(.form-item-media .el-form-item__label),
+:deep(.form-item-cover .el-form-item__label),
+:deep(.form-item-desc .el-form-item__label),
+:deep(.form-item-summary .el-form-item__label),
+:deep(.form-item-tags .el-form-item__label) {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  justify-content: flex-start !important;
+  display: inline-flex !important;
+  align-items: center !important; /* 强制图标与文字 100% 垂直中线咬合 */
+  height: auto !important;
+  line-height: normal !important;
+}
+
+/* 统一的圆角矩形小图标，作为 Label 内不脱离文档流的常规 flex 元素排布，天然完美垂直居中 */
+:deep(.form-item-title .el-form-item__label)::before,
+:deep(.form-item-media .el-form-item__label)::before,
+:deep(.form-item-cover .el-form-item__label)::before,
+:deep(.form-item-desc .el-form-item__label)::before,
+:deep(.form-item-summary .el-form-item__label)::before,
+:deep(.form-item-tags .el-form-item__label)::before {
+  content: '';
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  margin-right: 8px; /* 直接通过右外边距拉开 8px 与字体的间距 */
+  font-size: 13px;
+  font-weight: 900;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
+  transition: all 0.25s ease;
+  flex-shrink: 0;
+}
+
+/* 精准为不同类目渲染底色和图标 */
+:deep(.form-item-title .el-form-item__label)::before {
+  content: 'T';
+  background: rgba(99, 102, 241, 0.07);
+  color: #6366f1;
+  border: 1px solid rgba(99, 102, 241, 0.1);
+}
+
+:deep(.form-item-media .el-form-item__label)::before {
+  content: '📁';
+  background: rgba(56, 189, 248, 0.07);
+  color: #0ea5e9;
+  border: 1px solid rgba(56, 189, 248, 0.1);
+  font-size: 11px;
+}
+
+:deep(.form-item-cover .el-form-item__label)::before {
+  content: '🖼️';
+  background: rgba(16, 185, 129, 0.07);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.1);
+  font-size: 11px;
+}
+
+:deep(.form-item-desc .el-form-item__label)::before {
+  content: '📝';
+  background: rgba(245, 158, 11, 0.07);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.1);
+  font-size: 11px;
+}
+
+:deep(.form-item-tags .el-form-item__label)::before {
+  content: '#';
+  background: rgba(139, 92, 246, 0.07);
+  color: #8b5cf6;
+  border: 1px solid rgba(139, 92, 246, 0.1);
+  font-size: 13px;
+}
+
+:deep(.form-item-summary .el-form-item__label)::before {
+  content: '📄';
+  background: rgba(100, 116, 139, 0.07);
+  color: #64748b;
+  border: 1px solid rgba(100, 116, 139, 0.1);
+  font-size: 11px;
+}
+
+/* 升级输入框圆角与微光聚焦特效 */
+:deep(.el-input__wrapper),
+:deep(.el-textarea__inner) {
+  border-radius: 10px !important;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.04) inset !important;
+  border: none !important;
+  padding: 8px 14px !important;
+  background: #ffffff !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+:deep(.el-input__wrapper:hover),
+:deep(.el-textarea__inner:hover) {
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.2) inset !important;
+}
+
+:deep(.el-input__wrapper.is-focus),
+:deep(.el-textarea__inner:focus) {
+  box-shadow: 0 0 0 1px #6366f1 inset, 0 0 0 4px rgba(99, 102, 241, 0.12) !important;
+}
+
+/* 计数器精美扁平化 */
+:deep(.el-input__count) {
+  font-size: 10px !important;
+  color: #94a3b8 !important;
+  font-weight: 700 !important;
+  background: transparent !important;
+  bottom: 6px !important;
+}
+
+/* 全新胶囊上传选择按钮（微熏蓝紫） */
+:deep(.el-form-item__content .el-button) {
+  border-radius: 20px !important;
+  font-weight: 700 !important;
+  font-size: 11px !important;
+  padding: 8px 16px !important;
+  height: auto !important;
+  border: 1px solid rgba(99, 102, 241, 0.15) !important;
+  background: rgba(99, 102, 241, 0.03) !important;
+  color: #6366f1 !important;
+  transition: all 0.25s ease !important;
+}
+
+:deep(.el-form-item__content .el-button:hover) {
+  background: #6366f1 !important;
+  color: #ffffff !important;
+  border-color: #6366f1 !important;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2) !important;
+}
+
+/* 红色警告/清除按钮 */
+:deep(.el-form-item__content .el-button--danger) {
+  border: 1px solid rgba(239, 68, 68, 0.15) !important;
+  background: rgba(239, 68, 68, 0.04) !important;
+  color: #ef4444 !important;
+}
+
+:deep(.el-form-item__content .el-button--danger:hover) {
+  background: #ef4444 !important;
+  color: #ffffff !important;
+  border-color: #ef4444 !important;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2) !important;
+}
 </style>

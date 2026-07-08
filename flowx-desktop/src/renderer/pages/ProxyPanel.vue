@@ -8,64 +8,72 @@
         </el-button>
       </div>
 
-      <el-table v-loading="envStore.loading" :data="envStore.proxies" border stripe style="margin-top: 16px">
-        <el-table-column label="代理名称" prop="name" min-width="150" />
-        <el-table-column label="协议" prop="type" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.type === 'socks5' ? 'success' : 'info'" size="small">
+      <!-- 代理IP卡片网格流 -->
+      <div v-loading="envStore.loading" class="proxy-grid-flow">
+        <div v-for="row in envStore.proxies" :key="row.id" class="flow-proxy-card">
+          <!-- 头部：代理名称与协议标签 -->
+          <div class="proxy-card-header">
+            <h3 class="proxy-title">{{ row.name }}</h3>
+            <el-tag :type="row.type === 'socks5' ? 'success' : 'info'" size="small" effect="light" class="protocol-tag">
               {{ row.type.toUpperCase() }}
             </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="服务器地址" prop="host" min-width="180" />
-        <el-table-column label="端口" prop="port" width="90" />
-        <el-table-column label="认证用户名" prop="username" min-width="130">
-          <template #default="{ row }">
-            <span>{{ row.username || '—' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="200">
-          <template #default="{ row }">
-            <div class="status-cell">
-              <template v-if="testingIds.has(row.id)">
-                <el-icon class="loading-icon"><Loading /></el-icon>
-                <span class="status-text">测试中...</span>
-              </template>
-              <template v-else-if="testResults[row.id]">
-                <template v-if="testResults[row.id].ok">
-                  <el-tag type="success" size="small" effect="light">
-                    <el-icon><Check /></el-icon>
-                    可用
-                  </el-tag>
-                  <span class="latency-text">{{ testResults[row.id].latency }}ms</span>
+          </div>
+
+          <!-- 主体：服务器地址 -->
+          <div class="proxy-card-body">
+            <div class="address-box">
+              <span class="address-host">{{ row.host }}</span>
+              <span class="address-colon">:</span>
+              <span class="address-port">{{ row.port }}</span>
+            </div>
+            
+            <div class="auth-info" v-if="row.username">
+              <span class="info-label">用户名:</span>
+              <span class="info-val">{{ row.username }}</span>
+            </div>
+            
+            <!-- 状态测试结果 -->
+            <div class="proxy-status-cell">
+              <span class="info-label">代理状态:</span>
+              <div class="status-cell">
+                <template v-if="testingIds.has(row.id)">
+                  <el-icon class="loading-icon"><Loading /></el-icon>
+                  <span class="status-text">正在测试...</span>
+                </template>
+                <template v-else-if="testResults[row.id]">
+                  <template v-if="testResults[row.id].ok">
+                    <el-tag type="success" size="small" effect="light" class="status-tag">
+                      <el-icon><Check /></el-icon>&nbsp;可用
+                    </el-tag>
+                    <span class="latency-text">{{ testResults[row.id].latency }}ms</span>
+                  </template>
+                  <template v-else>
+                    <el-tooltip :content="testResults[row.id].error" placement="top">
+                      <el-tag type="danger" size="small" effect="light" class="status-tag">
+                        <el-icon><Close /></el-icon>&nbsp;不可用
+                      </el-tag>
+                    </el-tooltip>
+                  </template>
+                  <template v-if="testResults[row.id].outboundIp">
+                    <el-tooltip :content="'出口IP: ' + testResults[row.id].outboundIp" placement="top">
+                      <span class="ip-text">{{ testResults[row.id].outboundIp }}</span>
+                    </el-tooltip>
+                  </template>
                 </template>
                 <template v-else>
-                  <el-tooltip :content="testResults[row.id].error" placement="top">
-                    <el-tag type="danger" size="small" effect="light">
-                      <el-icon><Close /></el-icon>
-                      不可用
-                    </el-tag>
-                  </el-tooltip>
+                  <el-tag type="info" size="small" effect="plain" class="status-tag">未测试</el-tag>
                 </template>
-                <template v-if="testResults[row.id].outboundIp">
-                  <el-tooltip :content="'出口IP: ' + testResults[row.id].outboundIp" placement="top">
-                    <span class="ip-text">{{ testResults[row.id].outboundIp }}</span>
-                  </el-tooltip>
-                </template>
-              </template>
-              <template v-else>
-                <el-tag type="info" size="small" effect="plain">未测试</el-tag>
-              </template>
+              </div>
             </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="创建时间" width="160">
-          <template #default="{ row }">
-            {{ formatTime(row.createdAt) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
-          <template #default="{ row }">
+          </div>
+
+          <!-- 时间说明 -->
+          <div class="proxy-card-time">
+            <span>创建时间：{{ formatTime(row.createdAt) }}</span>
+          </div>
+
+          <!-- 底部操作按钮 -->
+          <div class="proxy-card-footer">
             <el-button
               size="small"
               type="success"
@@ -73,17 +81,21 @@
               :loading="testingIds.has(row.id)"
               @click="handleTest(asProxy(row).id)"
             >
-              测试
+              <el-icon><Refresh /></el-icon>&nbsp;测试连接
             </el-button>
-            <el-button size="small" type="primary" link @click="openEditDialog(asProxy(row))">编辑</el-button>
-            <el-popconfirm title="删除该代理，会同时解除所有关联环境的代理配置，确认删除？" @confirm="handleDelete(asProxy(row).id)">
+            <el-button size="small" type="primary" link @click="openEditDialog(asProxy(row))">
+              <el-icon><Edit /></el-icon>&nbsp;编辑
+            </el-button>
+            <el-popconfirm width="280" title="删除该代理，会同时解除所有关联环境的代理配置，确认删除？" @confirm="handleDelete(asProxy(row).id)">
               <template #reference>
-                <el-button size="small" type="danger" link>删除</el-button>
+                <el-button size="small" type="danger" link>
+                  <el-icon><Delete /></el-icon>&nbsp;删除
+                </el-button>
               </template>
             </el-popconfirm>
-          </template>
-        </el-table-column>
-      </el-table>
+          </div>
+        </div>
+      </div>
 
       <div v-if="envStore.proxies.length === 0 && !envStore.loading" class="empty-hint">
         暂无代理配置，点击右上角"添加代理 IP"创建。
@@ -126,7 +138,7 @@
 <script setup lang="ts">
 import { ref, onMounted, reactive } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Plus, Loading, Check, Close } from '@element-plus/icons-vue';
+import { Plus, Loading, Check, Close, Edit, Delete, Refresh } from '@element-plus/icons-vue';
 import { useEnvStore } from '../stores/env';
 import type { ProxyConfig, ProxyTestResult } from '../../types';
 
@@ -291,27 +303,27 @@ function formatTime(ts: number): string {
 }
 .loading-icon {
   animation: rotate 1s linear infinite;
-  color: #409eff;
+  color: #6366f1;
 }
 .status-text {
   font-size: 12px;
-  color: #909399;
+  color: #94a3b8;
+  font-weight: 600;
 }
 .latency-text {
   font-size: 12px;
-  color: #67c23a;
+  color: #10b981;
   font-family: monospace;
+  font-weight: 700;
 }
 .ip-text {
   font-size: 11px;
-  color: #909399;
+  color: #64748b;
   font-family: monospace;
-  max-width: 80px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  display: inline-block;
-  vertical-align: middle;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 500;
 }
 @keyframes rotate {
   from {
@@ -320,5 +332,146 @@ function formatTime(ts: number): string {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* 代理IP配置卡片网格流 */
+.proxy-grid-flow {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+  margin-top: 16px;
+}
+
+.flow-proxy-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: var(--glass-border);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: var(--glow-shadow-sm);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.flow-proxy-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--glow-shadow-lg);
+  background: #ffffff;
+}
+
+.proxy-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.proxy-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+}
+
+.protocol-tag {
+  font-weight: 700;
+  border-radius: 6px;
+}
+
+.proxy-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.address-box {
+  background: rgba(0, 0, 0, 0.015);
+  border: 1px solid rgba(0, 0, 0, 0.03);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 14px;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.address-colon {
+  color: #94a3b8;
+  margin: 0 4px;
+}
+
+.address-port {
+  color: #6366f1;
+}
+
+.auth-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.info-label {
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 600;
+  min-width: 56px;
+}
+
+.info-val {
+  font-size: 12px;
+  color: #475569;
+  font-weight: 700;
+}
+
+.proxy-status-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-tag {
+  font-weight: 700;
+  border-radius: 6px;
+}
+
+.proxy-card-time {
+  font-size: 11px;
+  color: #cbd5e1;
+  font-weight: 500;
+  margin-bottom: 14px;
+}
+
+.proxy-card-footer {
+  border-top: 1px solid rgba(0, 0, 0, 0.03);
+  padding-top: 12px;
+  display: flex;
+  justify-content: space-between;
+  margin-top: auto;
+}
+
+.proxy-card-footer :deep(.el-button) {
+  margin: 0 !important;
+  font-weight: 700 !important;
+  font-size: 12px !important;
+  transition: all 0.2s ease !important;
+}
+
+.proxy-card-footer :deep(.el-button--success:hover) {
+  color: #10b981 !important;
+  background-color: rgba(16, 185, 129, 0.06) !important;
+}
+
+.proxy-card-footer :deep(.el-button--primary:hover) {
+  color: #6366f1 !important;
+  background-color: rgba(99, 102, 241, 0.06) !important;
+}
+
+.proxy-card-footer :deep(.el-button--danger:hover) {
+  color: #f56c6c !important;
+  background-color: rgba(245, 108, 108, 0.06) !important;
 }
 </style>

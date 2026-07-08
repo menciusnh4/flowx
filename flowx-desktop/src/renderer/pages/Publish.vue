@@ -110,7 +110,6 @@ async function handleTestSubmit(req: PublishRequest) {
     ElMessage.error(`测试失败：${e instanceof Error ? e.message : String(e)}`)
   }
 }
-
 // ============ 工具函数 ============
 function formatTime(ts?: number): string {
   if (!ts) return '-'
@@ -172,7 +171,6 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
 
 <template>
   <div class="publish-page">
-    <!-- ==================== 发布表单 ==================== -->
     <PublishForm ref="publishFormRef" @submit="handleSubmit" @test-submit="handleTestSubmit">
       <template #footer-extra>
         <el-button @click="toggleDebug" :type="showDebug ? 'warning' : 'default'">
