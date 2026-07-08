@@ -144,6 +144,24 @@ contextBridge.exposeInMainWorld('electron', {
     closeWindow: (): Promise<boolean> => invoke('system:closeWindow'),
   },
 
+  // ========== 日志管理 ==========
+  log: {
+    readMain: (options?: { limit?: number }): Promise<string> => invoke('log:readMain', options),
+    readPublish: (options?: { limit?: number }): Promise<string> => invoke('log:readPublish', options),
+    queryPublish: (query?: PublishLogQuery): Promise<PublishLogEntry[]> => invoke('log:queryPublish', query),
+    clearPublish: (): Promise<boolean> => invoke('log:clearPublish'),
+    openDir: (): Promise<boolean> => invoke('log:openDir'),
+    export: (type: 'main' | 'publish' | 'all'): Promise<{ ok: boolean; path?: string; error?: string }> =>
+      invoke('log:export', type),
+    getInfo: (): Promise<{
+      mainSize: number;
+      publishSize: number;
+      logsDir: string;
+      mainPath: string;
+      publishPath: string;
+    }> => invoke('log:getInfo'),
+  },
+
   // ========== 草稿箱 ==========
   draft: {
     list: (contentType?: string): Promise<PublishDraft[]> => invoke('draft:list', contentType),
@@ -418,6 +436,21 @@ declare global {
         showSaveDialog: (options?: Electron.SaveDialogOptions) => Promise<{ canceled: boolean; filePath?: string }>;
         minimizeWindow: () => Promise<boolean>;
         closeWindow: () => Promise<boolean>;
+      };
+      log: {
+        readMain: (options?: { limit?: number }) => Promise<string>;
+        readPublish: (options?: { limit?: number }) => Promise<string>;
+        queryPublish: (query?: PublishLogQuery) => Promise<PublishLogEntry[]>;
+        clearPublish: () => Promise<boolean>;
+        openDir: () => Promise<boolean>;
+        export: (type: 'main' | 'publish' | 'all') => Promise<{ ok: boolean; path?: string; error?: string }>;
+        getInfo: () => Promise<{
+          mainSize: number;
+          publishSize: number;
+          logsDir: string;
+          mainPath: string;
+          publishPath: string;
+        }>;
       };
       update: {
         check: () => Promise<UpdateInfo>;

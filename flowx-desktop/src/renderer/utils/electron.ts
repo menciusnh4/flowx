@@ -174,6 +174,35 @@ export const electronApi = {
     return invokeElectron('system.closeWindow', 'system:closeWindow');
   },
 
+  // 日志管理
+  async readMainLog(options?: { limit?: number }): Promise<string> {
+    return invokeElectron('log.readMain', 'log:readMain', options);
+  },
+  async readPublishLog(options?: { limit?: number }): Promise<string> {
+    return invokeElectron('log.readPublish', 'log:readPublish', options);
+  },
+  async queryPublishLog(query?: PublishLogQuery): Promise<PublishLogEntry[]> {
+    return invokeElectron('log.queryPublish', 'log:queryPublish', query);
+  },
+  async clearPublishLogMemory(): Promise<boolean> {
+    return invokeElectron('log.clearPublish', 'log:clearPublish');
+  },
+  async openLogDirectory(): Promise<boolean> {
+    return invokeElectron('log.openDir', 'log:openDir');
+  },
+  async exportLog(type: 'main' | 'publish' | 'all'): Promise<{ ok: boolean; path?: string; error?: string }> {
+    return invokeElectron('log.export', 'log:export', type);
+  },
+  async getLogFileInfo(): Promise<{
+    mainSize: number;
+    publishSize: number;
+    logsDir: string;
+    mainPath: string;
+    publishPath: string;
+  }> {
+    return invokeElectron('log.getInfo', 'log:getInfo');
+  },
+
   // 更新
   async checkUpdate(): Promise<UpdateInfo> {
     return invokeElectron('update.check', 'update:check');
