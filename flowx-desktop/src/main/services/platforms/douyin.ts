@@ -343,6 +343,7 @@ function buildFillTitleScript(text: string): string {
 function buildFillContentScript(content: string): string {
   const contentJson = JSON.stringify(content);
   return `(function () {
+    try {
     var content = ${contentJson};
 
     // 辅助：将光标移到编辑器末尾
@@ -452,6 +453,9 @@ function buildFillContentScript(content: string): string {
     }
 
     return { ok: true, method: foundKind, isContentEditable: foundKind !== 'textarea' };
+    } catch (e) {
+      return { ok: false, reason: 'script-error', error: String(e) };
+    }
   })();`;
 }
 
@@ -2981,13 +2985,56 @@ function buildPublishResultProbeScript(): string {
     var leftPublishPage = !/content\\/post|content\\/publish|content\\/upload|publish\\/image/i.test(url);
     // 3) URL 明确进入管理页
     var urlSuccess = /content\\/manage|works|works_list|article\\/list|home/i.test(url);
-    // 失败信号
-    var fail = /发布失败|不符合要求|违规|失败|无法发布|出错/i.test(successText);
+    // 失败信号 - 明确的失败/错误提示关键词（避免与正常页面文字混淆）
+    var failPattern = /发布失败|发表失败|提交失败|保存失败|上传失败|不符合要求|违规内容|内容违规|审核未通过|无法发布|发布异常|系统错误|网络异常|系统繁忙|操作失败|出错了|发布出错|请重试|重新发布|不能发布|发布不了/i;
+    var fail = failPattern.test(successText);
+    // 额外检测：是否有弹出的错误/提示对话框（表单验证失败时常见）
+    var hasErrorDialog = false;
+    var errorDialogText = '';
+    try {
+      // 查找常见的弹窗/对话框类名（semi design / arco design / 字节系组件）
+      var dialogSelectors = [
+        '[class*="semi-modal"]',
+        '[class*="arco-modal"]',
+        '[class*="dialog-content"]', 
+        '[class*="modal-content"]',
+        '[class*="popup-content"]',
+        '[class*="toast"]',
+        '[class*="message-"]',
+        '[class*="notification"]',
+        '[role="dialog"]',
+        '[role="alertdialog"]'
+      ];
+      for (var si = 0; si < dialogSelectors.length; si++) {
+        var dialogs = document.querySelectorAll(dialogSelectors[si]);
+        for (var di = 0; di < dialogs.length; di++) {
+          var dEl = dialogs[di];
+          // 检查元素是否可见
+          var style = window.getComputedStyle(dEl);
+          if (style.display === 'none' || style.visibility === 'hidden' || (parseFloat(style.opacity) || 1) < 0.1) continue;
+          var dText = (dEl.innerText || dEl.textContent || '').trim();
+          if (dText && dText.length < 500) {
+            // 检查弹窗中是否有明确的错误/警告关键词
+            if (/失败|错误|异常|不能|无法|请输入|请填写|不能为空|请上传|不符合|提示|注意/.test(dText)) {
+              // 排除一些正常的提示（如"温馨提示"如果内容是正常引导则不算失败）
+              // 但如果是发布操作后弹出的，且包含负面词汇，则认为是失败
+              if (/失败|错误|异常|不能发布|无法发布|不符合要求|不能为空|请输入.*内容|请输入.*标题|请上传.*封面|内容不足|字数不足/.test(dText)) {
+                hasErrorDialog = true;
+                errorDialogText = dText.slice(0, 200);
+                break;
+              }
+            }
+          }
+        }
+        if (hasErrorDialog) break;
+      }
+    } catch (e) {}
     return {
       url: url,
       text: successText.slice(0, 400),
       success: textSuccess || urlSuccess || leftPublishPage,
-      fail: fail
+      fail: fail || hasErrorDialog,
+      errorText: errorDialogText
     };
   })();`;
 }
@@ -3119,9 +3166,51 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
           contentResult = await evalJS(win, script2, 'fill-content', log).catch(() => null);
         }
       } else {
-        // 没有正文，只有话题，执行一下空内容脚本获取编辑器信息
-        const script2 = buildFillContentScript('');
-        contentResult = await evalJS(win, script2, 'fill-content', log).catch(() => null);
+        // 没有正文，只有话题：用轻量脚本只查找并聚焦编辑器，不做删除/插入操作
+        // 避免复杂的 fill 脚本在空内容时意外报错，导致标签也无法输入
+        const focusScript = `(function () {
+          function moveCursorToEnd(el) {
+            try {
+              el.focus();
+              var range = document.createRange();
+              range.selectNodeContents(el);
+              range.collapse(false);
+              var sel = window.getSelection();
+              sel.removeAllRanges();
+              sel.addRange(range);
+            } catch(e) {}
+          }
+          // 1) 先找 ProseMirror / tiptap 富文本
+          var pmEls = document.querySelectorAll('[contenteditable]');
+          for (var i = 0; i < pmEls.length; i++) {
+            var el = pmEls[i];
+            var ceVal = el.getAttribute && el.getAttribute('contenteditable');
+            if (ceVal === 'false') continue;
+            var cls = String(el.className || '');
+            if (/tiptap|ProseMirror|prosemirror/i.test(cls)) {
+              moveCursorToEnd(el);
+              return { ok: true, method: 'prosemirror', isContentEditable: true };
+            }
+          }
+          // 2) 再找普通 contenteditable
+          for (var i = 0; i < pmEls.length; i++) {
+            var el = pmEls[i];
+            var ceVal = el.getAttribute && el.getAttribute('contenteditable');
+            if (ceVal === 'false') continue;
+            var cls = String(el.className || '');
+            if (/tiptap|ProseMirror|prosemirror/i.test(cls)) continue;
+            moveCursorToEnd(el);
+            return { ok: true, method: 'plain-ce', isContentEditable: true };
+          }
+          // 3) 兜底 textarea
+          var ta = document.querySelector('textarea');
+          if (ta) {
+            ta.focus();
+            return { ok: true, method: 'textarea', isContentEditable: false };
+          }
+          return { ok: false, reason: 'no-editor-found' };
+        })()`;
+        contentResult = await evalJS(win, focusScript, 'focus-editor', log).catch(() => null);
       }
 
       if (!contentResult || !contentResult.ok) {
@@ -3146,7 +3235,7 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
     }
     onProgress(85, '等待发布结果…');
     const resultDeadline = Date.now() + 120000;
-    let lastUrl = '', lastText = '';
+    let lastUrl = '', lastText = '', lastError = '';
     while (Date.now() < resultDeadline) {
       if (!win || win.isDestroyed()) break;
       try {
@@ -3154,20 +3243,25 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
         if (check) {
           lastUrl = check.url || '';
           lastText = check.text || '';
+          if (check.errorText) lastError = check.errorText;
           if (check.success) {
             log('info', 'done', '发布成功');
             onProgress(100, '发布成功');
             return { accountId: accountId, platform: 'douyin', status: 'success', progress: 100, message: '发布成功', url: lastUrl, startedAt: startedAt, finishedAt: Date.now() } as PublishItemProgress;
           }
           if (check.fail) {
-            log('warn', 'done', '页面提示失败');
-            return makeFailedResult(accountId, 'douyin', '发布失败', startedAt);
+            var failMsg = '发布失败';
+            if (check.errorText) failMsg = failMsg + ': ' + check.errorText;
+            log('warn', 'done', '页面提示失败: ' + (check.errorText || '未知原因'));
+            return makeFailedResult(accountId, 'douyin', failMsg, startedAt);
           }
         }
       } catch (e) {}
       await sleep(2500);
     }
-    return makeFailedResult(accountId, 'douyin', '等待发布结果超时', startedAt);
+    var timeoutMsg = '等待发布结果超时';
+    if (lastError) timeoutMsg = timeoutMsg + ' (' + lastError + ')';
+    return makeFailedResult(accountId, 'douyin', timeoutMsg, startedAt);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log('error', 'exception', '发布流程异常: ' + msg);
@@ -3265,17 +3359,107 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
     }
 
     onProgress(35, '填写正文…');
+    let contentResult: any = null;
     if (rawContent || articleTagList.length > 0) {
-      const script2 = buildFillContentScript(rawContent);
-      const res2: any = await evalJS(win, script2, 'article-fill-content', log).catch(function () { return null; });
-      if (!res2 || !res2.ok) {
+      if (rawContent) {
+        // 有正文：先探测编辑器类型，再选择合适的填写方式
+        const probeScript = `(function(){
+          try {
+            var ce = document.querySelectorAll('[contenteditable]');
+            var plainCE = null;
+            var pmCE = null;
+            for (var i = 0; i < ce.length; i++) {
+              var val = ce[i].getAttribute && ce[i].getAttribute('contenteditable');
+              if (val === 'false' || val === null) continue;
+              var cls = String(ce[i].className || '');
+              if (/tiptap|ProseMirror|prosemirror/i.test(cls)) {
+                if (!pmCE) pmCE = ce[i];
+              } else {
+                // 普通 contenteditable，找内容区域（非标题）
+                var txt = (ce[i].innerText || ce[i].textContent || '').trim();
+                if (!plainCE || txt.length > (plainCE._len || 0)) {
+                  plainCE = ce[i];
+                  plainCE._len = txt.length;
+                }
+              }
+            }
+            if (pmCE) return { type: 'prosemirror' };
+            if (plainCE) return { type: 'plain-ce' };
+            return { type: 'unknown' };
+          } catch(e) { return { type: 'error', err: String(e) }; }
+        })()`;
+        const probeRes: any = await evalJS(win, probeScript, 'article-probe-editor', log).catch(() => null);
+        const editorType = probeRes && probeRes.type ? probeRes.type : 'plain-ce';
+        log('info', 'fill', '文章编辑器类型: ' + editorType);
+
+        if (editorType === 'plain-ce' || editorType === 'prosemirror' || editorType === 'auto' || editorType === 'unknown') {
+          // 所有类型都优先用 CDP 方式填写（更健壮，有完整的错误处理）
+          // CDP 方式内部会根据 targetKind 选择正确的编辑器
+          const cdpTargetKind = editorType === 'prosemirror' ? 'prosemirror' : (editorType === 'plain-ce' ? 'plain-ce' : 'auto');
+          contentResult = await cdpFillContentWithNewlines(win, rawContent, cdpTargetKind, log);
+          if (!contentResult || !contentResult.ok) {
+            // CDP 方式失败，降级用 JS 方式
+            log('warn', 'fill', '文章CDP正文填写失败，降级用JS方式');
+            const script2 = buildFillContentScript(rawContent);
+            contentResult = await evalJS(win, script2, 'article-fill-content', log).catch(() => null);
+          }
+        }
+      } else {
+        // 没有正文，只有话题：用轻量脚本只查找并聚焦编辑器，不做删除/插入操作
+        // 避免复杂的 fill 脚本在空内容时意外报错，导致标签也无法输入
+        const focusScript = `(function () {
+          function moveCursorToEnd(el) {
+            try {
+              el.focus();
+              var range = document.createRange();
+              range.selectNodeContents(el);
+              range.collapse(false);
+              var sel = window.getSelection();
+              sel.removeAllRanges();
+              sel.addRange(range);
+            } catch(e) {}
+          }
+          // 1) 先找 ProseMirror / tiptap 富文本
+          var pmEls = document.querySelectorAll('[contenteditable]');
+          for (var i = 0; i < pmEls.length; i++) {
+            var el = pmEls[i];
+            var ceVal = el.getAttribute && el.getAttribute('contenteditable');
+            if (ceVal === 'false') continue;
+            var cls = String(el.className || '');
+            if (/tiptap|ProseMirror|prosemirror/i.test(cls)) {
+              moveCursorToEnd(el);
+              return { ok: true, method: 'prosemirror', isContentEditable: true };
+            }
+          }
+          // 2) 再找普通 contenteditable
+          for (var i = 0; i < pmEls.length; i++) {
+            var el = pmEls[i];
+            var ceVal = el.getAttribute && el.getAttribute('contenteditable');
+            if (ceVal === 'false') continue;
+            var cls = String(el.className || '');
+            if (/tiptap|ProseMirror|prosemirror/i.test(cls)) continue;
+            moveCursorToEnd(el);
+            return { ok: true, method: 'plain-ce', isContentEditable: true };
+          }
+          // 3) 兜底 textarea
+          var ta = document.querySelector('textarea');
+          if (ta) {
+            ta.focus();
+            return { ok: true, method: 'textarea', isContentEditable: false };
+          }
+          return { ok: false, reason: 'no-editor-found' };
+        })()`;
+        contentResult = await evalJS(win, focusScript, 'article-focus-editor', log).catch(() => null);
+      }
+
+      if (!contentResult || !contentResult.ok) {
         log('warn', 'fill', '文章正文填写失败');
       } else {
-        log('info', 'fill', '文章正文已写入 (' + (res2 && res2.method) + ')');
+        log('info', 'fill', '文章正文已写入 (' + (contentResult && contentResult.method) + ')');
       }
       await sleep(500);
       // 通过 CDP 输入话题标签
-      if (articleTagList.length > 0 && res2 && res2.ok && res2.isContentEditable) {
+      if (articleTagList.length > 0 && contentResult && contentResult.ok && contentResult.isContentEditable) {
         await cdpInsertTagsWithSpace(win, articleTagList, rawContent.length > 0, log);
         await sleep(300);
       }
@@ -3336,7 +3520,7 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
     // 等待发布结果
     onProgress(90, '等待发布结果…');
     const resultDeadline = Date.now() + 120000;
-    let lastUrl = '', lastText = '';
+    let lastUrl = '', lastText = '', lastError = '';
     while (Date.now() < resultDeadline) {
       if (!win || win.isDestroyed()) break;
       try {
@@ -3344,20 +3528,25 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
         if (check) {
           lastUrl = check.url || '';
           lastText = check.text || '';
+          if (check.errorText) lastError = check.errorText;
           if (check.success) {
             log('info', 'done', '文章发布成功');
             onProgress(100, '发布成功');
             return { accountId: accountId, platform: 'douyin', status: 'success', progress: 100, message: '文章发布成功', url: lastUrl, startedAt: startedAt, finishedAt: Date.now() } as PublishItemProgress;
           }
           if (check.fail) {
-            log('warn', 'done', '页面提示失败');
-            return makeFailedResult(accountId, 'douyin', '文章发布失败', startedAt);
+            var failMsg = '文章发布失败';
+            if (check.errorText) failMsg = failMsg + ': ' + check.errorText;
+            log('warn', 'done', '页面提示失败: ' + (check.errorText || '未知原因'));
+            return makeFailedResult(accountId, 'douyin', failMsg, startedAt);
           }
         }
       } catch (e) {}
       await sleep(2500);
     }
-    return makeFailedResult(accountId, 'douyin', '等待文章发布结果超时', startedAt);
+    var timeoutMsg = '等待文章发布结果超时';
+    if (lastError) timeoutMsg = timeoutMsg + ' (' + lastError + ')';
+    return makeFailedResult(accountId, 'douyin', timeoutMsg, startedAt);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log('error', 'exception', '文章发布异常: ' + msg);
