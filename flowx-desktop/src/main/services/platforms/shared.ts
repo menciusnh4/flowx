@@ -1943,6 +1943,13 @@ export async function waitForUploadComplete(
 
   // 记录上一次的 URL，检测到页面变化后等待稳定再继续轮询
   let lastUrl = '';
+  // 智能降级：当有编辑元素+缩略图，但 uploading 持续一段时间无进展时，降级为 ready
+  // （抖音等平台的视频转码在后台进行，不影响标题/描述的填写）
+  let uploadingStartTime = 0;
+  let lastThumbCount = 0;
+  let thumbStableCount = 0; // 缩略图数量稳定的次数
+  const UPLOADING_MAX_WAIT_WITH_EDIT_FIELDS = 60000; // 有编辑元素时，uploading 最多等60秒
+  const THUMB_STABLE_THRESHOLD = 5; // 缩略图数量连续5次不变则认为稳定
 
   while (Date.now() - start < timeoutMs) {
     // 窗口已销毁：立即返回，不再继续轮询
@@ -1998,6 +2005,43 @@ export async function waitForUploadComplete(
       }
       if (info.status === 'uploading') {
         onProgress(30 + Math.min(30, (Date.now() - start) / 10000 * 10), '上传/处理中…');
+        
+        // 智能降级检测：有编辑元素 + 有缩略图 → 可能可以提前开始填写内容
+        if (info.hasEditField && info.hasThumb && (info.ceCount > 0 || info.textInputCount > 0)) {
+          if (uploadingStartTime === 0) {
+            uploadingStartTime = Date.now();
+            lastThumbCount = info.thumbCount;
+          } else {
+            // 检查缩略图数量是否稳定
+            if (info.thumbCount === lastThumbCount) {
+              thumbStableCount++;
+            } else {
+              thumbStableCount = 0;
+              lastThumbCount = info.thumbCount;
+            }
+            // 条件1：uploading 超过 UPLOADING_MAX_WAIT_WITH_EDIT_FIELDS
+            // 条件2：缩略图数量连续稳定 THUMB_STABLE_THRESHOLD 次（说明封面/缩略图生成已完成）
+            const uploadingTooLong = Date.now() - uploadingStartTime > UPLOADING_MAX_WAIT_WITH_EDIT_FIELDS;
+            const thumbStable = thumbStableCount >= THUMB_STABLE_THRESHOLD;
+            if (uploadingTooLong || thumbStable) {
+              log('info', 'poll', `uploading 状态持续较久但编辑元素已就绪(${uploadingTooLong ? '超时降级' : '缩略图稳定'})，降级为 ready 继续填写内容`, {
+                uploadingMs: Date.now() - uploadingStartTime,
+                thumbStableCount,
+                thumbCount: info.thumbCount,
+              });
+              onProgress(60, '上传处理中，开始填写内容…');
+              return { ready: true, finalStatus: 'degraded-ready' };
+            }
+          }
+        } else {
+          // 没有编辑元素或没有缩略图，重置计时
+          uploadingStartTime = 0;
+          thumbStableCount = 0;
+        }
+      } else {
+        // 非 uploading 状态，重置计时
+        uploadingStartTime = 0;
+        thumbStableCount = 0;
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
