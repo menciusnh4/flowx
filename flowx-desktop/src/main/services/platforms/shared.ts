@@ -409,7 +409,109 @@ export function buildTestModeProbeScript(
       });
     }
 
-    // 4. 返回结果
+    // 4. 添加浮动控制面板（确认发布按钮）
+    const panelId = 'flowx-test-panel';
+    if (!document.getElementById(panelId) && publishBtn) {
+      const panel = document.createElement('div');
+      panel.id = panelId;
+      panel.style.cssText = \`
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #fff;
+        border: 2px solid #e6a23c;
+        border-radius: 8px;
+        padding: 16px;
+        z-index: 2147483647;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        min-width: 240px;
+      \`;
+      
+      const title = document.createElement('div');
+      title.style.cssText = 'font-weight: 600; font-size: 14px; color: #e6a23c; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;';
+      title.innerHTML = '🔍 发布测试模式';
+      panel.appendChild(title);
+      
+      const desc = document.createElement('div');
+      desc.style.cssText = 'font-size: 12px; color: #606266; margin-bottom: 12px; line-height: 1.5;';
+      desc.textContent = '表单已自动填写，发布按钮已用红色标记。请检查表单填写是否正常，确认无误后点击下方按钮发布。';
+      panel.appendChild(desc);
+      
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display: flex; gap: 8px;';
+      
+      const publishBtnFloating = document.createElement('button');
+      publishBtnFloating.textContent = '✅ 确认发布';
+      publishBtnFloating.style.cssText = \`
+        flex: 1;
+        padding: 8px 16px;
+        background: #67c23a;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.2s;
+      \`;
+      publishBtnFloating.onmouseover = () => { publishBtnFloating.style.background = '#5daf34'; };
+      publishBtnFloating.onmouseout = () => { publishBtnFloating.style.background = '#67c23a'; };
+      publishBtnFloating.onclick = function() {
+        if (confirm('确定要发布吗？发布后将无法撤销。')) {
+          // 移除测试模式标记
+          publishBtn.classList.remove('flowx-test-highlight');
+          publishBtn.style.outline = publishBtn.dataset.originalOutline || '';
+          publishBtn.style.outlineOffset = publishBtn.dataset.originalOutlineOffset || '';
+          publishBtn.style.boxShadow = publishBtn.dataset.originalBoxShadow || '';
+          publishBtn.style.zIndex = publishBtn.dataset.originalZIndex || '';
+          // 移除面板
+          panel.remove();
+          // 滚动到发布按钮位置
+          publishBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // 点击发布按钮
+          setTimeout(() => { publishBtn.click(); }, 300);
+        }
+      };
+      btnRow.appendChild(publishBtnFloating);
+      
+      const closeBtn = document.createElement('button');
+      closeBtn.textContent = '关闭';
+      closeBtn.style.cssText = \`
+        padding: 8px 12px;
+        background: #f5f7fa;
+        color: #606266;
+        border: 1px solid #dcdfe6;
+        border-radius: 4px;
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.2s;
+      \`;
+      closeBtn.onmouseover = () => { closeBtn.style.background = '#ebeef5'; };
+      closeBtn.onmouseout = () => { closeBtn.style.background = '#f5f7fa'; };
+      closeBtn.onclick = function() { panel.remove(); };
+      btnRow.appendChild(closeBtn);
+      
+      panel.appendChild(btnRow);
+      
+      // 添加表单状态概览
+      const summary = document.createElement('div');
+      summary.style.cssText = 'margin-top: 12px; padding-top: 12px; border-top: 1px solid #ebeef5;';
+      const filledCount = fields.filter(f => f.filled).length;
+      summary.innerHTML = \`
+        <div style="font-size: 12px; color: #909399; margin-bottom: 6px;">
+          表单字段检测：<span style="color: #67c23a; font-weight: 500;">\${filledCount}</span> / <span>\${fields.length}</span> 已填写
+        </div>
+        <div style="font-size: 12px; color: #909399;">
+          发布按钮：<span style="color: \${publishBtn ? '#67c23a' : '#f56c6c'}; font-weight: 500;">\${publishBtn ? '已找到' : '未找到'}</span>
+        </div>
+      \`;
+      panel.appendChild(summary);
+      
+      document.body.appendChild(panel);
+    }
+
+    // 5. 返回结果
     return {
       publishButtonFound: !!publishBtn,
       publishButtonInfo: publishBtnInfo,
@@ -418,6 +520,94 @@ export function buildTestModeProbeScript(
     };
   })();
   `;
+}
+
+/**
+ * 测试模式窗口设置：确保用户点击关闭按钮时能正常关闭窗口
+ * - 禁用页面 beforeunload 拦截（注入 JS + will-prevent-unload 事件）
+ * - 监听窗口 close 事件，强制 destroy 绕过页面确认弹窗
+ */
+export function setupTestModeWindow(win: BrowserWindow, log: any): void {
+  if (!win || win.isDestroyed()) return;
+
+  // 1. 注入 JS 禁用页面 beforeunload 事件拦截
+  const injectDisableBeforeUnload = () => {
+    if (win.isDestroyed()) return;
+    win.webContents
+      .executeJavaScript(`
+        (function() {
+          try {
+            // 在捕获阶段拦截并阻止 beforeunload（最高优先级）
+            window.addEventListener('beforeunload', function(e) {
+              e.stopImmediatePropagation();
+              e.cancelBubble = true;
+              return undefined;
+            }, true);
+            // 覆盖 onbeforeunload
+            window.onbeforeunload = null;
+            // 覆盖 EventTarget.prototype.addEventListener，阻止后续 beforeunload 绑定
+            var origAdd = EventTarget.prototype.addEventListener;
+            EventTarget.prototype.addEventListener = function(type, listener, options) {
+              if (type === 'beforeunload') return;
+              return origAdd.call(this, type, listener, options);
+            };
+            // 覆盖 removeEventListener 也做同样处理
+            var origRemove = EventTarget.prototype.removeEventListener;
+            EventTarget.prototype.removeEventListener = function(type, listener, options) {
+              if (type === 'beforeunload') return;
+              return origRemove.call(this, type, listener, options);
+            };
+            // 尝试移除已有的 beforeunload 监听器（通过 dispatchEvent 方式不可行，此处做 document 级覆盖）
+            // 直接在 window 对象上设置拦截属性
+            Object.defineProperty(window, 'onbeforeunload', {
+              configurable: true,
+              get: function() { return null; },
+              set: function() { return null; }
+            });
+          } catch(e) {}
+        })()
+      `)
+      .catch(() => {});
+  };
+
+  // 立即注入一次
+  injectDisableBeforeUnload();
+
+  // 每次页面加载完成后重新注入（防止页面跳转后失效）
+  win.webContents.on('dom-ready', injectDisableBeforeUnload);
+  win.webContents.on('did-finish-load', injectDisableBeforeUnload);
+
+  // 2. 监听 will-prevent-unload：页面试图通过 beforeunload 阻止关闭时，直接放行
+  win.webContents.on('will-prevent-unload', (e: any) => {
+    if (win.isDestroyed()) return;
+    try {
+      e.preventDefault(); // 允许页面关闭，忽略 beforeunload 的拦截
+      log('info', 'test', '已拦截页面 beforeunload 关闭阻止');
+    } catch {}
+  });
+
+  // 3. 监听窗口关闭事件，强制 destroy 绕过所有页面拦截
+  let isClosing = false;
+  win.on('close', (e: any) => {
+    if (win.isDestroyed()) return;
+    if (isClosing) return;
+    try {
+      isClosing = true;
+      e.preventDefault();
+      // 使用 setImmediate 确保事件循环继续，避免死锁
+      setImmediate(() => {
+        if (!win.isDestroyed()) {
+          try {
+            win.destroy();
+          } catch {}
+        }
+      });
+    } catch {
+      isClosing = false;
+    }
+  });
+
+  log('info', 'test', '测试模式窗口已设置，可正常关闭');
 }
 
 /**

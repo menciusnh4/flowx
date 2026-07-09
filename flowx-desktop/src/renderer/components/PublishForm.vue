@@ -16,6 +16,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'submit', req: PublishRequest): void
+  (e: 'test-submit', req: PublishRequest): void
   (e: 'change', value: Partial<PublishRequest>): void
   (e: 'modal-show'): void
   (e: 'modal-hide'): void
@@ -72,7 +73,18 @@ function toggleAccount(id: string) {
 }
 
 function getSelectedIds(): string[] {
-  return Object.keys(selectedIds).filter((k) => selectedIds[k])
+  // 🔑 只返回支持当前 contentType 的账号，防止切换类型后残留的选中账号被误发布
+  const currentType = contentType.value
+  return Object.keys(selectedIds)
+    .filter((k) => selectedIds[k])
+    .filter((id) => {
+      const acc = accountStore.accounts.find((a) => a.id === id)
+      if (!acc) return false
+      if (currentType === 'video') return !!acc.capabilities?.publishVideo
+      if (currentType === 'image') return !!acc.capabilities?.publishImage
+      if (currentType === 'article') return !!acc.capabilities?.publishArticle
+      return false
+    })
 }
 
 function selectAll() {
@@ -84,6 +96,32 @@ function clearSelection() {
   for (const k of Object.keys(selectedIds)) delete selectedIds[k]
   notifyChange()
 }
+
+// ============ 监听发布类型变化，清除不支持的账号选中状态 ============
+watch(contentType, () => {
+  const currentType = contentType.value
+  let changed = false
+  for (const id of Object.keys(selectedIds)) {
+    if (!selectedIds[id]) continue
+    const acc = accountStore.accounts.find((a) => a.id === id)
+    if (!acc) {
+      delete selectedIds[id]
+      changed = true
+      continue
+    }
+    const supported =
+      (currentType === 'video' && acc.capabilities?.publishVideo) ||
+      (currentType === 'image' && acc.capabilities?.publishImage) ||
+      (currentType === 'article' && acc.capabilities?.publishArticle)
+    if (!supported) {
+      delete selectedIds[id]
+      changed = true
+    }
+  }
+  if (changed) {
+    notifyChange()
+  }
+})
 
 // ============ 初始化 ============
 onMounted(async () => {
@@ -546,6 +584,69 @@ async function submitPublish() {
   submitting.value = false
 }
 
+// ============ 测试发布（不真的点击发布按钮，仅验证表单填写） ============
+async function submitTestPublish() {
+  if (submitting.value) return
+
+  if (!title.value.trim()) {
+    ElMessage.warning('请输入标题')
+    return
+  }
+  const accountIds = getSelectedIds()
+  if (accountIds.length === 0) {
+    ElMessage.warning('请至少选择一个账号')
+    return
+  }
+  if (contentType.value !== 'article' && mediaFiles.value.length === 0) {
+    ElMessage.warning('请上传素材文件')
+    return
+  }
+
+  // 文章模式 + 抖音账号：封面必填
+  if (contentType.value === 'article' && hasDouyinAccount.value && mediaFiles.value.length === 0) {
+    ElMessage.warning('抖音文章发布必须上传封面图片')
+    return
+  }
+
+  // 文章模式：正文最小字数检查
+  if (contentType.value === 'article') {
+    for (const id of accountIds) {
+      const a = accountStore.accounts.find((x) => x.id === id)
+      if (!a) continue
+      const meta = accountStore.platforms.find((p) => p.key === a.platform)
+      if (!meta || !meta.articleLimits) continue
+      const minContent = meta.articleLimits.minContent
+      if (typeof minContent === 'number' && content.value.length < minContent) {
+        const platformDisplayName = platformName(a.platform)
+        ElMessage.warning(`${platformDisplayName}文章正文至少需要 ${minContent} 字（当前 ${content.value.length} 字）`)
+        return
+      }
+    }
+  }
+
+  submitting.value = true
+
+  const tags = tagsRaw.value
+    .split(/[,，\s]+/)
+    .map((t) => t.trim().replace(/^#/, ''))
+    .filter((t) => t.length > 0)
+
+  const req: PublishRequest = {
+    contentType: contentType.value,
+    accountIds,
+    title: title.value.trim(),
+    mediaFiles: mediaFiles.value.slice(),
+    coverImage: coverImage.value,
+    tags,
+    category: '',
+    content: content.value,
+    testMode: true,
+  }
+
+  emit('test-submit', req)
+  submitting.value = false
+}
+
 // ============ 外部方法 ============
 /** 用外部数据填充表单（内容提取、草稿加载等场景） */
 function fillForm(data: Partial<PublishRequest>) {
@@ -899,6 +1000,9 @@ function iconOf(platform?: string): string {
       <div class="submit-row">
         <el-button type="primary" :loading="submitting" :disabled="submitting || visibleAccounts.length === 0" @click="submitPublish">
           {{ submitText || (publishTimeType === 'scheduled' ? '定时发布到' : '一键发布到') + ' ' + getSelectedIds().length + ' 个账号' }}
+        </el-button>
+        <el-button type="warning" :loading="submitting" :disabled="submitting || visibleAccounts.length === 0" @click="submitTestPublish">
+          🔍 发布测试
         </el-button>
         <el-button :disabled="submitting" @click="clearForm">清空</el-button>
         <slot name="footer-extra"></slot>

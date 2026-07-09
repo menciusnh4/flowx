@@ -570,6 +570,10 @@ class PublishEngineClass {
       item.resultUrl = result.resultUrl;
       item.message = result.message;
       item.finishedAt = result.finishedAt || Date.now();
+      // 传递测试模式结果
+      if (result.testResult) {
+        item.testResult = result.testResult;
+      }
 
       writePublishLog({
         ts: Date.now(),
@@ -578,8 +582,8 @@ class PublishEngineClass {
         accountId,
         platform: item.platform,
         stage: 'finish',
-        message: `子任务完成，状态=${result.status}`,
-        data: { status: result.status, resultUrl: result.resultUrl, message: result.message },
+        message: `子任务完成，状态=${result.status}${result.testResult ? '（测试模式）' : ''}`,
+        data: { status: result.status, resultUrl: result.resultUrl, message: result.message, testResult: result.testResult || undefined },
       });
     } catch (err) {
       item.status = 'failed';

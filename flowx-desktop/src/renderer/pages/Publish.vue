@@ -97,6 +97,20 @@ async function handleSubmit(req: PublishRequest) {
   }
 }
 
+// ============ 提交测试发布 ============
+async function handleTestSubmit(req: PublishRequest) {
+  try {
+    publishStore.ensureListener()
+    const taskId = await publishStore.submit(req)
+    ElMessage.success(`测试任务已提交：${taskId}`)
+    // 让新任务在折叠面板里默认展开
+    openTaskIds.value = [...new Set([...openTaskIds.value, taskId])]
+  } catch (e) {
+    console.error('[Publish.vue] test submit error', e)
+    ElMessage.error(`测试失败：${e instanceof Error ? e.message : String(e)}`)
+  }
+}
+
 // ============ 工具函数 ============
 function formatTime(ts?: number): string {
   if (!ts) return '-'
@@ -159,7 +173,7 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
 <template>
   <div class="publish-page">
     <!-- ==================== 发布表单 ==================== -->
-    <PublishForm ref="publishFormRef" @submit="handleSubmit">
+    <PublishForm ref="publishFormRef" @submit="handleSubmit" @test-submit="handleTestSubmit">
       <template #footer-extra>
         <el-button @click="toggleDebug" :type="showDebug ? 'warning' : 'default'">
           {{ showDebug ? '隐藏调试日志' : '调试模式' }}（{{ publishStore.logs.length }}）
@@ -216,7 +230,67 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
                 <span v-else>-</span>
               </template>
             </el-table-column>
+            <el-table-column label="测试结果" width="140">
+              <template #default="{ row }">
+                <el-tag v-if="row.testResult" type="success" size="small">测试完成</el-tag>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
           </el-table>
+
+          <!-- 测试结果详情 -->
+          <div v-if="t.items.some((item: any) => item.testResult)" class="test-results">
+            <h3 class="test-results-title">🔍 测试结果详情</h3>
+            <div v-for="item in t.items.filter((i: any) => i.testResult)" :key="item.accountId" class="test-result-item">
+              <div class="test-result-header">
+                <span class="test-result-account">
+                  {{ iconOf(platformFromAccountId(item.accountId)) }} {{ nicknameOf(item.accountId) }}
+                  （{{ platformName(platformFromAccountId(item.accountId)) }}）
+                </span>
+                <el-tag :type="item.testResult?.publishButtonFound ? 'success' : 'danger'" size="small">
+                  {{ item.testResult?.publishButtonFound ? '✓ 已找到发布按钮' : '✗ 未找到发布按钮' }}
+                </el-tag>
+              </div>
+              <div class="test-result-grid">
+                <div class="test-field" :class="{ filled: item.testResult?.titleFilled }">
+                  <span class="test-field-label">标题</span>
+                  <span class="test-field-value">
+                    {{ item.testResult?.titleFilled ? '✓ 已填写' : '✗ 未填写' }}
+                  </span>
+                </div>
+                <div class="test-field" :class="{ filled: item.testResult?.contentFilled }">
+                  <span class="test-field-label">内容/正文</span>
+                  <span class="test-field-value">
+                    {{ item.testResult?.contentFilled ? '✓ 已填写' : '✗ 未填写' }}
+                  </span>
+                </div>
+                <div class="test-field" :class="{ filled: item.testResult?.tagsFilled }">
+                  <span class="test-field-label">标签/话题</span>
+                  <span class="test-field-value">
+                    {{ item.testResult?.tagsFilled ? '✓ 已填写' : '✗ 未填写' }}
+                  </span>
+                </div>
+                <div class="test-field" :class="{ filled: item.testResult?.coverUploaded }">
+                  <span class="test-field-label">封面</span>
+                  <span class="test-field-value">
+                    {{ item.testResult?.coverUploaded ? '✓ 已上传' : '✗ 未上传' }}
+                  </span>
+                </div>
+              </div>
+              <div v-if="item.testResult?.note" class="test-result-note">
+                💡 {{ item.testResult?.note }}
+              </div>
+              <div v-if="item.testResult?.formFields && item.testResult?.formFields.length > 0" class="test-fields-detail">
+                <div class="test-fields-detail-title">检测到的表单字段：</div>
+                <div class="test-fields-list">
+                  <span v-for="(field, idx) in item.testResult?.formFields" :key="idx"
+                        class="test-field-chip" :class="{ filled: field.filled }">
+                    {{ field.label || field.type }}：{{ field.filled ? '✓' : '✗' }}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
         </el-collapse-item>
       </el-collapse>
     </div>
@@ -290,4 +364,104 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
 .log-data { color: #858585; margin-left: 4px; word-break: break-all; }
 .empty { padding: 20px 0; }
 .task-meta { display: flex; gap: 20px; color: #606266; font-size: 13px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+
+/* 测试结果 */
+.test-results {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed #e4e7ed;
+}
+.test-results-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  color: #e6a23c;
+}
+.test-result-item {
+  background: #fdf6ec;
+  border: 1px solid #faecd8;
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-bottom: 10px;
+}
+.test-result-item:last-child {
+  margin-bottom: 0;
+}
+.test-result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.test-result-account {
+  font-weight: 500;
+  color: #606266;
+  font-size: 13px;
+}
+.test-result-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.test-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  background: #fff;
+  border-radius: 4px;
+  border: 1px solid #f0d9a8;
+}
+.test-field.filled {
+  border-color: #67c23a;
+  background: #f0f9eb;
+}
+.test-field-label {
+  font-size: 12px;
+  color: #909399;
+}
+.test-field-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: #606266;
+}
+.test-field.filled .test-field-value {
+  color: #67c23a;
+}
+.test-result-note {
+  font-size: 12px;
+  color: #e6a23c;
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: #fffbe6;
+  border-radius: 4px;
+}
+.test-fields-detail {
+  margin-top: 10px;
+}
+.test-fields-detail-title {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 6px;
+}
+.test-fields-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.test-field-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 10px;
+  background: #fef0f0;
+  color: #f56c6c;
+  border: 1px solid #fbc4c4;
+}
+.test-field-chip.filled {
+  background: #f0f9eb;
+  color: #67c23a;
+  border-color: #c2e7b0;
+}
 </style>

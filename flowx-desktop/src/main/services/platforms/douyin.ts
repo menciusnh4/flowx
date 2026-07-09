@@ -2,7 +2,7 @@ import type { BrowserWindow } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { PlatformAdapter, ExtractedAccountInfo, LoginCheckResult, ProgressCallback } from './types';
-import { sleep, makePublishLogger, makePublishWindow, attachNavigationTracker, evalJS, makeFailedResult, uploadViaCDP, waitForUploadComplete, buildPageStructureProbe, cdpInsertTagsWithSpace, cdpFillContentWithNewlines, buildTestModeProbeScript } from './shared';
+import { sleep, makePublishLogger, makePublishWindow, attachNavigationTracker, evalJS, makeFailedResult, uploadViaCDP, waitForUploadComplete, buildPageStructureProbe, cdpInsertTagsWithSpace, cdpFillContentWithNewlines, buildTestModeProbeScript, setupTestModeWindow } from './shared';
 import { registerPlatform } from './registry';
 import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities, ContentType } from '../../../types';
 
@@ -3118,9 +3118,10 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
       else log('info', 'fill', '标题已写入');
       await sleep(800);
     }
+    // 内容填写结果（用于测试模式）
+    let contentResult: any = null;
     if (baseContent || douyinTagList.length > 0) {
       // 探测编辑器类型：如果是普通 contenteditable（ACE 编辑器），用 CDP Enter 方式换行更可靠
-      let contentResult: any = null;
       if (baseContent) {
         const probeScript = `(function(){
           try {
@@ -3247,8 +3248,8 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
       const testResult = {
         titleFilled: !!(testRes?.fields?.find((f: any) => f.name === '标题')?.filled),
         contentFilled: !!(testRes?.fields?.find((f: any) => f.name.includes('描述') || f.name.includes('正文'))?.filled),
-        tagsFilled: douyinTagList.length > 0 && contentResult?.ok,
-        coverUploaded: hasThumb,
+        tagsFilled: douyinTagList.length > 0 && !!(contentResult && contentResult.ok),
+        coverUploaded: !!(request.coverImage && request.coverImage.length > 0),
         publishButtonFound: !!(testRes?.publishButtonFound),
         publishButtonInfo: testRes?.publishButtonInfo || null,
         formFields: testRes?.fields || [],
@@ -3256,6 +3257,8 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
       };
       log('info', 'test', '测试模式完成: ' + (testRes?.note || '未知'));
       onProgress(100, '测试完成');
+      // 确保测试模式窗口能正常关闭
+      setupTestModeWindow(win, log);
       return {
         accountId: accountId,
         platform: 'douyin',
@@ -3310,7 +3313,10 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
     return makeFailedResult(accountId, 'douyin', msg, startedAt);
   } finally {
     if (tracker) { try { tracker.dispose(); } catch (e) {} }
-    if (win && !win.isDestroyed()) {
+    // 测试模式：不关闭窗口，让用户可以检查表单填写情况
+    if (request.testMode) {
+      log('info', 'test', '测试模式完成，窗口保持打开，方便检查表单填写情况');
+    } else if (win && !win.isDestroyed()) {
       setTimeout(function () { try { if (win && !win.isDestroyed()) win.destroy(); } catch (e) {} }, 3000);
     }
   }
@@ -3571,8 +3577,8 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
       const testResult = {
         titleFilled: !!(testRes?.fields?.find((f: any) => f.name === '文章标题')?.filled),
         contentFilled: !!(testRes?.fields?.find((f: any) => f.name === '文章正文')?.filled),
-        tagsFilled: articleTagList.length > 0 && contentResult?.ok,
-        coverUploaded: hasCover,
+        tagsFilled: articleTagList.length > 0 && !!(contentResult && contentResult.ok),
+        coverUploaded: (request.mediaFiles || []).length > 0,
         publishButtonFound: !!(testRes?.publishButtonFound),
         publishButtonInfo: testRes?.publishButtonInfo || null,
         formFields: testRes?.fields || [],
@@ -3580,6 +3586,8 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
       };
       log('info', 'test', '文章测试模式完成: ' + (testRes?.note || '未知'));
       onProgress(100, '测试完成');
+      // 确保测试模式窗口能正常关闭
+      setupTestModeWindow(win, log);
       return {
         accountId: accountId,
         platform: 'douyin',
@@ -3636,7 +3644,10 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
     return makeFailedResult(accountId, 'douyin', msg, startedAt);
   } finally {
     if (tracker) { try { tracker.dispose(); } catch (e) {} }
-    if (win && !win.isDestroyed()) {
+    // 测试模式：不关闭窗口，让用户可以检查表单填写情况
+    if (request.testMode) {
+      log('info', 'test', '文章测试模式完成，窗口保持打开，方便检查表单填写情况');
+    } else if (win && !win.isDestroyed()) {
       setTimeout(function () { try { if (win && !win.isDestroyed()) win.destroy(); } catch (e) {} }, 3000);
     }
   }

@@ -13,6 +13,8 @@ import {
   buildPageStructureProbe,
   cdpClickPublishButton, // 🔑 CDP 穿透 closed shadow DOM 点击（小红书发布按钮是自定义 web component）
   cdpInsertTagsWithSpace,
+  buildTestModeProbeScript,
+  setupTestModeWindow,
 } from './shared';
 import { registerPlatform } from './registry';
 import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities, ContentType } from '../../../types';
@@ -841,6 +843,52 @@ async function runXhsPublish(
     // 10) 点击"发布"按钮 —— 🔑 使用 CDP 穿透 closed shadow DOM（小红书发布按钮是自定义 web component）
     //    先尝试 JS 点击（处理 light DOM 中的按钮），失败后用 CDP 鼠标合成事件（可穿透 shadow DOM）
     onProgress(85, '点击发布按钮…');
+
+    // 测试模式：不点击发布，高亮标记按钮并收集表单状态
+    if (request.testMode) {
+      const testScript = buildTestModeProbeScript(
+        [
+          'button.ce-btn.bg-red',
+          '.publish-page-publish-btn button',
+          '.publish-page-publish-btn',
+          'xhs-publish-btn',
+          'button[type="submit"]',
+          '.publish-btn',
+          '.submit-btn',
+        ],
+        [
+          { name: '标题', selector: 'input[placeholder*="标题"]', type: 'input' },
+          { name: '正文', selector: '[contenteditable="true"]', type: 'contenteditable' },
+          { name: '正文文本框', selector: 'textarea', type: 'textarea' },
+        ],
+      );
+      const testRes: any = await evalJS(win, testScript, 'test-mode-probe', log).catch(() => null);
+      const testResult = {
+        titleFilled: !!(testRes?.fields?.find((f: any) => f.name === '标题')?.filled),
+        contentFilled: !!(testRes?.fields?.find((f: any) => f.name.includes('正文') || f.name.includes('描述'))?.filled),
+        tagsFilled: tagList.length > 0 && !!(contentResult && contentResult.ok),
+        coverUploaded: !!(uploadResult && uploadResult.ready),
+        publishButtonFound: !!(testRes?.publishButtonFound),
+        publishButtonInfo: testRes?.publishButtonInfo || null,
+        formFields: testRes?.fields || [],
+        note: testRes?.note || '测试模式完成',
+      };
+      log('info', 'test', '测试模式完成: ' + (testRes?.note || '未知'));
+      onProgress(100, '测试完成');
+      // 确保测试模式窗口能正常关闭
+      setupTestModeWindow(win, log);
+      return {
+        accountId,
+        platform: 'xiaohongshu',
+        status: 'success',
+        progress: 100,
+        message: '测试完成 - 表单填写验证通过',
+        startedAt,
+        finishedAt: Date.now(),
+        testResult: testResult,
+      } as PublishItemProgress;
+    }
+
     let clicked = false;
     const clickResult: any = await evalJS(win, buildClickPublishScript(), '点击发布', log);
     log('info', 'click-publish', `JS 点击结果: ${JSON.stringify(clickResult)}`);
@@ -921,7 +969,10 @@ async function runXhsPublish(
     } catch {
       // ignore
     }
-    if (win && !win.isDestroyed()) {
+    // 测试模式：不关闭窗口，让用户可以检查表单填写情况
+    if (request.testMode) {
+      log('info', 'test', '测试模式完成，窗口保持打开，方便检查表单填写情况');
+    } else if (win && !win.isDestroyed()) {
       try {
         win.destroy();
       } catch {
@@ -1449,6 +1500,13 @@ async function publishArticle(
 
     for (let clickN = 1; clickN <= totalClicks && publishFlowOk; clickN++) {
       const stepLabel = clickN === 1 ? '一键排版' : (clickN === 2 ? '下一步' : '发布');
+
+      // 🔑 测试模式：在点击"发布"（第3步）之前停止，不执行真正的发布
+      if (request.testMode && clickN === 3) {
+        log('info', 'test', '测试模式：跳过"发布"按钮点击，仅收集表单状态');
+        break;
+      }
+
       onProgress(70 + clickN * 6, `点击：${stepLabel}（第 ${clickN}/${totalClicks} 步）…`);
 
       // 🔑 直接尝试点击当前步骤的按钮。不依赖 readNextBtnText 的返回值来判断是否继续。
@@ -1490,8 +1548,55 @@ async function publishArticle(
       return makeFailedResult(accountId, 'xiaohongshu', '文章发布流程失败：无法找到/点击底部红色按钮', startedAt);
     }
 
-    log('info', 'article-publish', `✅ 文章发布多步点击流程完成（${totalClicks} 步）`);
-    await sleep(1200);
+    if (!request.testMode) {
+      log('info', 'article-publish', `✅ 文章发布多步点击流程完成（${totalClicks} 步）`);
+      await sleep(1200);
+    }
+
+    // 测试模式：不继续等待发布结果，高亮标记按钮并收集表单状态
+    if (request.testMode) {
+      const testScript = buildTestModeProbeScript(
+        [
+          'button.next-btn',
+          'button.submit',
+          'button.bg-red',
+          'button[class*="custom-button"]',
+          'button[class*="d-button"]',
+          'button[type="submit"]',
+          '.publish-btn',
+          '.submit-btn',
+        ],
+        [
+          { name: '文章标题', selector: 'input[placeholder*="标题"]', type: 'input' },
+          { name: '文章正文', selector: '[contenteditable="true"]', type: 'contenteditable' },
+        ],
+      );
+      const testRes: any = await evalJS(win, testScript, 'article-test-mode-probe', log).catch(() => null);
+      const testResult = {
+        titleFilled: !!(testRes?.fields?.find((f: any) => f.name === '文章标题')?.filled),
+        contentFilled: !!(testRes?.fields?.find((f: any) => f.name === '文章正文')?.filled),
+        tagsFilled: false, // 文章发布暂时无标签检测
+        coverUploaded: false, // 文章封面后续再实现
+        publishButtonFound: !!(testRes?.publishButtonFound),
+        publishButtonInfo: testRes?.publishButtonInfo || null,
+        formFields: testRes?.fields || [],
+        note: testRes?.note || '文章测试模式完成',
+      };
+      log('info', 'test', '文章测试模式完成: ' + (testRes?.note || '未知'));
+      onProgress(100, '测试完成');
+      // 确保测试模式窗口能正常关闭
+      setupTestModeWindow(win, log);
+      return {
+        accountId,
+        platform: 'xiaohongshu',
+        status: 'success',
+        progress: 100,
+        message: '测试完成 - 文章表单填写验证通过',
+        startedAt,
+        finishedAt: Date.now(),
+        testResult: testResult,
+      } as PublishItemProgress;
+    }
 
     // 9) 等待发布结果（60 秒超时）
     onProgress(94, '等待发布结果…');
@@ -1545,7 +1650,10 @@ async function publishArticle(
     } catch {
       // ignore
     }
-    if (win && !win.isDestroyed()) {
+    // 测试模式：不关闭窗口，让用户可以检查表单填写情况
+    if (request.testMode) {
+      log('info', 'test', '文章测试模式完成，窗口保持打开，方便检查表单填写情况');
+    } else if (win && !win.isDestroyed()) {
       try {
         win.destroy();
       } catch {
