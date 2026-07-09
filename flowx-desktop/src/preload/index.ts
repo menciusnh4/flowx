@@ -18,6 +18,12 @@ import type {
   ProxyConfig,
   BrowserEnvironment,
   ProxyTestResult,
+  PublishDraft,
+  BrowserBookmark,
+  BrowserBookmarkFolder,
+  BrowserHistoryItem,
+  ExtractedContent,
+  ExtractedImage,
 } from '../types';
 
 // Preload 脚本：通过 contextBridge 暴露安全 API
@@ -101,6 +107,8 @@ contextBridge.exposeInMainWorld('electron', {
       invoke('publish:listPaged', page, pageSize),
     getStats: (): Promise<PublishStats> => invoke('publish:getStats'),
     retry: (taskId: string): Promise<string | null> => invoke('publish:retry', taskId),
+    retryAsTest: (taskId: string): Promise<string | null> => invoke('publish:retryAsTest', taskId),
+    retryAsPublish: (taskId: string): Promise<string | null> => invoke('publish:retryAsPublish', taskId),
     detail: (taskId: string): Promise<{ task: PublishTask | null; logs: PublishLogEntry[] }> =>
       invoke('publish:detail', taskId),
     delete: (taskId: string): Promise<boolean> => invoke('publish:delete', taskId),
@@ -136,6 +144,182 @@ contextBridge.exposeInMainWorld('electron', {
       invoke('system:showSaveDialog', options),
     minimizeWindow: (): Promise<boolean> => invoke('system:minimizeWindow'),
     closeWindow: (): Promise<boolean> => invoke('system:closeWindow'),
+  },
+
+  // ========== 日志管理 ==========
+  log: {
+    readMain: (options?: { limit?: number; date?: string }): Promise<string> => invoke('log:readMain', options),
+    readPublish: (options?: { limit?: number; date?: string }): Promise<string> => invoke('log:readPublish', options),
+    listFiles: (type: 'main' | 'publish'): Promise<{ date: string; path: string; size: number }[]> =>
+      invoke('log:listFiles', type),
+    queryPublish: (query?: PublishLogQuery): Promise<PublishLogEntry[]> => invoke('log:queryPublish', query),
+    clearPublish: (): Promise<boolean> => invoke('log:clearPublish'),
+    openDir: (): Promise<boolean> => invoke('log:openDir'),
+    'export': (type: 'main' | 'publish' | 'all'): Promise<{ ok: boolean; path?: string; error?: string }> =>
+      invoke('log:export', type),
+    getInfo: (): Promise<{
+      mainSize: number;
+      publishSize: number;
+      logsDir: string;
+      mainPath: string;
+      publishPath: string;
+    }> => invoke('log:getInfo'),
+  },
+
+  // ========== 草稿箱 ==========
+  draft: {
+    list: (contentType?: string): Promise<PublishDraft[]> => invoke('draft:list', contentType),
+    get: (id: string): Promise<PublishDraft | null> => invoke('draft:get', id),
+    create: (data: unknown): Promise<PublishDraft> => invoke('draft:create', data),
+    update: (id: string, patch: unknown): Promise<PublishDraft | null> => invoke('draft:update', id, patch),
+    delete: (id: string): Promise<boolean> => invoke('draft:delete', id),
+    search: (keyword: string): Promise<PublishDraft[]> => invoke('draft:search', keyword),
+  },
+
+  // ========== 浏览器 ==========
+  browser: {
+    createView: (options?: { url?: string }): Promise<{
+      viewId: string;
+      title: string;
+      url: string;
+      isLoading: boolean;
+      canGoBack: boolean;
+      canGoForward: boolean;
+    }> => invoke('browser:createView', options),
+    destroyView: (viewId: string): Promise<boolean> => invoke('browser:destroyView', viewId),
+    setBounds: (viewId: string, bounds: { x: number; y: number; width: number; height: number }): Promise<boolean> =>
+      invoke('browser:setBounds', viewId, bounds),
+    navigate: (viewId: string, url: string): Promise<boolean> => invoke('browser:navigate', viewId, url),
+    goBack: (viewId: string): Promise<boolean> => invoke('browser:goBack', viewId),
+    goForward: (viewId: string): Promise<boolean> => invoke('browser:goForward', viewId),
+    reload: (viewId: string): Promise<boolean> => invoke('browser:reload', viewId),
+    stop: (viewId: string): Promise<boolean> => invoke('browser:stop', viewId),
+    switchEnv: (viewId: string, envId: string | null): Promise<boolean> => invoke('browser:switchEnv', viewId, envId),
+    setIgnoreCertErrors: (viewId: string, ignore: boolean): Promise<boolean> => invoke('browser:setIgnoreCertErrors', viewId, ignore),
+    isIgnoringCertErrors: (viewId: string): Promise<boolean> => invoke('browser:isIgnoringCertErrors', viewId),
+    extractContent: (viewId: string): Promise<ExtractedContent | null> => invoke('browser:extractContent', viewId),
+    manualExtract: (viewId: string, selector: string): Promise<ExtractedContent | null> => invoke('browser:manualExtract', viewId, selector),
+    startSelector: (viewId: string): Promise<boolean> => invoke('browser:startSelector', viewId),
+    stopSelector: (viewId: string): Promise<boolean> => invoke('browser:stopSelector', viewId),
+    downloadImages: (imageUrls: string[], envId?: string | null): Promise<string[]> => invoke('browser:downloadImages', imageUrls, envId),
+    getImageDataUrl: (filePath: string): Promise<string> => invoke('browser:getImageDataUrl', filePath),
+
+    // 订阅页面状态更新
+    onPageTitleUpdated: (cb: (data: { viewId: string; title: string }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string; title: string }) => cb(payload);
+      ipcRenderer.on('browser:titleUpdated', handler);
+      return () => ipcRenderer.removeListener('browser:titleUpdated', handler);
+    },
+    onPageUrlUpdated: (cb: (data: { viewId: string; url: string }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string; url: string }) => cb(payload);
+      ipcRenderer.on('browser:urlUpdated', handler);
+      return () => ipcRenderer.removeListener('browser:urlUpdated', handler);
+    },
+    onLoadingUpdated: (cb: (data: { viewId: string; isLoading: boolean; canGoBack?: boolean; canGoForward?: boolean }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string; isLoading: boolean; canGoBack?: boolean; canGoForward?: boolean }) => cb(payload);
+      ipcRenderer.on('browser:loadingUpdated', handler);
+      return () => ipcRenderer.removeListener('browser:loadingUpdated', handler);
+    },
+    onEnvChanged: (cb: (data: { viewId: string; envId: string | null }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string; envId: string | null }) => cb(payload);
+      ipcRenderer.on('browser:envChanged', handler);
+      return () => ipcRenderer.removeListener('browser:envChanged', handler);
+    },
+    onLoadFailed: (cb: (data: { viewId: string; errorCode: number; errorDescription: string; url: string }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string; errorCode: number; errorDescription: string; url: string }) => cb(payload);
+      ipcRenderer.on('browser:loadFailed', handler);
+      return () => ipcRenderer.removeListener('browser:loadFailed', handler);
+    },
+    onCertIgnoreChanged: (cb: (data: { viewId: string; ignore: boolean }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string; ignore: boolean }) => cb(payload);
+      ipcRenderer.on('browser:certIgnoreChanged', handler);
+      return () => ipcRenderer.removeListener('browser:certIgnoreChanged', handler);
+    },
+    onExtractResult: (cb: (data: { viewId: string; result: ExtractedContent }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string; result: ExtractedContent }) => cb(payload);
+      ipcRenderer.on('browser:extractResult', handler);
+      return () => ipcRenderer.removeListener('browser:extractResult', handler);
+    },
+    onExtractError: (cb: (data: { viewId: string; error: string }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string; error: string }) => cb(payload);
+      ipcRenderer.on('browser:extractError', handler);
+      return () => ipcRenderer.removeListener('browser:extractError', handler);
+    },
+    onManualExtractResult: (cb: (data: { viewId: string; result: ExtractedContent }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string; result: ExtractedContent }) => cb(payload);
+      ipcRenderer.on('browser:manualExtractResult', handler);
+      return () => ipcRenderer.removeListener('browser:manualExtractResult', handler);
+    },
+    onSelectorStarted: (cb: (data: { viewId: string }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string }) => cb(payload);
+      ipcRenderer.on('browser:selectorStarted', handler);
+      return () => ipcRenderer.removeListener('browser:selectorStarted', handler);
+    },
+    onSelectorCancelled: (cb: (data: { viewId: string }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string }) => cb(payload);
+      ipcRenderer.on('browser:selectorCancelled', handler);
+      return () => ipcRenderer.removeListener('browser:selectorCancelled', handler);
+    },
+
+    // 移除监听器的便捷方法
+    removePageTitleUpdatedListener: (cb: (data: { viewId: string; title: string }) => void): void => {
+      ipcRenderer.removeListener('browser:titleUpdated', cb as (...args: unknown[]) => void);
+    },
+    removePageUrlUpdatedListener: (cb: (data: { viewId: string; url: string }) => void): void => {
+      ipcRenderer.removeListener('browser:urlUpdated', cb as (...args: unknown[]) => void);
+    },
+    removeLoadingUpdatedListener: (cb: (data: { viewId: string; isLoading: boolean; canGoBack?: boolean; canGoForward?: boolean }) => void): void => {
+      ipcRenderer.removeListener('browser:loadingUpdated', cb as (...args: unknown[]) => void);
+    },
+  },
+
+  // ========== 浏览器收藏夹与历史记录 ==========
+  browserHistory: {
+    // 收藏夹
+    listBookmarks: (folderId?: string | null): Promise<BrowserBookmark[]> =>
+      invoke('browserHistory:listBookmarks', folderId),
+    listAllBookmarks: (): Promise<BrowserBookmark[]> =>
+      invoke('browserHistory:listAllBookmarks'),
+    isBookmarked: (url: string): Promise<boolean> =>
+      invoke('browserHistory:isBookmarked', url),
+    addBookmark: (data: { url: string; title: string; siteName?: string; folderId?: string }): Promise<BrowserBookmark> =>
+      invoke('browserHistory:addBookmark', data),
+    updateBookmark: (id: string, patch: Partial<Pick<BrowserBookmark, 'title' | 'url' | 'folderId' | 'siteName'>>): Promise<BrowserBookmark | null> =>
+      invoke('browserHistory:updateBookmark', id, patch),
+    deleteBookmark: (id: string): Promise<boolean> =>
+      invoke('browserHistory:deleteBookmark', id),
+    deleteBookmarkByUrl: (url: string): Promise<boolean> =>
+      invoke('browserHistory:deleteBookmarkByUrl', url),
+    searchBookmarks: (keyword: string): Promise<BrowserBookmark[]> =>
+      invoke('browserHistory:searchBookmarks', keyword),
+    listBookmarkFolders: (): Promise<BrowserBookmarkFolder[]> =>
+      invoke('browserHistory:listBookmarkFolders'),
+    createBookmarkFolder: (name: string, parentId?: string): Promise<BrowserBookmarkFolder> =>
+      invoke('browserHistory:createBookmarkFolder', name, parentId),
+    deleteBookmarkFolder: (folderId: string): Promise<boolean> =>
+      invoke('browserHistory:deleteBookmarkFolder', folderId),
+
+    // 历史记录
+    listHistory: (limit?: number): Promise<BrowserHistoryItem[]> =>
+      invoke('browserHistory:listHistory', limit),
+    listHistoryPaged: (page?: number, pageSize?: number): Promise<{
+      items: BrowserHistoryItem[];
+      total: number;
+      page: number;
+      pageSize: number;
+      totalPages: number;
+    }> =>
+      invoke('browserHistory:listHistoryPaged', page, pageSize),
+    addHistory: (data: { url: string; title: string; viewId?: string }): Promise<BrowserHistoryItem> =>
+      invoke('browserHistory:addHistory', data),
+    deleteHistory: (id: string): Promise<boolean> =>
+      invoke('browserHistory:deleteHistory', id),
+    clearHistory: (beforeTs?: number): Promise<number> =>
+      invoke('browserHistory:clearHistory', beforeTs),
+    searchHistory: (keyword: string, limit?: number): Promise<BrowserHistoryItem[]> =>
+      invoke('browserHistory:searchHistory', keyword, limit),
+    getHistoryStats: (): Promise<{ total: number; today: number; thisWeek: number }> =>
+      invoke('browserHistory:getHistoryStats'),
   },
 
   // ========== 创作中心 Tab 栏（仅供创作中心窗口内部使用）==========
@@ -238,6 +422,8 @@ declare global {
         listPaged: (page?: number, pageSize?: number) => Promise<PagedResult<PublishTask>>;
         getStats: () => Promise<PublishStats>;
         retry: (taskId: string) => Promise<string | null>;
+        retryAsTest: (taskId: string) => Promise<string | null>;
+        retryAsPublish: (taskId: string) => Promise<string | null>;
         detail: (taskId: string) => Promise<{ task: PublishTask | null; logs: PublishLogEntry[] }>;
         delete: (taskId: string) => Promise<boolean>;
         setConcurrency: (n: number) => Promise<boolean>;
@@ -256,6 +442,22 @@ declare global {
         showSaveDialog: (options?: Electron.SaveDialogOptions) => Promise<{ canceled: boolean; filePath?: string }>;
         minimizeWindow: () => Promise<boolean>;
         closeWindow: () => Promise<boolean>;
+      };
+      log: {
+        readMain: (options?: { limit?: number; date?: string }) => Promise<string>;
+        readPublish: (options?: { limit?: number; date?: string }) => Promise<string>;
+        listFiles: (type: 'main' | 'publish') => Promise<{ date: string; path: string; size: number }[]>;
+        queryPublish: (query?: PublishLogQuery) => Promise<PublishLogEntry[]>;
+        clearPublish: () => Promise<boolean>;
+        openDir: () => Promise<boolean>;
+        'export': (type: 'main' | 'publish' | 'all') => Promise<{ ok: boolean; path?: string; error?: string }>;
+        getInfo: () => Promise<{
+          mainSize: number;
+          publishSize: number;
+          logsDir: string;
+          mainPath: string;
+          publishPath: string;
+        }>;
       };
       update: {
         check: () => Promise<UpdateInfo>;

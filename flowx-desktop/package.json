@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
+    "@mozilla/readability": "^0.6.0",
     "axios": "^1.6.5",
     "dayjs": "^1.11.10",
     "electron-log": "^5.1.1",

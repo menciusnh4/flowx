@@ -36,14 +36,17 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="100">
+        <el-table-column label="状态" width="140">
           <template #default="{ row }">
-            <el-tag v-if="row.status === 'success'" type="success">成功</el-tag>
-            <el-tag v-else-if="row.status === 'failed'" type="danger">失败</el-tag>
-            <el-tag v-else-if="row.status === 'running'" type="primary">发布中</el-tag>
-            <el-tag v-else-if="row.status === 'cancelled'" type="info">已取消</el-tag>
-            <el-tag v-else-if="row.status === 'scheduled'" type="warning">待发布</el-tag>
-            <el-tag v-else type="info">{{ row.status }}</el-tag>
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <el-tag v-if="row.status === 'success'" type="success">成功</el-tag>
+              <el-tag v-else-if="row.status === 'failed'" type="danger">失败</el-tag>
+              <el-tag v-else-if="row.status === 'running'" type="primary">发布中</el-tag>
+              <el-tag v-else-if="row.status === 'cancelled'" type="info">已取消</el-tag>
+              <el-tag v-else-if="row.status === 'scheduled'" type="warning">待发布</el-tag>
+              <el-tag v-else type="info">{{ row.status }}</el-tag>
+              <el-tag v-if="isTestTask(row)" type="warning" size="small" effect="plain">🔍 测试</el-tag>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="各账号结果" min-width="240">
@@ -78,7 +81,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column label="操作" width="360" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" link @click="showDetail(row)">
               <el-icon><View /></el-icon>&nbsp;详情
@@ -110,6 +113,27 @@
               @click="openEditDialog(row)"
             >
               <el-icon><Edit /></el-icon>&nbsp;编辑重发
+            </el-button>
+            <!-- 测试任务：重新测试 -->
+            <el-button
+              v-if="isTestTask(row) && row.status !== 'running' && row.status !== 'queued'"
+              size="small"
+              type="primary"
+              link
+              :loading="retryingId === row.id"
+              @click="retryTest(row)"
+            >
+              <el-icon><Refresh /></el-icon>&nbsp;重新测试
+            </el-button>
+            <!-- 测试任务：立即发布 -->
+            <el-button
+              v-if="isTestTask(row) && row.status !== 'running' && row.status !== 'queued'"
+              size="small"
+              type="success"
+              link
+              @click="retryAsPublish(row)"
+            >
+              <el-icon><Promotion /></el-icon>&nbsp;立即发布
             </el-button>
             <el-popconfirm
               title="确定删除此历史记录？"
@@ -159,9 +183,14 @@
             {{ contentTypeLabel(detailData.task.request?.contentType) }}
           </el-descriptions-item>
           <el-descriptions-item label="整体状态">
-            <el-tag :type="statusTagType(detailData.task.status)" size="small">
-              {{ statusLabel(detailData.task.status) }}
-            </el-tag>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <el-tag :type="statusTagType(detailData.task.status)" size="small">
+                {{ statusLabel(detailData.task.status) }}
+              </el-tag>
+              <el-tag v-if="isTestTask(detailData.task)" type="warning" size="small" effect="plain">
+                🔍 测试模式
+              </el-tag>
+            </div>
           </el-descriptions-item>
           <el-descriptions-item label="账号数量">
             {{ detailData.task.items.length }} 个
@@ -237,7 +266,57 @@
                 {{ row.startedAt && row.finishedAt ? formatDuration(row.finishedAt - row.startedAt) : '-' }}
               </template>
             </el-table-column>
+            <el-table-column label="测试结果" width="120">
+              <template #default="{ row }">
+                <el-tag v-if="row.testResult" type="warning" size="small" effect="plain">测试完成</el-tag>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
           </el-table>
+
+          <!-- 测试结果详情 -->
+          <div v-if="hasTestResult(detailData.task)" class="test-results-detail">
+            <div class="detail-section-title">🔍 测试结果详情</div>
+            <div v-for="item in detailData.task.items.filter((i: any) => i.testResult)" :key="item.accountId" class="test-result-item">
+              <div class="test-result-header">
+                <span class="test-result-account">
+                  {{ platformLabel(item.platform) }} - {{ nicknameOf(item.accountId) }}
+                </span>
+                <el-tag :type="item.testResult?.publishButtonFound ? 'success' : 'danger'" size="small">
+                  {{ item.testResult?.publishButtonFound ? '✓ 已找到发布按钮' : '✗ 未找到发布按钮' }}
+                </el-tag>
+              </div>
+              <div class="test-result-grid">
+                <div class="test-field" :class="{ filled: item.testResult?.titleFilled }">
+                  <span class="test-field-label">标题</span>
+                  <span class="test-field-value">
+                    {{ item.testResult?.titleFilled ? '✓ 已填写' : '✗ 未填写' }}
+                  </span>
+                </div>
+                <div class="test-field" :class="{ filled: item.testResult?.contentFilled }">
+                  <span class="test-field-label">内容/正文</span>
+                  <span class="test-field-value">
+                    {{ item.testResult?.contentFilled ? '✓ 已填写' : '✗ 未填写' }}
+                  </span>
+                </div>
+                <div class="test-field" :class="{ filled: item.testResult?.tagsFilled }">
+                  <span class="test-field-label">标签/话题</span>
+                  <span class="test-field-value">
+                    {{ item.testResult?.tagsFilled ? '✓ 已填写' : '✗ 未填写' }}
+                  </span>
+                </div>
+                <div class="test-field" :class="{ filled: item.testResult?.coverUploaded }">
+                  <span class="test-field-label">封面</span>
+                  <span class="test-field-value">
+                    {{ item.testResult?.coverUploaded ? '✓ 已上传' : '✗ 未上传' }}
+                  </span>
+                </div>
+              </div>
+              <div v-if="item.testResult?.note" class="test-result-note">
+                💡 {{ item.testResult?.note }}
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- 执行日志 -->
@@ -590,6 +669,16 @@ function hasFailedItems(task: any): boolean {
   return task.items.some((i: PublishItemProgress) => i.status === 'failed' || i.status === 'cancelled');
 }
 
+/** 判断是否为测试任务 */
+function isTestTask(task: any): boolean {
+  return !!(task?.request?.testMode || task?.items?.some((i: any) => i.testResult));
+}
+
+/** 判断是否有测试结果 */
+function hasTestResult(task: any): boolean {
+  return !!(task?.items?.some((i: any) => i.testResult));
+}
+
 function formatTags(tags?: string[]): string {
   if (!tags || tags.length === 0) return '';
   return tags.map((t: string) => '#' + t).join(' ');
@@ -650,6 +739,64 @@ async function retryTask(task: any) {
     }
   } catch (err) {
     ElMessage.error('重试失败: ' + (err as Error).message);
+  } finally {
+    retryingId.value = null;
+  }
+}
+
+/** 重新测试（测试任务专用） */
+async function retryTest(task: any) {
+  try {
+    await ElMessageBox.confirm(
+      `将对所有账号重新执行测试（不真正发布），确定继续？`,
+      '重新测试',
+      { type: 'info', confirmButtonText: '重新测试' },
+    );
+  } catch {
+    return;
+  }
+
+  retryingId.value = task.id as string;
+  try {
+    const newTaskId = await electronApi.retryAsTest(task.id as string);
+    if (newTaskId) {
+      ElMessage.success(`已创建重新测试任务，新任务ID: ${newTaskId}`);
+      detailVisible.value = false;
+      await refresh();
+    } else {
+      ElMessage.warning('无法创建重新测试任务');
+    }
+  } catch (err) {
+    ElMessage.error('重新测试失败: ' + (err as Error).message);
+  } finally {
+    retryingId.value = null;
+  }
+}
+
+/** 立即发布（测试任务转正式发布） */
+async function retryAsPublish(task: any) {
+  try {
+    await ElMessageBox.confirm(
+      `将对所有账号立即执行正式发布（会真的发布内容），确定继续？`,
+      '立即发布',
+      { type: 'warning', confirmButtonText: '立即发布' },
+    );
+  } catch {
+    return;
+  }
+
+  retryingId.value = task.id as string;
+  try {
+    const newTaskId = await electronApi.retryAsPublish(task.id as string);
+    if (newTaskId) {
+      ElMessage.success(`已创建发布任务，新任务ID: ${newTaskId}`);
+      detailVisible.value = false;
+      await refresh();
+    } else {
+      ElMessage.warning('无法创建发布任务');
+    }
+  } catch (err) {
+    ElMessage.error('发布失败: ' + (err as Error).message);
   } finally {
     retryingId.value = null;
   }
@@ -821,5 +968,70 @@ onMounted(async () => {
   word-break: break-all;
   flex: 1;
   margin-right: 8px;
+}
+
+/* 测试结果详情 */
+.test-results-detail {
+  margin-top: 16px;
+}
+.test-result-item {
+  background: #fdf6ec;
+  border: 1px solid #faecd8;
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-bottom: 10px;
+}
+.test-result-item:last-child {
+  margin-bottom: 0;
+}
+.test-result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.test-result-account {
+  font-weight: 500;
+  color: #606266;
+  font-size: 13px;
+}
+.test-result-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.test-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  background: #fff;
+  border-radius: 4px;
+  border: 1px solid #f0d9a8;
+}
+.test-field.filled {
+  border-color: #67c23a;
+  background: #f0f9eb;
+}
+.test-field-label {
+  font-size: 12px;
+  color: #909399;
+}
+.test-field-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: #606266;
+}
+.test-field.filled .test-field-value {
+  color: #67c23a;
+}
+.test-result-note {
+  font-size: 12px;
+  color: #e6a23c;
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: #fffbe6;
+  border-radius: 4px;
 }
 </style>

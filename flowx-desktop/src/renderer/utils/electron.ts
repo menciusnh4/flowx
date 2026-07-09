@@ -19,6 +19,12 @@ import type {
   ProxyConfig,
   BrowserEnvironment,
   ProxyTestResult,
+  PublishDraft,
+  BrowserBookmark,
+  BrowserBookmarkFolder,
+  BrowserHistoryItem,
+  ExtractedContent,
+  ExtractedImage,
 } from '../../types';
 
 type StatusCb = (evt: unknown) => void;
@@ -122,6 +128,12 @@ export const electronApi = {
   async retryPublish(taskId: string): Promise<string | null> {
     return invokeElectron('publish.retry', 'publish:retry', taskId);
   },
+  async retryAsTest(taskId: string): Promise<string | null> {
+    return invokeElectron('publish.retryAsTest', 'publish:retryAsTest', taskId);
+  },
+  async retryAsPublish(taskId: string): Promise<string | null> {
+    return invokeElectron('publish.retryAsPublish', 'publish:retryAsPublish', taskId);
+  },
   async getTaskDetail(taskId: string): Promise<{ task: PublishTask | null; logs: PublishLogEntry[] }> {
     return invokeElectron('publish.detail', 'publish:detail', taskId);
   },
@@ -166,6 +178,38 @@ export const electronApi = {
   },
   async closeWindow(): Promise<boolean> {
     return invokeElectron('system.closeWindow', 'system:closeWindow');
+  },
+
+  // 日志管理
+  async readMainLog(options?: { limit?: number; date?: string }): Promise<string> {
+    return invokeElectron('log.readMain', 'log:readMain', options);
+  },
+  async readPublishLog(options?: { limit?: number; date?: string }): Promise<string> {
+    return invokeElectron('log.readPublish', 'log:readPublish', options);
+  },
+  async listLogFiles(type: 'main' | 'publish'): Promise<{ date: string; path: string; size: number }[]> {
+    return invokeElectron('log.listFiles', 'log:listFiles', type);
+  },
+  async queryPublishLog(query?: PublishLogQuery): Promise<PublishLogEntry[]> {
+    return invokeElectron('log.queryPublish', 'log:queryPublish', query);
+  },
+  async clearPublishLogMemory(): Promise<boolean> {
+    return invokeElectron('log.clearPublish', 'log:clearPublish');
+  },
+  async openLogDirectory(): Promise<boolean> {
+    return invokeElectron('log.openDir', 'log:openDir');
+  },
+  async exportLog(type: 'main' | 'publish' | 'all'): Promise<{ ok: boolean; path?: string; error?: string }> {
+    return invokeElectron('log.export', 'log:export', type);
+  },
+  async getLogFileInfo(): Promise<{
+    mainSize: number;
+    publishSize: number;
+    logsDir: string;
+    mainPath: string;
+    publishPath: string;
+  }> {
+    return invokeElectron('log.getInfo', 'log:getInfo');
   },
 
   // 更新
@@ -215,6 +259,219 @@ export const electronApi = {
   },
   async deleteEnvironment(id: string): Promise<boolean> {
     return invokeElectron('env.deleteEnvironment', 'env:deleteEnvironment', id);
+  },
+
+  // 草稿箱
+  draft: {
+    async list(contentType?: string): Promise<PublishDraft[]> {
+      return invokeElectron('draft.list', 'draft:list', contentType);
+    },
+    async get(id: string): Promise<PublishDraft | null> {
+      return invokeElectron('draft.get', 'draft:get', id);
+    },
+    async create(data: Parameters<typeof import('../../main/services/DraftService').createDraft>[0]): Promise<PublishDraft> {
+      return invokeElectron('draft.create', 'draft:create', data);
+    },
+    async update(id: string, patch: Parameters<typeof import('../../main/services/DraftService').updateDraft>[1]): Promise<PublishDraft | null> {
+      return invokeElectron('draft.update', 'draft:update', id, patch);
+    },
+    async delete(id: string): Promise<boolean> {
+      return invokeElectron('draft.delete', 'draft:delete', id);
+    },
+    async search(keyword: string): Promise<PublishDraft[]> {
+      return invokeElectron('draft.search', 'draft:search', keyword);
+    },
+  },
+
+  // 浏览器
+  browser: {
+    async createView(options?: { url?: string; envId?: string | null }): Promise<{
+      viewId: string;
+      title: string;
+      url: string;
+      isLoading: boolean;
+      canGoBack: boolean;
+      canGoForward: boolean;
+      envId: string | null;
+    }> {
+      return invokeElectron('browser.createView', 'browser:createView', options);
+    },
+    async destroyView(viewId: string): Promise<boolean> {
+      return invokeElectron('browser.destroyView', 'browser:destroyView', viewId);
+    },
+    async setBounds(viewId: string, bounds: { x: number; y: number; width: number; height: number }): Promise<boolean> {
+      return invokeElectron('browser.setBounds', 'browser:setBounds', viewId, bounds);
+    },
+    async navigate(viewId: string, url: string): Promise<boolean> {
+      return invokeElectron('browser.navigate', 'browser:navigate', viewId, url);
+    },
+    async goBack(viewId: string): Promise<boolean> {
+      return invokeElectron('browser.goBack', 'browser:goBack', viewId);
+    },
+    async goForward(viewId: string): Promise<boolean> {
+      return invokeElectron('browser.goForward', 'browser:goForward', viewId);
+    },
+    async reload(viewId: string): Promise<boolean> {
+      return invokeElectron('browser.reload', 'browser:reload', viewId);
+    },
+    async stop(viewId: string): Promise<boolean> {
+      return invokeElectron('browser.stop', 'browser:stop', viewId);
+    },
+    async switchEnv(viewId: string, envId: string | null): Promise<boolean> {
+      return invokeElectron('browser.switchEnv', 'browser:switchEnv', viewId, envId);
+    },
+    async setIgnoreCertErrors(viewId: string, ignore: boolean): Promise<boolean> {
+      return invokeElectron('browser.setIgnoreCertErrors', 'browser:setIgnoreCertErrors', viewId, ignore);
+    },
+    async isIgnoringCertErrors(viewId: string): Promise<boolean> {
+      return invokeElectron('browser.isIgnoringCertErrors', 'browser:isIgnoringCertErrors', viewId);
+    },
+    async extractContent(viewId: string): Promise<ExtractedContent | null> {
+      return invokeElectron('browser.extractContent', 'browser:extractContent', viewId);
+    },
+    async manualExtract(viewId: string, selector: string): Promise<ExtractedContent | null> {
+      return invokeElectron('browser.manualExtract', 'browser:manualExtract', viewId, selector);
+    },
+    async startSelector(viewId: string): Promise<boolean> {
+      return invokeElectron('browser.startSelector', 'browser:startSelector', viewId);
+    },
+    async stopSelector(viewId: string): Promise<boolean> {
+      return invokeElectron('browser.stopSelector', 'browser:stopSelector', viewId);
+    },
+    async downloadImages(imageUrls: string[], envId?: string | null): Promise<string[]> {
+      return invokeElectron('browser.downloadImages', 'browser:downloadImages', imageUrls, envId);
+    },
+    async getImageDataUrl(filePath: string): Promise<string> {
+      return invokeElectron('browser.getImageDataUrl', 'browser:getImageDataUrl', filePath);
+    },
+
+    onPageTitleUpdated(cb: (data: { viewId: string; title: string }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onPageTitleUpdated: (cb: never) => () => void } };
+      return e.browser?.onPageTitleUpdated?.(cb as never) ?? (() => { /* noop */ });
+    },
+    onPageUrlUpdated(cb: (data: { viewId: string; url: string }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onPageUrlUpdated: (cb: never) => () => void } };
+      return e.browser?.onPageUrlUpdated?.(cb as never) ?? (() => { /* noop */ });
+    },
+    onLoadingUpdated(cb: (data: { viewId: string; isLoading: boolean; canGoBack?: boolean; canGoForward?: boolean }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onLoadingUpdated: (cb: never) => () => void } };
+      return e.browser?.onLoadingUpdated?.(cb as never) ?? (() => { /* noop */ });
+    },
+    onEnvChanged(cb: (data: { viewId: string; envId: string | null }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onEnvChanged: (cb: never) => () => void } };
+      return e.browser?.onEnvChanged?.(cb as never) ?? (() => { /* noop */ });
+    },
+    onLoadFailed(cb: (data: { viewId: string; errorCode: number; errorDescription: string; url: string }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onLoadFailed: (cb: never) => () => void } };
+      return e.browser?.onLoadFailed?.(cb as never) ?? (() => { /* noop */ });
+    },
+    onCertIgnoreChanged(cb: (data: { viewId: string; ignore: boolean }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onCertIgnoreChanged: (cb: never) => () => void } };
+      return e.browser?.onCertIgnoreChanged?.(cb as never) ?? (() => { /* noop */ });
+    },
+    onExtractResult(cb: (data: { viewId: string; result: ExtractedContent }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onExtractResult: (cb: never) => () => void } };
+      return e.browser?.onExtractResult?.(cb as never) ?? (() => { /* noop */ });
+    },
+    onExtractError(cb: (data: { viewId: string; error: string }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onExtractError: (cb: never) => () => void } };
+      return e.browser?.onExtractError?.(cb as never) ?? (() => { /* noop */ });
+    },
+    onManualExtractResult(cb: (data: { viewId: string; result: ExtractedContent }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onManualExtractResult: (cb: never) => () => void } };
+      return e.browser?.onManualExtractResult?.(cb as never) ?? (() => { /* noop */ });
+    },
+    onSelectorStarted(cb: (data: { viewId: string }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onSelectorStarted: (cb: never) => () => void } };
+      return e.browser?.onSelectorStarted?.(cb as never) ?? (() => { /* noop */ });
+    },
+    onSelectorCancelled(cb: (data: { viewId: string }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onSelectorCancelled: (cb: never) => () => void } };
+      return e.browser?.onSelectorCancelled?.(cb as never) ?? (() => { /* noop */ });
+    },
+
+    removePageTitleUpdatedListener(cb: (data: { viewId: string; title: string }) => void): void {
+      const e = getElectronOrThrow() as { browser?: { removePageTitleUpdatedListener: (cb: never) => void } };
+      e.browser?.removePageTitleUpdatedListener?.(cb as never);
+    },
+    removePageUrlUpdatedListener(cb: (data: { viewId: string; url: string }) => void): void {
+      const e = getElectronOrThrow() as { browser?: { removePageUrlUpdatedListener: (cb: never) => void } };
+      e.browser?.removePageUrlUpdatedListener?.(cb as never);
+    },
+    removeLoadingUpdatedListener(cb: (data: { viewId: string; isLoading: boolean; canGoBack?: boolean; canGoForward?: boolean }) => void): void {
+      const e = getElectronOrThrow() as { browser?: { removeLoadingUpdatedListener: (cb: never) => void } };
+      e.browser?.removeLoadingUpdatedListener?.(cb as never);
+    },
+  },
+
+  // 浏览器收藏夹与历史记录
+  browserHistory: {
+    // 收藏夹
+    async listBookmarks(folderId?: string | null): Promise<BrowserBookmark[]> {
+      return invokeElectron('browserHistory.listBookmarks', 'browserHistory:listBookmarks', folderId);
+    },
+    async listAllBookmarks(): Promise<BrowserBookmark[]> {
+      return invokeElectron('browserHistory.listAllBookmarks', 'browserHistory:listAllBookmarks');
+    },
+    async isBookmarked(url: string): Promise<boolean> {
+      return invokeElectron('browserHistory.isBookmarked', 'browserHistory:isBookmarked', url);
+    },
+    async addBookmark(data: { url: string; title: string; siteName?: string; folderId?: string }): Promise<BrowserBookmark> {
+      return invokeElectron('browserHistory.addBookmark', 'browserHistory:addBookmark', data);
+    },
+    async updateBookmark(
+      id: string,
+      patch: Partial<Pick<BrowserBookmark, 'title' | 'url' | 'folderId' | 'siteName'>>,
+    ): Promise<BrowserBookmark | null> {
+      return invokeElectron('browserHistory.updateBookmark', 'browserHistory:updateBookmark', id, patch);
+    },
+    async deleteBookmark(id: string): Promise<boolean> {
+      return invokeElectron('browserHistory.deleteBookmark', 'browserHistory:deleteBookmark', id);
+    },
+    async deleteBookmarkByUrl(url: string): Promise<boolean> {
+      return invokeElectron('browserHistory.deleteBookmarkByUrl', 'browserHistory:deleteBookmarkByUrl', url);
+    },
+    async searchBookmarks(keyword: string): Promise<BrowserBookmark[]> {
+      return invokeElectron('browserHistory.searchBookmarks', 'browserHistory:searchBookmarks', keyword);
+    },
+    async listBookmarkFolders(): Promise<BrowserBookmarkFolder[]> {
+      return invokeElectron('browserHistory.listBookmarkFolders', 'browserHistory:listBookmarkFolders');
+    },
+    async createBookmarkFolder(name: string, parentId?: string): Promise<BrowserBookmarkFolder> {
+      return invokeElectron('browserHistory.createBookmarkFolder', 'browserHistory:createBookmarkFolder', name, parentId);
+    },
+    async deleteBookmarkFolder(folderId: string): Promise<boolean> {
+      return invokeElectron('browserHistory.deleteBookmarkFolder', 'browserHistory:deleteBookmarkFolder', folderId);
+    },
+
+    // 历史记录
+    async listHistory(limit?: number): Promise<BrowserHistoryItem[]> {
+      return invokeElectron('browserHistory.listHistory', 'browserHistory:listHistory', limit);
+    },
+    async listHistoryPaged(page?: number, pageSize?: number): Promise<{
+      items: BrowserHistoryItem[];
+      total: number;
+      page: number;
+      pageSize: number;
+      totalPages: number;
+    }> {
+      return invokeElectron('browserHistory.listHistoryPaged', 'browserHistory:listHistoryPaged', page, pageSize);
+    },
+    async addHistory(data: { url: string; title: string; viewId?: string }): Promise<BrowserHistoryItem> {
+      return invokeElectron('browserHistory.addHistory', 'browserHistory:addHistory', data);
+    },
+    async deleteHistory(id: string): Promise<boolean> {
+      return invokeElectron('browserHistory.deleteHistory', 'browserHistory:deleteHistory', id);
+    },
+    async clearHistory(beforeTs?: number): Promise<number> {
+      return invokeElectron('browserHistory.clearHistory', 'browserHistory:clearHistory', beforeTs);
+    },
+    async searchHistory(keyword: string, limit?: number): Promise<BrowserHistoryItem[]> {
+      return invokeElectron('browserHistory.searchHistory', 'browserHistory:searchHistory', keyword, limit);
+    },
+    async getHistoryStats(): Promise<{ total: number; today: number; thisWeek: number }> {
+      return invokeElectron('browserHistory.getHistoryStats', 'browserHistory:getHistoryStats');
+    },
   },
 };
 

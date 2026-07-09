@@ -55,6 +55,9 @@ flowx-desktop/
 │   │   ├── index.ts                  # 应用入口（GPU 策略 / 单实例锁 / 窗口创建）
 │   │   ├── services/
 │   │   │   ├── AccountService.ts     # 账号授权 / Cookie 注入 / 信息提取
+│   │   │   ├── BrowserService.ts     # 浏览器视图管理（多标签 / 书签 / 内容提取）
+│   │   │   ├── BrowserHistoryService.ts # 书签与历史记录服务
+│   │   │   ├── ContentExtractor.ts   # 网页内容提取引擎（Readability + 站点规则 + 手动提取）
 │   │   │   ├── PublishEngine.ts      # 发布引擎 / 并发控制 / IPC 推送
 │   │   │   ├── PlatformAdapter.ts    # 平台适配器（各平台 publish 入口）
 │   │   │   └── platforms/
@@ -65,6 +68,8 @@ flowx-desktop/
 │   │   ├── ipc/
 │   │   │   ├── index.ts              # IPC 注册（safeInvoke 封装）
 │   │   │   ├── account.ts            # 账号通道
+│   │   │   ├── browser.ts            # 浏览器通道（标签页 / 导航 / 内容提取）
+│   │   │   ├── browserHistory.ts     # 书签与历史记录通道
 │   │   │   ├── publish.ts            # 发布通道
 │   │   │   └── system.ts             # 系统信息 / 日志
 │   │   ├── windows/
@@ -80,9 +85,16 @@ flowx-desktop/
 │   │   ├── pages/
 │   │   │   ├── Dashboard.vue         # 仪表盘
 │   │   │   ├── AccountPanel.vue      # 账号管理
-│   │   │   └── Publish.vue           # 发布表单 + 进度面板
+│   │   │   ├── Publish.vue           # 一键发布
+│   │   │   ├── History.vue           # 发布历史（重试/编辑重发/重新测试/立即发布）
+│   │   │   ├── Browser.vue           # 浏览器（多标签 + 内容提取 + 发布表单分栏）
+│   │   │   └── DraftBox.vue          # 草稿箱
+│   │   ├── components/
+│   │   │   └── PublishForm.vue       # 发布表单组件（发布页/浏览器页复用）
 │   │   └── stores/
 │   │       ├── account.ts            # 账号列表 / 刷新状态
+│   │       ├── browser.ts            # 浏览器状态（标签页 / 书签 / 历史）
+│   │       ├── draft.ts              # 草稿箱
 │   │       └── publish.ts            # 发布任务 / IPC 事件订阅 / 自动清理
 │   └── types/
 │       └── index.ts                  # 全局共享类型（PublishRequest / PlatformMeta 等）
@@ -110,11 +122,53 @@ flowx-desktop/
 ### ✅ 一键发布
 
 - 选择多个账号 → 上传素材 → 填写标题/话题 → 一键发布
+- **测试模式**：点击"测试发布"，仅填写表单不真正发布，高亮标记发布按钮，窗口保持打开供检查
+- **测试结果检测**：自动检测标题/内容/标签/封面是否填写，发布按钮是否找到，生成可视化测试报告
+- **文章摘要**：文章发布支持独立的摘要字段（抖音 30 字，小红书 1000 字）
+- **文章话题弹窗**：抖音文章话题通过专用弹窗搜索添加（最多 5 个），非正文追加方式
+- **小红书文章话题**：在第三步摘要框中通过模拟键盘输入插入话题标签
 - 并发控制（默认 3 个并行，可调）
 - 实时进度推送（每个账号独立状态）
 - 失败分支保留发布窗口，方便手动处理
 - 发布后 3 秒自动关闭窗口 + 8 秒后从"任务进行中"面板移除
 - 自动处理草稿/二次确认对话框
+- 草稿箱：保存未发布内容，支持从草稿继续编辑
+- 发布类型切换自动清理不兼容的选中账号（如切换到文章自动取消微信视频号选中）
+
+### ✅ 发布历史
+
+- 查看所有发布任务的历史记录，支持分页（默认 10 条/页，可配置 10/20/50/100）
+- 任务状态一目了然：成功/失败/发布中/已取消/待发布，测试任务带🔍标记
+- 各账号执行结果标签化展示（前 4 个直接显示，超出悬浮查看）
+- **测试任务操作**：
+  - **重新测试**：对所有账号重新执行测试（不真正发布），用于验证修复效果
+  - **立即发布**：将测试任务转为正式发布，确认无误后一键发布
+- **失败任务操作**：
+  - **重试**：仅重试失败的账号（成功的不重复发布）
+  - **编辑重发**：修改标题/内容/话题/素材后，对失败账号重新发布
+- **定时任务操作**：支持取消待发布的定时任务
+- 任务详情弹窗：查看完整请求参数、各账号结果、测试报告、执行日志（最多 50 条）
+
+### ✅ 浏览器与内容提取
+
+- **多标签浏览器**：基于 Electron WebContentsView，支持新建/切换/关闭标签页
+- **环境隔离**：支持选择浏览器环境（User-Agent / 代理配置），每个标签独立 session
+- **分栏布局**：左侧浏览器 + 右侧发布表单，宽度比 2:1，支持拖拽调节
+- **一键提取内容**：自动提取网页正文、标题、图片，一键填充到发布表单
+- **多策略提取引擎**：
+  - 站点规则适配（微信公众号 / 知乎 / 今日头条 / 36氪 / 简书 / 少数派 / CSDN / 掘金 等 10+ 站点）
+  - Readability.js 通用正文提取
+  - 文本密度算法兜底
+- **手动提取**：
+  - 右键菜单提取（图片 / 元素 / 整页 / 选择模式）
+  - 元素选择模式（悬停高亮 / 点击确认 / ESC 取消 / 方向键切换层级）
+  - 光标位置插入（手动提取不覆盖已有内容）
+- **文本清理**：七步清理管线（零宽字符 / 换行 / 空格 / 空行 / 首尾清理）
+- **图片智能过滤**：五级过滤（广告域名 / data URI / 尺寸 / 比例 / 语义）
+- **置信度评分**：三色标签显示提取质量（绿 ≥80 / 橙 50-79 / 红 <50）
+- **书签 & 历史记录**：收藏夹管理、访问历史记录、侧边栏展示
+- **SSL 证书处理**：证书错误可选择继续访问
+- **DevTools**：F12 / 右键检查元素，调试浏览器页面
 
 ### ✅ 自动化技术
 
@@ -184,6 +238,8 @@ Vue 响应式更新 → 进度面板刷新
 - 📊 数据中心 / 统计分析（发布量 / 平台分布 / 趋势）
 - ✍️ 内容创作模块（草稿管理 / 内容模板）
 - 🌐 更多平台（B 站、微信公众号、知乎、视频号等）
+- 🔗 更多网站内容提取适配规则
+- ⚡ 提取结果缓存 / 预提取优化
 - 🔄 自动更新（electron-updater，需要配置私有发布地址）
 - 🔌 插件系统（允许用户自定义平台适配器）
 
@@ -193,10 +249,21 @@ Vue 响应式更新 → 进度面板刷新
 
 - **项目总览 README**：[上层目录 README](../README.md)
 - **完整设计文档**：[../设计文档.md](../设计文档.md)（包含 PlatformDispatcher 工厂方法模式）
+- **浏览器与内容提取设计文档**：[`../content-extraction-optimization/content-extraction-optimization.html`](../content-extraction-optimization/content-extraction-optimization.html)
 - **小红书自动发布技术文档**：[`docs/小红书自动发布技术文档.md`](./docs/小红书自动发布技术文档.md)（Closed Shadow DOM / CDP 穿透）
+- **小红书图文发布技术文档**：[`docs/小红书图文发布技术文档.md`](./docs/小红书图文发布技术文档.md)（ProseMirror 富文本 / 多图上传）
+- **小红书文章发布技术文档**：[`docs/小红书文章发布技术文档.md`](./docs/小红书文章发布技术文档.md)（多步排版 / 摘要填写 / 话题插入）
 - **快手自动发布技术文档**：[`docs/快手自动发布技术文档.md`](./docs/快手自动发布技术文档.md)（Element UI / contenteditable / user-cnt__item 提取）
+- **快手图文发布技术文档**：[`docs/快手图文发布技术文档.md`](./docs/快手图文发布技术文档.md)
+- **抖音图文发布技术文档**：[`docs/抖音图文发布技术文档.md`](./docs/抖音图文发布技术文档.md)
+- **抖音文章发布技术文档**：[`docs/抖音文章发布技术文档.md`](./docs/抖音文章发布技术文档.md)（封面上传 / 话题弹窗 / 摘要字段）
+- **微信视频号图文技术文档**：[`docs/微信视频图文技术文档.md`](./docs/微信视频图文技术文档.md)（微前端 iframe / CDP 物理点击）
 - **抖音发布稳定性修复方案**：[`docs/抖音发布稳定性修复方案.md`](./docs/抖音发布稳定性修复方案.md)
 - **platforms/ 目录**：[`src/main/services/platforms/`](./src/main/services/platforms/)（三个平台独立实现 + shared.ts 共享工具）
 - **PlatformDispatcher.ts**：[`src/main/services/platforms/PlatformDispatcher.ts`](./src/main/services/platforms/PlatformDispatcher.ts)（工厂方法分发器）
 - **PublishEngine.ts**：[`src/main/services/PublishEngine.ts`](./src/main/services/PublishEngine.ts)
 - **AccountService.ts**：[`src/main/services/AccountService.ts`](./src/main/services/AccountService.ts)
+- **BrowserService.ts**：[`src/main/services/BrowserService.ts`](./src/main/services/BrowserService.ts)（浏览器视图管理）
+- **ContentExtractor.ts**：[`src/main/services/ContentExtractor.ts`](./src/main/services/ContentExtractor.ts)（内容提取引擎）
+- **Browser.vue**：[`src/renderer/pages/Browser.vue`](./src/renderer/pages/Browser.vue)（浏览器页面）
+- **PublishForm.vue**：[`src/renderer/components/PublishForm.vue`](./src/renderer/components/PublishForm.vue)（发布表单组件）

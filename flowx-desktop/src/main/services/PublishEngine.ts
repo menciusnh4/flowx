@@ -394,6 +394,98 @@ class PublishEngineClass {
     return newTaskId;
   }
 
+  /**
+   * 重新测试（测试任务专用）
+   * - 用原始请求 + testMode: true，对所有账号重新测试
+   * - 创建新的测试任务
+   */
+  retryAsTest(taskId: string): string | null {
+    const originalTask = this.running.get(taskId);
+    if (!originalTask) {
+      throw new Error(`任务不存在: ${taskId}`);
+    }
+
+    const originalRequest = originalTask.request;
+    if (!originalRequest) {
+      return null;
+    }
+
+    // 构造新的测试请求（所有账号，testMode: true）
+    const testRequest: PublishRequest = {
+      ...originalRequest,
+      testMode: true,
+    };
+
+    writePublishLog({
+      ts: Date.now(),
+      level: 'info',
+      taskId: originalTask.id,
+      stage: 'retry-test',
+      message: `发起重新测试，原任务=${originalTask.id}，账号数=${testRequest.accountIds.length}`,
+      data: { accountIds: testRequest.accountIds, originalStatus: originalTask.status },
+    });
+
+    const newTaskId = this.submit(testRequest);
+
+    writePublishLog({
+      ts: Date.now(),
+      level: 'info',
+      taskId: newTaskId,
+      stage: 'retry-test',
+      message: `重新测试任务已创建，新任务ID=${newTaskId}，来源任务=${originalTask.id}`,
+      data: { sourceTaskId: originalTask.id, accountIds: testRequest.accountIds },
+    });
+
+    return newTaskId;
+  }
+
+  /**
+   * 立即发布（测试任务转正式发布）
+   * - 用原始请求 + testMode: false，对所有账号真正发布
+   * - 创建新的正式发布任务
+   */
+  retryAsPublish(taskId: string): string | null {
+    const originalTask = this.running.get(taskId);
+    if (!originalTask) {
+      throw new Error(`任务不存在: ${taskId}`);
+    }
+
+    const originalRequest = originalTask.request;
+    if (!originalRequest) {
+      return null;
+    }
+
+    // 构造新的正式发布请求（所有账号，去掉 testMode）
+    const publishRequest: PublishRequest = {
+      ...originalRequest,
+      testMode: false,
+    };
+    // 清除定时发布时间（立即发布）
+    delete publishRequest.scheduledAt;
+
+    writePublishLog({
+      ts: Date.now(),
+      level: 'info',
+      taskId: originalTask.id,
+      stage: 'retry-publish',
+      message: `发起立即发布，原任务=${originalTask.id}，账号数=${publishRequest.accountIds.length}`,
+      data: { accountIds: publishRequest.accountIds, originalStatus: originalTask.status },
+    });
+
+    const newTaskId = this.submit(publishRequest);
+
+    writePublishLog({
+      ts: Date.now(),
+      level: 'info',
+      taskId: newTaskId,
+      stage: 'retry-publish',
+      message: `立即发布任务已创建，新任务ID=${newTaskId}，来源任务=${originalTask.id}`,
+      data: { sourceTaskId: originalTask.id, accountIds: publishRequest.accountIds },
+    });
+
+    return newTaskId;
+  }
+
   /** 获取单个任务详情（含日志） */
   getTaskDetail(taskId: string): { task: PublishTask | null; logs: PublishLogEntry[] } {
     const task = this.running.get(taskId) || null;
@@ -570,6 +662,10 @@ class PublishEngineClass {
       item.resultUrl = result.resultUrl;
       item.message = result.message;
       item.finishedAt = result.finishedAt || Date.now();
+      // 传递测试模式结果
+      if (result.testResult) {
+        item.testResult = result.testResult;
+      }
 
       writePublishLog({
         ts: Date.now(),
@@ -578,8 +674,8 @@ class PublishEngineClass {
         accountId,
         platform: item.platform,
         stage: 'finish',
-        message: `子任务完成，状态=${result.status}`,
-        data: { status: result.status, resultUrl: result.resultUrl, message: result.message },
+        message: `子任务完成，状态=${result.status}${result.testResult ? '（测试模式）' : ''}`,
+        data: { status: result.status, resultUrl: result.resultUrl, message: result.message, testResult: result.testResult || undefined },
       });
     } catch (err) {
       item.status = 'failed';

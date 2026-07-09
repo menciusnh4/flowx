@@ -4,6 +4,9 @@ import { registerPublishIpc } from './publish';
 import { registerSystemIpc } from './system';
 import { registerEnvIpc } from './env';
 import { registerApiServerIpc } from './apiServer';
+import { registerBrowserIpc } from './browser';
+import { registerDraftIpc } from './draft';
+import { registerBrowserHistoryIpc } from './browserHistory';
 import { logger } from '../utils/logger';
 
 // 注册所有 IPC 监听
@@ -13,6 +16,9 @@ export function registerAllIpc(): void {
   registerSystemIpc();
   registerEnvIpc();
   registerApiServerIpc();
+  registerBrowserIpc();
+  registerDraftIpc();
+  registerBrowserHistoryIpc();
   logger.info('[IPC] 所有通道已注册');
 }
 

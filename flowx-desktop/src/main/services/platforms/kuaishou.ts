@@ -16,6 +16,8 @@ import {
   waitForUploadComplete,
   buildPageStructureProbe,
   cdpInsertTagsWithSpace,
+  buildTestModeProbeScript,
+  setupTestModeWindow,
 } from './shared';
 import { registerPlatform } from './registry';
 import type {
@@ -893,6 +895,55 @@ async function runKuaishouPublish(
 
     // ---- 步骤 9：点击发布按钮 ----
     onProgress(75, '点击发布按钮…');
+
+    // 测试模式：不点击发布，高亮标记按钮并收集表单状态
+    if (request.testMode) {
+      const testScript = buildTestModeProbeScript(
+        [
+          '._button-primary_',
+          '._button_3a3lq_',
+          'button.button-primary',
+          'div[class*="button-primary"]',
+          'div[class*="publish"] button',
+          'button[type="submit"]',
+          '.publish-btn',
+          '.submit-btn',
+        ],
+        [
+          { name: '标题', selector: 'input[placeholder*="标题"]', type: 'input' },
+          { name: '描述/正文', selector: '[contenteditable="true"]', type: 'contenteditable' },
+          { name: '描述文本框', selector: 'textarea', type: 'textarea' },
+        ],
+      );
+      const testRes: any = await evalJS(win, testScript, 'test-mode-probe', log).catch(() => null);
+      const testResult = {
+        titleFilled: !!(testRes?.fields?.find((f: any) => f.name === '标题')?.filled),
+        contentFilled: !!(testRes?.fields?.find((f: any) => f.name.includes('描述') || f.name.includes('正文'))?.filled),
+        tagsFilled: !!(request.tags && request.tags.length > 0),
+        coverUploaded: !!(request.coverImage && request.coverImage.length > 0),
+        publishButtonFound: !!(testRes?.publishButtonFound),
+        publishButtonInfo: testRes?.publishButtonInfo || null,
+        formFields: testRes?.fields || [],
+        note: testRes?.note || '测试模式完成',
+      };
+      log('info', 'test', '测试模式完成: ' + (testRes?.note || '未知'));
+      onProgress(100, '测试完成');
+
+      // 🔑 测试模式下：确保用户点关闭时能正常关闭窗口
+      setupTestModeWindow(win, log);
+
+      return {
+        accountId,
+        platform: 'kuaishou',
+        status: 'success',
+        progress: 100,
+        message: '测试完成 - 表单填写验证通过',
+        startedAt,
+        finishedAt: Date.now(),
+        testResult: testResult,
+      } as PublishItemProgress;
+    }
+
     const clickScript = buildClickPublishButtonScript();
     const clickRes: any = await evalJS(win, clickScript, 'click-publish', log).catch(() => null);
     if (!clickRes || !clickRes.clicked) {
@@ -1046,7 +1097,10 @@ async function runKuaishouPublish(
     if (tracker) {
       try { tracker.dispose(); } catch { /* ignore */ }
     }
-    if (win && !win.isDestroyed()) {
+    // 测试模式：不关闭窗口，让用户可以检查表单填写情况
+    if (request.testMode) {
+      log('info', 'test', '测试模式完成，窗口保持打开，方便检查表单填写情况');
+    } else if (win && !win.isDestroyed()) {
       // 短暂停留让用户看到结果页，之后关闭
       setTimeout(() => {
         try { if (win && !win.isDestroyed()) win.destroy(); } catch { /* ignore */ }

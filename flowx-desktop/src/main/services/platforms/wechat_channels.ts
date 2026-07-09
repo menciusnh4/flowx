@@ -8,6 +8,7 @@ import {
   evalJS,
   makeFailedResult,
   uploadViaCDP,
+  setupTestModeWindow,
 } from './shared';
 import { registerPlatform } from './registry';
 import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities, ContentType } from '../../../types';
@@ -419,6 +420,199 @@ function buildWechatClickPublishScript(): string {
 }
 
 // =====================================================================
+// 微信视频号测试模式脚本：高亮标记发表按钮，收集表单填写状态
+// =====================================================================
+function buildWechatTestModeScript(): string {
+  return `
+    (function() {
+      var result = {
+        publishButtonFound: false,
+        publishButtonInfo: null,
+        hasTitle: false,
+        hasDesc: false,
+        fields: [],
+        note: '',
+      };
+      try {
+        function getAbsoluteRect(node) {
+          var rect = node.getBoundingClientRect();
+          var left = rect.left;
+          var top = rect.top;
+          var winRef = node.ownerDocument.defaultView;
+          while (winRef && winRef !== window) {
+            try {
+              var frameElement = winRef.frameElement;
+              if (frameElement) {
+                var fRect = frameElement.getBoundingClientRect();
+                left += fRect.left;
+                top += fRect.top;
+              }
+            } catch(e) { break; }
+            winRef = winRef.parent;
+          }
+          return { left: left, top: top, width: rect.width, height: rect.height };
+        }
+
+        function findPublishButton(doc) {
+          if (!doc) return null;
+          function search(node) {
+            if (!node) return null;
+            if (node.nodeType === 1) {
+              var tagName = node.tagName.toLowerCase();
+              var role = node.getAttribute && node.getAttribute('role') || '';
+              var cls = node.getAttribute && node.getAttribute('class') || '';
+              if (tagName === 'button' || role === 'button' || cls.indexOf('btn') !== -1 || cls.indexOf('button') !== -1) {
+                if (!(node.disabled || node.getAttribute('disabled') === 'true' || cls.indexOf('disabled') !== -1)) {
+                  var txt = (node.innerText || node.textContent || '').replace(/\\s+/g, '').trim();
+                  if (txt === '发表' || txt === '发布' || txt === '发表视频' || txt === '发表图文') {
+                    return node;
+                  }
+                }
+              }
+            }
+            if (node.childNodes && node.childNodes.length > 0) {
+              for (var i = 0; i < node.childNodes.length; i++) {
+                var res = search(node.childNodes[i]);
+                if (res) return res;
+              }
+            }
+            if (node.shadowRoot) {
+              var res = search(node.shadowRoot);
+              if (res) return res;
+            }
+            if (node.tagName && node.tagName.toLowerCase() === 'iframe') {
+              try {
+                var idoc = node.contentDocument || (node.contentWindow && node.contentWindow.document);
+                if (idoc) {
+                  var res = search(idoc);
+                  if (res) return res;
+                }
+              } catch(e) {}
+            }
+            return null;
+          }
+          return search(doc.body || doc);
+        }
+
+        // 1. 查找发表按钮
+        var publishBtn = findPublishButton(document);
+        if (publishBtn) {
+          var absRect = getAbsoluteRect(publishBtn);
+          result.publishButtonFound = true;
+          result.publishButtonInfo = {
+            text: (publishBtn.innerText || publishBtn.textContent || '').trim().slice(0, 30),
+            selector: 'button',
+            x: absRect.left,
+            y: absRect.top,
+            width: absRect.width,
+            height: absRect.height,
+          };
+
+          // 2. 高亮标记发表按钮
+          publishBtn.dataset.originalOutline = publishBtn.style.outline;
+          publishBtn.dataset.originalOutlineOffset = publishBtn.style.outlineOffset;
+          publishBtn.dataset.originalBoxShadow = publishBtn.style.boxShadow;
+          publishBtn.dataset.originalZIndex = publishBtn.style.zIndex;
+          publishBtn.style.outline = '3px solid #ff6b6b';
+          publishBtn.style.outlineOffset = '2px';
+          publishBtn.style.boxShadow = '0 0 0 4px rgba(255, 107, 107, 0.3), 0 0 20px rgba(255, 107, 107, 0.5)';
+          publishBtn.style.zIndex = '99999';
+
+          // 添加闪烁动画样式
+          var styleId = 'flowx-test-highlight-style';
+          if (!document.getElementById(styleId)) {
+            var style = document.createElement('style');
+            style.id = styleId;
+            style.textContent = '@keyframes flowx-test-pulse { 0%, 100% { box-shadow: 0 0 0 4px rgba(255, 107, 107, 0.3), 0 0 20px rgba(255, 107, 107, 0.5); } 50% { box-shadow: 0 0 0 8px rgba(255, 107, 107, 0.5), 0 0 30px rgba(255, 107, 107, 0.8); } } .flowx-test-highlight { animation: flowx-test-pulse 1.5s ease-in-out infinite !important; }';
+            document.head.appendChild(style);
+          }
+          publishBtn.classList.add('flowx-test-highlight');
+
+          // 添加"测试模式"标签
+          var badge = document.createElement('div');
+          badge.textContent = '🔍 发表按钮（测试模式）';
+          badge.style.cssText = 'position: absolute; top: -28px; left: 50%; transform: translateX(-50%); background: #ff6b6b; color: white; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: bold; white-space: nowrap; z-index: 100000; pointer-events: none;';
+          if (getComputedStyle(publishBtn).position === 'static') {
+            publishBtn.style.position = 'relative';
+          }
+          publishBtn.appendChild(badge);
+        }
+
+        // 3. 检测表单字段填写状态
+        var fields = [];
+        // 检测标题输入框
+        var titleInputs = document.querySelectorAll('input[placeholder*="标题"], input[placeholder*="title"], textarea[placeholder*="标题"]');
+        var hasTitle = false;
+        for (var i = 0; i < titleInputs.length; i++) {
+          var val = (titleInputs[i].value || titleInputs[i].innerText || '').trim();
+          if (val.length > 0) { hasTitle = true; }
+        }
+        result.hasTitle = hasTitle;
+        fields.push({ type: 'input', label: '标题', filled: hasTitle });
+
+        // 检测描述/正文
+        var descAreas = document.querySelectorAll('[contenteditable="true"], textarea[placeholder*="描述"], textarea[placeholder*="简介"], textarea[placeholder*="正文"]');
+        var hasDesc = false;
+        for (var i = 0; i < descAreas.length; i++) {
+          var val = (descAreas[i].value || descAreas[i].innerText || '').trim();
+          if (val.length > 0) { hasDesc = true; }
+        }
+        result.hasDesc = hasDesc;
+        fields.push({ type: 'contenteditable', label: '描述/正文', filled: hasDesc });
+        result.fields = fields;
+
+        // 4. 添加浮动控制面板
+        if (publishBtn) {
+          var panel = document.createElement('div');
+          panel.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #fff; border: 2px solid #e6a23c; border-radius: 8px; padding: 16px; z-index: 2147483647; box-shadow: 0 4px 20px rgba(0,0,0,0.15); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; min-width: 240px;';
+          panel.innerHTML = \`
+            <div style="font-weight: 600; font-size: 14px; color: #e6a23c; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">🔍 发布测试模式</div>
+            <div style="font-size: 12px; color: #606266; margin-bottom: 12px; line-height: 1.5;">表单已自动填写，发表按钮已用红色标记。请检查表单填写是否正常，确认无误后点击下方按钮发表。</div>
+            <div style="display: flex; gap: 8px;">
+              <button id="flowx-test-confirm-btn" style="flex: 1; padding: 8px 16px; background: #67c23a; color: white; border: none; border-radius: 4px; font-size: 13px; font-weight: 500; cursor: pointer;">✅ 确认发表</button>
+              <button id="flowx-test-close-btn" style="padding: 8px 12px; background: #f5f7fa; color: #606266; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 13px; cursor: pointer;">关闭</button>
+            </div>
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #ebeef5; font-size: 12px; color: #909399;">
+              <div>表单字段检测：<span style="color: #67c23a; font-weight: 500;">\${fields.filter(function(f){return f.filled;}).length}</span> / <span>\${fields.length}</span> 已填写</div>
+              <div>发表按钮：<span style="color: #67c23a; font-weight: 500;">已找到</span></div>
+            </div>
+          \`;
+          document.body.appendChild(panel);
+
+          // 绑定确认发表按钮
+          setTimeout(function() {
+            var confirmBtn = document.getElementById('flowx-test-confirm-btn');
+            var closeBtn = document.getElementById('flowx-test-close-btn');
+            if (confirmBtn) {
+              confirmBtn.onclick = function() {
+                if (confirm('确定要发表吗？发表后将无法撤销。')) {
+                  publishBtn.classList.remove('flowx-test-highlight');
+                  publishBtn.style.outline = publishBtn.dataset.originalOutline || '';
+                  publishBtn.style.outlineOffset = publishBtn.dataset.originalOutlineOffset || '';
+                  publishBtn.style.boxShadow = publishBtn.dataset.originalBoxShadow || '';
+                  publishBtn.style.zIndex = publishBtn.dataset.originalZIndex || '';
+                  panel.remove();
+                  publishBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  setTimeout(function() { publishBtn.click(); }, 300);
+                }
+              };
+            }
+            if (closeBtn) {
+              closeBtn.onclick = function() { panel.remove(); };
+            }
+          }, 100);
+        }
+
+        result.note = publishBtn ? '已找到发表按钮并高亮标记，请检查表单填写是否正常' : '未找到发表按钮';
+      } catch(e) {
+        result.note = '测试模式脚本执行异常: ' + e.message;
+      }
+      return result;
+    })()
+  `;
+}
+
+// =====================================================================
 // 安全可靠的脚本执行工具（带 4000ms 超时限制，防止 Electron 裸 executeJavaScript 挂死）
 // =====================================================================
 
@@ -741,6 +935,39 @@ async function runWechatPublish(
 
     // 9) 点击发表按钮提交发布（引入最多 5 次轮询重试，每次间隔 1.5 秒，给受控组件表单校验渲染留出充足时间）
     onProgress(85, '点击发表按钮…');
+
+    // 测试模式：不点击发布，高亮标记按钮并收集表单状态
+    if (request.testMode) {
+      const testScript = buildWechatTestModeScript();
+      const testRes: any = await evalJS(win, testScript, 'test-mode-probe', log).catch(() => null);
+      const testResult = {
+        titleFilled: !!(testRes?.hasTitle),
+        contentFilled: !!(testRes?.hasDesc),
+        tagsFilled: !!(request.tags && request.tags.length > 0),
+        coverUploaded: !!(request.coverImage && request.coverImage.length > 0),
+        publishButtonFound: !!(testRes?.publishButtonFound),
+        publishButtonInfo: testRes?.publishButtonInfo || null,
+        formFields: testRes?.fields || [],
+        note: testRes?.note || '测试模式完成',
+      };
+      log('info', 'test', '测试模式完成: ' + (testRes?.note || '未知'));
+      onProgress(100, '测试完成');
+
+      // 🔑 测试模式下：确保用户点关闭时能正常关闭窗口
+      setupTestModeWindow(win, log);
+
+      return {
+        accountId,
+        platform: 'wechat_channels',
+        status: 'success',
+        progress: 100,
+        message: '测试完成 - 表单填写验证通过',
+        startedAt,
+        finishedAt: Date.now(),
+        testResult: testResult,
+      } as PublishItemProgress;
+    }
+
     let clickedOk = false;
     let clickRes: any = null;
     for (let clickAttempt = 0; clickAttempt < 5; clickAttempt++) {
@@ -830,7 +1057,12 @@ async function runWechatPublish(
     return makeFailedResult(accountId, 'wechat_channels', (err as Error).message, startedAt);
   } finally {
     if (disposeTracker) disposeTracker();
-    if (win && !win.isDestroyed()) win.close();
+    // 测试模式：不关闭窗口，让用户可以检查表单填写情况
+    if (request.testMode) {
+      log('info', 'test', '测试模式完成，窗口保持打开，方便检查表单填写情况');
+    } else if (win && !win.isDestroyed()) {
+      win.close();
+    }
   }
 }
 

@@ -23,6 +23,14 @@
           <el-icon><Promotion /></el-icon>
           <span>一键发布</span>
         </el-menu-item>
+        <el-menu-item index="/drafts">
+          <el-icon><Document /></el-icon>
+          <span>草稿箱</span>
+        </el-menu-item>
+        <el-menu-item index="/browser">
+          <el-icon><Monitor /></el-icon>
+          <span>浏览器</span>
+        </el-menu-item>
         <el-menu-item index="/history">
           <el-icon><Clock /></el-icon>
           <span>发布历史</span>
@@ -35,6 +43,7 @@
           <el-menu-item index="/settings/environments">环境配置</el-menu-item>
           <el-menu-item index="/settings/proxies">代理 IP 设置</el-menu-item>
           <el-menu-item index="/settings/api">对外接口</el-menu-item>
+          <el-menu-item index="/settings/logs">日志管理</el-menu-item>
         </el-sub-menu>
       </el-menu>
       <div style="font-size: 12px; color: #909399">

@@ -279,6 +279,338 @@ export function makeFailedResult(
 }
 
 /**
+ * 构建测试模式结果：在页面上高亮标记发布按钮，并收集表单填写状态
+ *
+ * @param buttonSelectors 发布按钮的选择器列表（按优先级排序）
+ * @param fieldSelectors 表单字段配置，用于检测填写状态
+ */
+export function buildTestModeProbeScript(
+  buttonSelectors: string[],
+  fieldSelectors: { name: string; selector: string; type: 'input' | 'textarea' | 'contenteditable' }[],
+): string {
+  return `
+  (function() {
+    function getOffset(el) {
+      const rect = el.getBoundingClientRect();
+      return {
+        x: rect.left + window.scrollX,
+        y: rect.top + window.scrollY,
+        width: rect.width,
+        height: rect.height,
+      };
+    }
+
+    // 1. 查找发布按钮
+    let publishBtn = null;
+    let publishBtnInfo = null;
+    for (const sel of ${JSON.stringify(buttonSelectors)}) {
+      const btn = document.querySelector(sel);
+      if (btn && btn.offsetParent !== null) {
+        publishBtn = btn;
+        const pos = getOffset(btn);
+        publishBtnInfo = {
+          text: btn.innerText.trim().slice(0, 30),
+          selector: sel,
+          x: pos.x,
+          y: pos.y,
+          width: pos.width,
+          height: pos.height,
+        };
+        break;
+      }
+    }
+
+    // 2. 高亮标记发布按钮
+    if (publishBtn) {
+      // 保存原始样式
+      publishBtn.dataset.originalOutline = publishBtn.style.outline;
+      publishBtn.dataset.originalOutlineOffset = publishBtn.style.outlineOffset;
+      publishBtn.dataset.originalBoxShadow = publishBtn.style.boxShadow;
+      publishBtn.dataset.originalZIndex = publishBtn.style.zIndex;
+      publishBtn.dataset.originalPosition = publishBtn.style.position;
+      
+      // 添加闪烁高亮效果
+      publishBtn.style.outline = '3px solid #ff6b6b';
+      publishBtn.style.outlineOffset = '2px';
+      publishBtn.style.boxShadow = '0 0 0 4px rgba(255, 107, 107, 0.3), 0 0 20px rgba(255, 107, 107, 0.5)';
+      publishBtn.style.zIndex = '99999';
+      
+      // 添加闪烁动画
+      const styleId = 'flowx-test-highlight-style';
+      if (!document.getElementById(styleId)) {
+        const style = document.createElement('style');
+        style.id = styleId;
+        style.textContent = \`
+          @keyframes flowx-test-pulse {
+            0%, 100% { box-shadow: 0 0 0 4px rgba(255, 107, 107, 0.3), 0 0 20px rgba(255, 107, 107, 0.5); }
+            50% { box-shadow: 0 0 0 8px rgba(255, 107, 107, 0.5), 0 0 30px rgba(255, 107, 107, 0.8); }
+          }
+          .flowx-test-highlight {
+            animation: flowx-test-pulse 1.5s ease-in-out infinite !important;
+          }
+        \`;
+        document.head.appendChild(style);
+      }
+      publishBtn.classList.add('flowx-test-highlight');
+      
+      // 添加"测试模式"标签
+      const badge = document.createElement('div');
+      badge.textContent = '🔍 发布按钮（测试模式）';
+      badge.style.cssText = \`
+        position: absolute;
+        top: -28px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #ff6b6b;
+        color: white;
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
+        white-space: nowrap;
+        z-index: 100000;
+        pointer-events: none;
+      \`;
+      if (getComputedStyle(publishBtn).position === 'static') {
+        publishBtn.style.position = 'relative';
+      }
+      publishBtn.appendChild(badge);
+    }
+
+    // 3. 检测表单字段填写状态
+    const fields = [];
+    const fieldConfigs = ${JSON.stringify(fieldSelectors)};
+    for (const cfg of fieldConfigs) {
+      let el = null;
+      let filled = false;
+      let value = '';
+      
+      if (cfg.type === 'contenteditable') {
+        el = document.querySelector(cfg.selector);
+        if (el) {
+          value = el.innerText.trim();
+          filled = value.length > 0;
+        }
+      } else {
+        el = document.querySelector(cfg.selector);
+        if (el) {
+          value = (el.value || '').trim();
+          filled = value.length > 0;
+        }
+      }
+      
+      fields.push({
+        name: cfg.name,
+        type: cfg.type,
+        filled: filled,
+        found: !!el,
+        valueLength: value.length,
+        selector: cfg.selector,
+      });
+    }
+
+    // 4. 添加浮动控制面板（确认发布按钮）
+    const panelId = 'flowx-test-panel';
+    if (!document.getElementById(panelId) && publishBtn) {
+      const panel = document.createElement('div');
+      panel.id = panelId;
+      panel.style.cssText = \`
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #fff;
+        border: 2px solid #e6a23c;
+        border-radius: 8px;
+        padding: 16px;
+        z-index: 2147483647;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        min-width: 240px;
+      \`;
+      
+      const title = document.createElement('div');
+      title.style.cssText = 'font-weight: 600; font-size: 14px; color: #e6a23c; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;';
+      title.innerHTML = '🔍 发布测试模式';
+      panel.appendChild(title);
+      
+      const desc = document.createElement('div');
+      desc.style.cssText = 'font-size: 12px; color: #606266; margin-bottom: 12px; line-height: 1.5;';
+      desc.textContent = '表单已自动填写，发布按钮已用红色标记。请检查表单填写是否正常，确认无误后点击下方按钮发布。';
+      panel.appendChild(desc);
+      
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display: flex; gap: 8px;';
+      
+      const publishBtnFloating = document.createElement('button');
+      publishBtnFloating.textContent = '✅ 确认发布';
+      publishBtnFloating.style.cssText = \`
+        flex: 1;
+        padding: 8px 16px;
+        background: #67c23a;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.2s;
+      \`;
+      publishBtnFloating.onmouseover = () => { publishBtnFloating.style.background = '#5daf34'; };
+      publishBtnFloating.onmouseout = () => { publishBtnFloating.style.background = '#67c23a'; };
+      publishBtnFloating.onclick = function() {
+        if (confirm('确定要发布吗？发布后将无法撤销。')) {
+          // 移除测试模式标记
+          publishBtn.classList.remove('flowx-test-highlight');
+          publishBtn.style.outline = publishBtn.dataset.originalOutline || '';
+          publishBtn.style.outlineOffset = publishBtn.dataset.originalOutlineOffset || '';
+          publishBtn.style.boxShadow = publishBtn.dataset.originalBoxShadow || '';
+          publishBtn.style.zIndex = publishBtn.dataset.originalZIndex || '';
+          // 移除面板
+          panel.remove();
+          // 滚动到发布按钮位置
+          publishBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // 点击发布按钮
+          setTimeout(() => { publishBtn.click(); }, 300);
+        }
+      };
+      btnRow.appendChild(publishBtnFloating);
+      
+      const closeBtn = document.createElement('button');
+      closeBtn.textContent = '关闭';
+      closeBtn.style.cssText = \`
+        padding: 8px 12px;
+        background: #f5f7fa;
+        color: #606266;
+        border: 1px solid #dcdfe6;
+        border-radius: 4px;
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.2s;
+      \`;
+      closeBtn.onmouseover = () => { closeBtn.style.background = '#ebeef5'; };
+      closeBtn.onmouseout = () => { closeBtn.style.background = '#f5f7fa'; };
+      closeBtn.onclick = function() { panel.remove(); };
+      btnRow.appendChild(closeBtn);
+      
+      panel.appendChild(btnRow);
+      
+      // 添加表单状态概览
+      const summary = document.createElement('div');
+      summary.style.cssText = 'margin-top: 12px; padding-top: 12px; border-top: 1px solid #ebeef5;';
+      const filledCount = fields.filter(f => f.filled).length;
+      summary.innerHTML = \`
+        <div style="font-size: 12px; color: #909399; margin-bottom: 6px;">
+          表单字段检测：<span style="color: #67c23a; font-weight: 500;">\${filledCount}</span> / <span>\${fields.length}</span> 已填写
+        </div>
+        <div style="font-size: 12px; color: #909399;">
+          发布按钮：<span style="color: \${publishBtn ? '#67c23a' : '#f56c6c'}; font-weight: 500;">\${publishBtn ? '已找到' : '未找到'}</span>
+        </div>
+      \`;
+      panel.appendChild(summary);
+      
+      document.body.appendChild(panel);
+    }
+
+    // 5. 返回结果
+    return {
+      publishButtonFound: !!publishBtn,
+      publishButtonInfo: publishBtnInfo,
+      fields: fields,
+      note: publishBtn ? '已找到发布按钮并高亮标记，请检查表单填写是否正常' : '未找到发布按钮',
+    };
+  })();
+  `;
+}
+
+/**
+ * 测试模式窗口设置：确保用户点击关闭按钮时能正常关闭窗口
+ * - 禁用页面 beforeunload 拦截（注入 JS + will-prevent-unload 事件）
+ * - 监听窗口 close 事件，强制 destroy 绕过页面确认弹窗
+ */
+export function setupTestModeWindow(win: BrowserWindow, log: any): void {
+  if (!win || win.isDestroyed()) return;
+
+  // 1. 注入 JS 禁用页面 beforeunload 事件拦截
+  const injectDisableBeforeUnload = () => {
+    if (win.isDestroyed()) return;
+    win.webContents
+      .executeJavaScript(`
+        (function() {
+          try {
+            // 在捕获阶段拦截并阻止 beforeunload（最高优先级）
+            window.addEventListener('beforeunload', function(e) {
+              e.stopImmediatePropagation();
+              e.cancelBubble = true;
+              return undefined;
+            }, true);
+            // 覆盖 onbeforeunload
+            window.onbeforeunload = null;
+            // 覆盖 EventTarget.prototype.addEventListener，阻止后续 beforeunload 绑定
+            var origAdd = EventTarget.prototype.addEventListener;
+            EventTarget.prototype.addEventListener = function(type, listener, options) {
+              if (type === 'beforeunload') return;
+              return origAdd.call(this, type, listener, options);
+            };
+            // 覆盖 removeEventListener 也做同样处理
+            var origRemove = EventTarget.prototype.removeEventListener;
+            EventTarget.prototype.removeEventListener = function(type, listener, options) {
+              if (type === 'beforeunload') return;
+              return origRemove.call(this, type, listener, options);
+            };
+            // 尝试移除已有的 beforeunload 监听器（通过 dispatchEvent 方式不可行，此处做 document 级覆盖）
+            // 直接在 window 对象上设置拦截属性
+            Object.defineProperty(window, 'onbeforeunload', {
+              configurable: true,
+              get: function() { return null; },
+              set: function() { return null; }
+            });
+          } catch(e) {}
+        })()
+      `)
+      .catch(() => {});
+  };
+
+  // 立即注入一次
+  injectDisableBeforeUnload();
+
+  // 每次页面加载完成后重新注入（防止页面跳转后失效）
+  win.webContents.on('dom-ready', injectDisableBeforeUnload);
+  win.webContents.on('did-finish-load', injectDisableBeforeUnload);
+
+  // 2. 监听 will-prevent-unload：页面试图通过 beforeunload 阻止关闭时，直接放行
+  win.webContents.on('will-prevent-unload', (e: any) => {
+    if (win.isDestroyed()) return;
+    try {
+      e.preventDefault(); // 允许页面关闭，忽略 beforeunload 的拦截
+      log('info', 'test', '已拦截页面 beforeunload 关闭阻止');
+    } catch {}
+  });
+
+  // 3. 监听窗口关闭事件，强制 destroy 绕过所有页面拦截
+  let isClosing = false;
+  win.on('close', (e: any) => {
+    if (win.isDestroyed()) return;
+    if (isClosing) return;
+    try {
+      isClosing = true;
+      e.preventDefault();
+      // 使用 setImmediate 确保事件循环继续，避免死锁
+      setImmediate(() => {
+        if (!win.isDestroyed()) {
+          try {
+            win.destroy();
+          } catch {}
+        }
+      });
+    } catch {
+      isClosing = false;
+    }
+  });
+
+  log('info', 'test', '测试模式窗口已设置，可正常关闭');
+}
+
+/**
  * CDP 文件上传 v4 — 针对快手等"上传按钮+隐藏 file input 已存在"的页面
  *
  * 策略顺序（按可靠性从高到低）：
@@ -1943,6 +2275,13 @@ export async function waitForUploadComplete(
 
   // 记录上一次的 URL，检测到页面变化后等待稳定再继续轮询
   let lastUrl = '';
+  // 智能降级：当有编辑元素+缩略图，但 uploading 持续一段时间无进展时，降级为 ready
+  // （抖音等平台的视频转码在后台进行，不影响标题/描述的填写）
+  let uploadingStartTime = 0;
+  let lastThumbCount = 0;
+  let thumbStableCount = 0; // 缩略图数量稳定的次数
+  const UPLOADING_MAX_WAIT_WITH_EDIT_FIELDS = 60000; // 有编辑元素时，uploading 最多等60秒
+  const THUMB_STABLE_THRESHOLD = 5; // 缩略图数量连续5次不变则认为稳定
 
   while (Date.now() - start < timeoutMs) {
     // 窗口已销毁：立即返回，不再继续轮询
@@ -1998,6 +2337,43 @@ export async function waitForUploadComplete(
       }
       if (info.status === 'uploading') {
         onProgress(30 + Math.min(30, (Date.now() - start) / 10000 * 10), '上传/处理中…');
+        
+        // 智能降级检测：有编辑元素 + 有缩略图 → 可能可以提前开始填写内容
+        if (info.hasEditField && info.hasThumb && (info.ceCount > 0 || info.textInputCount > 0)) {
+          if (uploadingStartTime === 0) {
+            uploadingStartTime = Date.now();
+            lastThumbCount = info.thumbCount;
+          } else {
+            // 检查缩略图数量是否稳定
+            if (info.thumbCount === lastThumbCount) {
+              thumbStableCount++;
+            } else {
+              thumbStableCount = 0;
+              lastThumbCount = info.thumbCount;
+            }
+            // 条件1：uploading 超过 UPLOADING_MAX_WAIT_WITH_EDIT_FIELDS
+            // 条件2：缩略图数量连续稳定 THUMB_STABLE_THRESHOLD 次（说明封面/缩略图生成已完成）
+            const uploadingTooLong = Date.now() - uploadingStartTime > UPLOADING_MAX_WAIT_WITH_EDIT_FIELDS;
+            const thumbStable = thumbStableCount >= THUMB_STABLE_THRESHOLD;
+            if (uploadingTooLong || thumbStable) {
+              log('info', 'poll', `uploading 状态持续较久但编辑元素已就绪(${uploadingTooLong ? '超时降级' : '缩略图稳定'})，降级为 ready 继续填写内容`, {
+                uploadingMs: Date.now() - uploadingStartTime,
+                thumbStableCount,
+                thumbCount: info.thumbCount,
+              });
+              onProgress(60, '上传处理中，开始填写内容…');
+              return { ready: true, finalStatus: 'degraded-ready' };
+            }
+          }
+        } else {
+          // 没有编辑元素或没有缩略图，重置计时
+          uploadingStartTime = 0;
+          thumbStableCount = 0;
+        }
+      } else {
+        // 非 uploading 状态，重置计时
+        uploadingStartTime = 0;
+        thumbStableCount = 0;
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

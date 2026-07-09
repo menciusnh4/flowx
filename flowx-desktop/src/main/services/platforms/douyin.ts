@@ -2,7 +2,7 @@ import type { BrowserWindow } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { PlatformAdapter, ExtractedAccountInfo, LoginCheckResult, ProgressCallback } from './types';
-import { sleep, makePublishLogger, makePublishWindow, attachNavigationTracker, evalJS, makeFailedResult, uploadViaCDP, waitForUploadComplete, buildPageStructureProbe, cdpInsertTagsWithSpace, cdpFillContentWithNewlines } from './shared';
+import { sleep, makePublishLogger, makePublishWindow, attachNavigationTracker, evalJS, makeFailedResult, uploadViaCDP, waitForUploadComplete, buildPageStructureProbe, cdpInsertTagsWithSpace, cdpFillContentWithNewlines, buildTestModeProbeScript, setupTestModeWindow } from './shared';
 import { registerPlatform } from './registry';
 import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities, ContentType } from '../../../types';
 
@@ -14,7 +14,8 @@ const TAG_MAX = 10;
 // 文章发布限制（独立：标题30字，正文8000字）
 const ARTICLE_TITLE_MAX = 30;
 const ARTICLE_CONTENT_MAX = 8000;
-const ARTICLE_TAG_MAX = 10;
+const ARTICLE_TAG_MAX = 5; // 抖音文章最多添加 5 个话题
+const ARTICLE_SUMMARY_MAX = 30;
 
 // 工具函数
 function truncate(text: string, max: number): string {
@@ -337,12 +338,125 @@ function buildFillTitleScript(text: string): string {
   })();`;
 }
 
+// === 抖音文章摘要填写脚本（摘要在封面设置下方，可能是 textarea / input / contenteditable）
+// 优先级：1) placeholder 含"摘要"/"简介"/"文章简介"的 textarea  2) 同特征 input  3) contenteditable 兜底
+function buildFillSummaryScript(text: string): string {
+  const textJson = JSON.stringify(text);
+  return `(function () {
+    var text = ${textJson};
+    if (!text) return { ok: true, skipped: true };
+    // 1) 优先找 textarea（placeholder 含"摘要"/"简介"）
+    try {
+      var textareas = document.querySelectorAll('textarea');
+      for (var i1 = 0; i1 < textareas.length; i1++) {
+        var ta = textareas[i1];
+        var ph1 = (ta.getAttribute && ta.getAttribute('placeholder')) || '';
+        if (/摘要|简介|文章简介|请输入.*摘要|请输入.*简介/i.test(ph1)) {
+          ta.focus();
+          try {
+            try { document.execCommand('selectAll'); } catch (eSA) {}
+            try { document.execCommand('delete'); } catch (eDel) {}
+            document.execCommand('insertText', false, text);
+          } catch (eCmd) {
+            ta.value = text;
+            try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch (eEv) {}
+            try { ta.dispatchEvent(new Event('change', { bubbles: true })); } catch (eEv2) {}
+          }
+          return { ok: true, method: 'summary-textarea', placeholder: ph1 };
+        }
+      }
+    } catch (e1) {}
+    // 2) 再找 input[type=text]（placeholder 含"摘要"/"简介"）
+    try {
+      var inputs = document.querySelectorAll('input[type="text"]');
+      for (var i2 = 0; i2 < inputs.length; i2++) {
+        var inp = inputs[i2];
+        var ph2 = (inp.getAttribute && inp.getAttribute('placeholder')) || '';
+        if (/摘要|简介|文章简介|请输入.*摘要|请输入.*简介/i.test(ph2)) {
+          inp.focus();
+          try {
+            try { document.execCommand('selectAll'); } catch (eSA) {}
+            try { document.execCommand('delete'); } catch (eDel) {}
+            document.execCommand('insertText', false, text);
+          } catch (eCmd) {
+            inp.value = text;
+            try { inp.dispatchEvent(new Event('input', { bubbles: true })); } catch (eEv) {}
+            try { inp.dispatchEvent(new Event('change', { bubbles: true })); } catch (eEv2) {}
+          }
+          return { ok: true, method: 'summary-input', placeholder: ph2 };
+        }
+      }
+    } catch (e2) {}
+    // 3) 兜底：在封面区域附近找 contenteditable（排除 ProseMirror/tiptap 正文编辑器）
+    try {
+      var ceEls = document.querySelectorAll('[contenteditable]');
+      var candidates = [];
+      for (var i3 = 0; i3 < ceEls.length; i3++) {
+        var el = ceEls[i3];
+        var ceVal = el.getAttribute && el.getAttribute('contenteditable');
+        if (ceVal === 'false') continue;
+        var cls = String(el.className || '');
+        if (/tiptap|ProseMirror|prosemirror/i.test(cls)) continue; // 跳过正文编辑器
+        var ph3 = (el.getAttribute && el.getAttribute('placeholder')) || '';
+        if (/摘要|简介|文章简介/i.test(ph3)) {
+          candidates.unshift({ el: el, ph: ph3, priority: 0 }); // placeholder 匹配优先
+        } else {
+          // 内容较短且看起来像摘要输入框的（通过 data-placeholder 或 aria-label）
+          var dph = (el.getAttribute && el.getAttribute('data-placeholder')) || '';
+          var aria = (el.getAttribute && el.getAttribute('aria-label')) || '';
+          if (/摘要|简介/i.test(dph) || /摘要|简介/i.test(aria)) {
+            candidates.push({ el: el, ph: dph || aria, priority: 1 });
+          }
+        }
+      }
+      if (candidates.length > 0) {
+        candidates.sort(function(a, b) { return a.priority - b.priority; });
+        var target = candidates[0].el;
+        target.focus();
+        try { document.execCommand('selectAll'); document.execCommand('delete'); } catch (eX) {}
+        document.execCommand('insertText', false, text);
+        return { ok: true, method: 'summary-contenteditable', placeholder: candidates[0].ph };
+      }
+    } catch (e3) {}
+    return { ok: false, reason: 'no-summary-field' };
+  })();`;
+}
+
+/**
+ * 填写文章摘要
+ * 优先用 JS 方式，失败返回 false
+ */
+async function fillArticleSummary(
+  win: any,
+  summary: string,
+  log: (level: any, stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  if (!summary || !summary.trim()) {
+    log('info', 'summary', '无摘要内容，跳过');
+    return true;
+  }
+  const trimmed = truncate(summary.trim(), ARTICLE_SUMMARY_MAX);
+  log('info', 'summary', '填写文章摘要: ' + trimmed.slice(0, 60) + ' (限' + ARTICLE_SUMMARY_MAX + '字)');
+
+  // JS 方式
+  const script = buildFillSummaryScript(trimmed);
+  const res: any = await evalJS(win, script, 'article-fill-summary', log).catch(() => null);
+  if (res && res.ok) {
+    log('info', 'summary', '✅ 文章摘要已写入 (' + res.method + ')');
+    return true;
+  }
+
+  log('warn', 'summary', '文章摘要填写失败: ' + (res && res.reason ? res.reason : '未知'));
+  return false;
+}
+
 // === 抖音内容填写脚本（内容是 contenteditable/ProseMirror）
 // 优先级：1) ProseMirror 富文本  2) 普通 contenteditable  3) textarea 兜底
 // 写完后保持焦点在编辑器末尾，不 blur（便于后续 CDP 键盘事件输入标签）
 function buildFillContentScript(content: string): string {
   const contentJson = JSON.stringify(content);
   return `(function () {
+    try {
     var content = ${contentJson};
 
     // 辅助：将光标移到编辑器末尾
@@ -452,6 +566,9 @@ function buildFillContentScript(content: string): string {
     }
 
     return { ok: true, method: foundKind, isContentEditable: foundKind !== 'textarea' };
+    } catch (e) {
+      return { ok: false, reason: 'script-error', error: String(e) };
+    }
   })();`;
 }
 
@@ -2981,13 +3098,56 @@ function buildPublishResultProbeScript(): string {
     var leftPublishPage = !/content\\/post|content\\/publish|content\\/upload|publish\\/image/i.test(url);
     // 3) URL 明确进入管理页
     var urlSuccess = /content\\/manage|works|works_list|article\\/list|home/i.test(url);
-    // 失败信号
-    var fail = /发布失败|不符合要求|违规|失败|无法发布|出错/i.test(successText);
+    // 失败信号 - 明确的失败/错误提示关键词（避免与正常页面文字混淆）
+    var failPattern = /发布失败|发表失败|提交失败|保存失败|上传失败|不符合要求|违规内容|内容违规|审核未通过|无法发布|发布异常|系统错误|网络异常|系统繁忙|操作失败|出错了|发布出错|请重试|重新发布|不能发布|发布不了/i;
+    var fail = failPattern.test(successText);
+    // 额外检测：是否有弹出的错误/提示对话框（表单验证失败时常见）
+    var hasErrorDialog = false;
+    var errorDialogText = '';
+    try {
+      // 查找常见的弹窗/对话框类名（semi design / arco design / 字节系组件）
+      var dialogSelectors = [
+        '[class*="semi-modal"]',
+        '[class*="arco-modal"]',
+        '[class*="dialog-content"]', 
+        '[class*="modal-content"]',
+        '[class*="popup-content"]',
+        '[class*="toast"]',
+        '[class*="message-"]',
+        '[class*="notification"]',
+        '[role="dialog"]',
+        '[role="alertdialog"]'
+      ];
+      for (var si = 0; si < dialogSelectors.length; si++) {
+        var dialogs = document.querySelectorAll(dialogSelectors[si]);
+        for (var di = 0; di < dialogs.length; di++) {
+          var dEl = dialogs[di];
+          // 检查元素是否可见
+          var style = window.getComputedStyle(dEl);
+          if (style.display === 'none' || style.visibility === 'hidden' || (parseFloat(style.opacity) || 1) < 0.1) continue;
+          var dText = (dEl.innerText || dEl.textContent || '').trim();
+          if (dText && dText.length < 500) {
+            // 检查弹窗中是否有明确的错误/警告关键词
+            if (/失败|错误|异常|不能|无法|请输入|请填写|不能为空|请上传|不符合|提示|注意/.test(dText)) {
+              // 排除一些正常的提示（如"温馨提示"如果内容是正常引导则不算失败）
+              // 但如果是发布操作后弹出的，且包含负面词汇，则认为是失败
+              if (/失败|错误|异常|不能发布|无法发布|不符合要求|不能为空|请输入.*内容|请输入.*标题|请上传.*封面|内容不足|字数不足/.test(dText)) {
+                hasErrorDialog = true;
+                errorDialogText = dText.slice(0, 200);
+                break;
+              }
+            }
+          }
+        }
+        if (hasErrorDialog) break;
+      }
+    } catch (e) {}
     return {
       url: url,
       text: successText.slice(0, 400),
       success: textSuccess || urlSuccess || leftPublishPage,
-      fail: fail
+      fail: fail || hasErrorDialog,
+      errorText: errorDialogText
     };
   })();`;
 }
@@ -3071,9 +3231,10 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
       else log('info', 'fill', '标题已写入');
       await sleep(800);
     }
+    // 内容填写结果（用于测试模式）
+    let contentResult: any = null;
     if (baseContent || douyinTagList.length > 0) {
       // 探测编辑器类型：如果是普通 contenteditable（ACE 编辑器），用 CDP Enter 方式换行更可靠
-      let contentResult: any = null;
       if (baseContent) {
         const probeScript = `(function(){
           try {
@@ -3119,9 +3280,51 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
           contentResult = await evalJS(win, script2, 'fill-content', log).catch(() => null);
         }
       } else {
-        // 没有正文，只有话题，执行一下空内容脚本获取编辑器信息
-        const script2 = buildFillContentScript('');
-        contentResult = await evalJS(win, script2, 'fill-content', log).catch(() => null);
+        // 没有正文，只有话题：用轻量脚本只查找并聚焦编辑器，不做删除/插入操作
+        // 避免复杂的 fill 脚本在空内容时意外报错，导致标签也无法输入
+        const focusScript = `(function () {
+          function moveCursorToEnd(el) {
+            try {
+              el.focus();
+              var range = document.createRange();
+              range.selectNodeContents(el);
+              range.collapse(false);
+              var sel = window.getSelection();
+              sel.removeAllRanges();
+              sel.addRange(range);
+            } catch(e) {}
+          }
+          // 1) 先找 ProseMirror / tiptap 富文本
+          var pmEls = document.querySelectorAll('[contenteditable]');
+          for (var i = 0; i < pmEls.length; i++) {
+            var el = pmEls[i];
+            var ceVal = el.getAttribute && el.getAttribute('contenteditable');
+            if (ceVal === 'false') continue;
+            var cls = String(el.className || '');
+            if (/tiptap|ProseMirror|prosemirror/i.test(cls)) {
+              moveCursorToEnd(el);
+              return { ok: true, method: 'prosemirror', isContentEditable: true };
+            }
+          }
+          // 2) 再找普通 contenteditable
+          for (var i = 0; i < pmEls.length; i++) {
+            var el = pmEls[i];
+            var ceVal = el.getAttribute && el.getAttribute('contenteditable');
+            if (ceVal === 'false') continue;
+            var cls = String(el.className || '');
+            if (/tiptap|ProseMirror|prosemirror/i.test(cls)) continue;
+            moveCursorToEnd(el);
+            return { ok: true, method: 'plain-ce', isContentEditable: true };
+          }
+          // 3) 兜底 textarea
+          var ta = document.querySelector('textarea');
+          if (ta) {
+            ta.focus();
+            return { ok: true, method: 'textarea', isContentEditable: false };
+          }
+          return { ok: false, reason: 'no-editor-found' };
+        })()`;
+        contentResult = await evalJS(win, focusScript, 'focus-editor', log).catch(() => null);
       }
 
       if (!contentResult || !contentResult.ok) {
@@ -3137,6 +3340,50 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
       }
     }
     onProgress(75, '点击发布按钮…');
+
+    // 测试模式：不点击发布，高亮标记按钮并收集表单状态
+    if (request.testMode) {
+      const testScript = buildTestModeProbeScript(
+        [
+          'button.primary-cECiOJ',
+          'button.button-dhlUZE',
+          'button[type="submit"]',
+          '.publish-btn',
+          '.submit-btn',
+        ],
+        [
+          { name: '标题', selector: 'input[placeholder*="标题"]', type: 'input' },
+          { name: '描述/正文', selector: '[contenteditable="true"]', type: 'contenteditable' },
+          { name: '描述文本框', selector: 'textarea', type: 'textarea' },
+        ],
+      );
+      const testRes: any = await evalJS(win, testScript, 'test-mode-probe', log).catch(() => null);
+      const testResult = {
+        titleFilled: !!(testRes?.fields?.find((f: any) => f.name === '标题')?.filled),
+        contentFilled: !!(testRes?.fields?.find((f: any) => f.name.includes('描述') || f.name.includes('正文'))?.filled),
+        tagsFilled: douyinTagList.length > 0 && !!(contentResult && contentResult.ok),
+        coverUploaded: !!(request.coverImage && request.coverImage.length > 0),
+        publishButtonFound: !!(testRes?.publishButtonFound),
+        publishButtonInfo: testRes?.publishButtonInfo || null,
+        formFields: testRes?.fields || [],
+        note: testRes?.note || '测试模式完成',
+      };
+      log('info', 'test', '测试模式完成: ' + (testRes?.note || '未知'));
+      onProgress(100, '测试完成');
+      // 确保测试模式窗口能正常关闭
+      setupTestModeWindow(win, log);
+      return {
+        accountId: accountId,
+        platform: 'douyin',
+        status: 'success',
+        progress: 100,
+        message: '测试完成 - 表单填写验证通过',
+        startedAt: startedAt,
+        finishedAt: Date.now(),
+        testResult: testResult,
+      } as PublishItemProgress;
+    }
+
     const clickScript = buildClickPublishScript();
     const clickRes: any = await evalJS(win, clickScript, 'click-publish', log).catch(function () { return null; });
     if (!clickRes || !clickRes.clicked) {
@@ -3146,7 +3393,7 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
     }
     onProgress(85, '等待发布结果…');
     const resultDeadline = Date.now() + 120000;
-    let lastUrl = '', lastText = '';
+    let lastUrl = '', lastText = '', lastError = '';
     while (Date.now() < resultDeadline) {
       if (!win || win.isDestroyed()) break;
       try {
@@ -3154,30 +3401,754 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
         if (check) {
           lastUrl = check.url || '';
           lastText = check.text || '';
+          if (check.errorText) lastError = check.errorText;
           if (check.success) {
             log('info', 'done', '发布成功');
             onProgress(100, '发布成功');
             return { accountId: accountId, platform: 'douyin', status: 'success', progress: 100, message: '发布成功', url: lastUrl, startedAt: startedAt, finishedAt: Date.now() } as PublishItemProgress;
           }
           if (check.fail) {
-            log('warn', 'done', '页面提示失败');
-            return makeFailedResult(accountId, 'douyin', '发布失败', startedAt);
+            var failMsg = '发布失败';
+            if (check.errorText) failMsg = failMsg + ': ' + check.errorText;
+            log('warn', 'done', '页面提示失败: ' + (check.errorText || '未知原因'));
+            return makeFailedResult(accountId, 'douyin', failMsg, startedAt);
           }
         }
       } catch (e) {}
       await sleep(2500);
     }
-    return makeFailedResult(accountId, 'douyin', '等待发布结果超时', startedAt);
+    var timeoutMsg = '等待发布结果超时';
+    if (lastError) timeoutMsg = timeoutMsg + ' (' + lastError + ')';
+    return makeFailedResult(accountId, 'douyin', timeoutMsg, startedAt);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log('error', 'exception', '发布流程异常: ' + msg);
     return makeFailedResult(accountId, 'douyin', msg, startedAt);
   } finally {
     if (tracker) { try { tracker.dispose(); } catch (e) {} }
-    if (win && !win.isDestroyed()) {
+    // 测试模式：不关闭窗口，让用户可以检查表单填写情况
+    if (request.testMode) {
+      log('info', 'test', '测试模式完成，窗口保持打开，方便检查表单填写情况');
+    } else if (win && !win.isDestroyed()) {
       setTimeout(function () { try { if (win && !win.isDestroyed()) win.destroy(); } catch (e) {} }, 3000);
     }
   }
+}
+
+// === 抖音文章话题弹窗添加功能
+// 抖音文章的话题不是在正文里追加，而是通过"添加话题"弹窗单独添加（最多5个）
+// 操作流程：点击"点击添加话题" → 弹出对话框 → 搜索框输入关键词 → 点击第一个话题 → 重复 → 点"确认添加"
+
+/**
+ * 构建 JS 脚本：点击"添加话题"区域，弹出话题选择对话框
+ */
+function buildClickTopicAreaScript(): string {
+  return `(function () {
+    try {
+      // 方式1：通过文本"点击添加话题"查找（最直接）
+      var allDivs = document.querySelectorAll('div');
+      for (var i = 0; i < allDivs.length; i++) {
+        var d = allDivs[i];
+        var txt = (d.innerText || d.textContent || '').trim();
+        if (txt === '点击添加话题' && d.offsetParent !== null) {
+          // 优先点击父级的 topicSelector / noTopic 容器
+          var container = d.closest && d.closest('[class*="topicSelector"], [class*="noTopic"], [class*="topicContent"]');
+          var target = container || d;
+          target.click();
+          return { ok: true, method: 'text-match', clickedClass: String(target.className || '') };
+        }
+      }
+      // 方式2：通过 class 名查找 topicSelector
+      var topicSel = document.querySelector('[class*="topicSelector"]');
+      if (topicSel && topicSel.offsetParent !== null) {
+        topicSel.click();
+        return { ok: true, method: 'class-topicSelector' };
+      }
+      // 方式3：查找含"添加话题"标题的区域，点击其下方的可点击区域
+      var titles = document.querySelectorAll('[class*="title-content"], [class*="title-"]');
+      for (var j = 0; j < titles.length; j++) {
+        var t = titles[j];
+        var tText = (t.innerText || t.textContent || '').trim();
+        if (tText.indexOf('添加话题') !== -1) {
+          // 向上找最近的父容器，再向下找话题选择器
+          var parent = t.closest && t.closest('[class*="content-obt"], [class*="new-layout"]');
+          if (parent) {
+            var clickable = parent.querySelector('[class*="topicSelector"], [class*="noTopic"], [class*="topicContent"]');
+            if (clickable) {
+              clickable.click();
+              return { ok: true, method: 'title-find' };
+            }
+          }
+        }
+      }
+      return { ok: false, reason: 'topic-area-not-found' };
+    } catch (e) {
+      return { ok: false, reason: 'exception: ' + String(e) };
+    }
+  })()`;
+}
+
+/**
+ * 构建 JS 脚本：检测话题弹窗是否已打开
+ */
+function buildCheckTopicPopupScript(): string {
+  return `(function () {
+    try {
+      // 检测搜索框（placeholder 含"搜索或输入你想添加的话题"）
+      var inputs = document.querySelectorAll('input[type="text"], input:not([type])');
+      for (var i = 0; i < inputs.length; i++) {
+        var inp = inputs[i];
+        var ph = (inp.getAttribute && inp.getAttribute('placeholder')) || '';
+        if (/搜索.*话题|输入.*添加.*话题|添加话题.*搜索/i.test(ph)) {
+          return { ok: true, popupOpen: true, placeholder: ph };
+        }
+      }
+      // 兜底：检测"确认添加"按钮
+      var btns = document.querySelectorAll('button');
+      for (var j = 0; j < btns.length; j++) {
+        var btn = btns[j];
+        var btnText = (btn.innerText || btn.textContent || '').trim();
+        if (btnText.indexOf('确认添加') !== -1 && btn.offsetParent !== null) {
+          return { ok: true, popupOpen: true, confirmBtn: true };
+        }
+      }
+      return { ok: true, popupOpen: false };
+    } catch (e) {
+      return { ok: false, popupOpen: false, reason: String(e) };
+    }
+  })()`;
+}
+
+/**
+ * 构建 JS 脚本：在弹窗搜索框中输入话题关键词（不输入#号），等待搜索建议
+ * 注意：搜索关键词不带 # 号，直接输入纯文字
+ */
+function buildSearchAndClickTopicScript(keyword: string): string {
+  // 确保关键词不带 # 号前缀
+  const cleanKw = keyword.startsWith('#') ? keyword.slice(1) : keyword;
+  const kwJson = JSON.stringify(cleanKw);
+  return `(function () {
+    var keyword = ${kwJson};
+    // 再次确保不带 # 号
+    if (keyword && keyword.charAt(0) === '#') keyword = keyword.slice(1);
+    if (!keyword) return { ok: false, reason: 'empty-keyword' };
+    try {
+      // 1. 找到搜索输入框
+      var searchInput = null;
+      var inputs = document.querySelectorAll('input[type="text"], input:not([type])');
+      for (var i = 0; i < inputs.length; i++) {
+        var inp = inputs[i];
+        if (inp.offsetParent === null) continue;
+        var ph = (inp.getAttribute && inp.getAttribute('placeholder')) || '';
+        var phLower = ph.toLowerCase();
+        // 用 indexOf 匹配搜索话题相关 placeholder
+        if ((phLower.indexOf('搜索') !== -1 && phLower.indexOf('话题') !== -1) ||
+            (phLower.indexOf('输入') !== -1 && phLower.indexOf('话题') !== -1) ||
+            phLower.indexOf('添加话题') !== -1 ||
+            phLower.indexOf('搜索') !== -1) {
+          searchInput = inp;
+          break;
+        }
+      }
+      if (!searchInput) {
+        // 兜底：弹窗中第一个可见的 text input
+        var modalInputs = document.querySelectorAll('input');
+        for (var mi = 0; mi < modalInputs.length; mi++) {
+          if (modalInputs[mi].offsetParent !== null &&
+              modalInputs[mi].type !== 'hidden' &&
+              modalInputs[mi].type !== 'checkbox' &&
+              modalInputs[mi].type !== 'radio') {
+            searchInput = modalInputs[mi];
+            break;
+          }
+        }
+      }
+      if (!searchInput) return { ok: false, reason: 'search-input-not-found' };
+
+      // 2. 聚焦并清空，然后输入关键词（用 execCommand 确保 React 受控组件同步）
+      searchInput.focus();
+      try {
+        try { document.execCommand('selectAll'); } catch (eSA) {}
+        try { document.execCommand('delete'); } catch (eDel) {}
+        document.execCommand('insertText', false, keyword);
+      } catch (eCmd) {
+        searchInput.value = keyword;
+        try { searchInput.dispatchEvent(new Event('input', { bubbles: true })); } catch (eEv) {}
+        try { searchInput.dispatchEvent(new Event('change', { bubbles: true })); } catch (eEv2) {}
+      }
+      // 再次触发 input 事件确保搜索建议弹出
+      try { searchInput.dispatchEvent(new Event('input', { bubbles: true })); } catch (eEv3) {}
+
+      return { ok: true, step: 'input-done', keyword: keyword };
+    } catch (e) {
+      return { ok: false, reason: 'exception: ' + String(e) };
+    }
+  })()`;
+}
+
+/**
+ * 构建 JS 脚本：点击搜索建议列表中的第一个话题项
+ * 增加多种匹配策略，确保能找到推荐话题
+ */
+function buildClickFirstTopicSuggestionScript(): string {
+  return `(function () {
+    try {
+      // 第一步：找到搜索建议下拉容器
+      // 优先定位包含 suggest/dropdown/popover/list/option 等类名的容器
+      var container = null;
+      var allContainers = document.querySelectorAll('div, ul, ol');
+      for (var c = 0; c < allContainers.length; c++) {
+        var cont = allContainers[c];
+        // 可见性检查
+        if (cont.offsetParent === null) continue;
+        var rect = cont.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        var contCls = cont.getAttribute ? (cont.getAttribute('class') || '') : '';
+        var contId = cont.getAttribute ? (cont.getAttribute('id') || '') : '';
+        var contRole = cont.getAttribute ? (cont.getAttribute('role') || '') : '';
+        // 匹配容器特征
+        var isContainer = false;
+        if (contCls.indexOf('suggest') !== -1) isContainer = true;
+        if (contCls.indexOf('dropdown') !== -1) isContainer = true;
+        if (contCls.indexOf('popover') !== -1) isContainer = true;
+        if (contCls.indexOf('option-list') !== -1) isContainer = true;
+        if (contCls.indexOf('search-result') !== -1) isContainer = true;
+        if (contCls.indexOf('topic-list') !== -1) isContainer = true;
+        if (contCls.indexOf('list-box') !== -1) isContainer = true;
+        if (contCls.indexOf('select-dropdown') !== -1) isContainer = true;
+        if (contRole === 'listbox') isContainer = true;
+        if (contRole === 'list') isContainer = true;
+        if (contId.indexOf('suggest') !== -1) isContainer = true;
+        if (contId.indexOf('dropdown') !== -1) isContainer = true;
+        if (isContainer) {
+          // 确认容器内有以 # 开头的话题文本
+          var innerText = (cont.innerText || cont.textContent || '').trim();
+          if (innerText.indexOf('#') !== -1) {
+            container = cont;
+            break;
+          }
+        }
+      }
+
+      // 第二步：在容器内找话题项；如果没找到容器，则在全局范围内找
+      var searchScope = container || document.body;
+      var candidates = [];
+
+      // 收集候选：li / div / span / a 中以 # 开头且包含话题文字的
+      var items = searchScope.querySelectorAll('li, div, span, a');
+      for (var i = 0; i < items.length; i++) {
+        var el = items[i];
+        // 可见性检查
+        if (el.offsetParent === null) continue;
+        var elRect = el.getBoundingClientRect();
+        if (elRect.width <= 0 || elRect.height <= 0) continue;
+        // 排除容器本身（避免选到外层大容器）
+        if (el === container) continue;
+
+        var txt = (el.innerText || el.textContent || '').trim();
+        if (!txt) continue;
+        // 只保留单行文本（排除包含多行的父容器）
+        if (txt.indexOf('\\n') !== -1) continue;
+        // 话题项文本长度合理：至少 2 个字符（# + 至少1字），最多 50 字符
+        if (txt.length < 2 || txt.length > 50) continue;
+
+        // 核心特征：以 # 开头，且 # 后面有实际话题文字
+        if (txt.charAt(0) !== '#') continue;
+        // 排除纯 "#" 或 "# " 这种无意义内容
+        var afterHash = txt.slice(1).trim();
+        if (!afterHash) continue;
+        // 排除纯数字（比如只有浏览量数字）
+        if (/^[\\d.]+[万亿]?$/.test(afterHash)) continue;
+
+        // 排除已知干扰文本
+        if (txt.indexOf('确认添加') !== -1) continue;
+        if (txt.indexOf('添加话题') !== -1) continue;
+        if (txt.indexOf('点击添加') !== -1) continue;
+        if (txt.indexOf('搜索') !== -1 && txt.length < 6) continue;
+        if (txt === '话题') continue;
+        if (txt.indexOf('已添加') !== -1) continue;
+        if (txt.indexOf('更多') !== -1 && txt.length < 5) continue;
+
+        candidates.push({ el: el, text: txt, len: txt.length });
+      }
+
+      if (candidates.length === 0) {
+        return { ok: false, reason: 'no-suggestion-found', containerFound: !!container };
+      }
+
+      // 去重：如果多个元素的文本完全相同，取最内层（文本最短路径上的）
+      // 按 DOM 顺序保留第一个，因为下拉列表通常按推荐排序，第一个最相关
+      var seenTexts = {};
+      var uniqueCandidates = [];
+      for (var k = 0; k < candidates.length; k++) {
+        var cand = candidates[k];
+        if (seenTexts[cand.text]) continue;
+        seenTexts[cand.text] = true;
+        uniqueCandidates.push(cand);
+      }
+
+      if (uniqueCandidates.length === 0) {
+        return { ok: false, reason: 'no-unique-suggestion', containerFound: !!container };
+      }
+
+      var first = uniqueCandidates[0];
+
+      // 第三步：点击话题项
+      var clicked = false;
+      try {
+        first.el.click();
+        clicked = true;
+      } catch (eClick) {
+        try {
+          first.el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+          first.el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+          first.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+          clicked = true;
+        } catch (eEvt) { /* ignore */ }
+      }
+
+      // 第四步：简单验证 —— 点击后检查该元素是否还在原位置（话题项被点击后通常会消失或移动到已选区域）
+      // 这里只返回结果，验证由调用方通过后续操作判断
+      return {
+        ok: clicked,
+        clicked: first.text,
+        count: uniqueCandidates.length,
+        totalFound: candidates.length,
+        containerFound: !!container
+      };
+    } catch (e) {
+      return { ok: false, reason: 'exception: ' + String(e) };
+    }
+  })()`;
+}
+
+/**
+ * 构建 JS 脚本：点击"确认添加"按钮关闭弹窗
+ */
+function buildClickConfirmAddScript(): string {
+  return `(function () {
+    try {
+      var btns = document.querySelectorAll('button');
+      for (var i = 0; i < btns.length; i++) {
+        var btn = btns[i];
+        var txt = (btn.innerText || btn.textContent || '').trim();
+        if (txt.indexOf('确认添加') !== -1 && btn.offsetParent !== null) {
+          btn.click();
+          return { ok: true, clicked: true, text: txt };
+        }
+      }
+      // 兜底：查找含"确认添加"文本的 div
+      var divs = document.querySelectorAll('div, span');
+      for (var j = 0; j < divs.length; j++) {
+        var d = divs[j];
+        var dTxt = (d.innerText || d.textContent || '').trim();
+        if (dTxt === '确认添加' && d.offsetParent !== null) {
+          d.click();
+          return { ok: true, clicked: true, method: 'div-fallback' };
+        }
+      }
+      return { ok: false, reason: 'confirm-btn-not-found' };
+    } catch (e) {
+      return { ok: false, reason: 'exception: ' + String(e) };
+    }
+  })()`;
+}
+
+/**
+ * 通过 CDP 方式点击元素（用于 JS click() 不生效的情况，如 shadow DOM）
+ * 找到元素后用 CDP 合成鼠标事件点击
+ */
+async function cdpClickElement(
+  win: any,
+  selector: string,
+  textKeyword: string,
+  log: (level: any, stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  try {
+    try {
+      if (!win.webContents.debugger.isAttached()) {
+        await win.webContents.debugger.attach('1.3');
+      }
+    } catch { /* 已 attached */ }
+
+    const doc: any = await win.webContents.debugger.sendCommand('DOM.getDocument', { depth: -1, pierce: true }).catch(() => null);
+    if (!doc || !doc.root) return false;
+
+    const getAttr = (attrs: string[] | undefined, key: string): string => {
+      if (!attrs) return '';
+      for (let i = 0; i < attrs.length; i += 2) {
+        if (attrs[i] === key) return String(attrs[i + 1] || '');
+      }
+      return '';
+    };
+
+    const collectText = (node: any): string => {
+      if (!node) return '';
+      let buf = '';
+      const stack: any[] = [];
+      if (node.children) node.children.forEach((c: any) => stack.push(c));
+      if (node.shadowRoots) node.shadowRoots.forEach((c: any) => stack.push(c));
+      if (node.templateContent) stack.push(node.templateContent);
+      while (stack.length > 0 && buf.length < 60) {
+        const n = stack.pop();
+        if (!n) continue;
+        if (n.nodeName === '#text' && n.nodeValue) buf += n.nodeValue;
+        if (n.children) n.children.forEach((c: any) => stack.push(c));
+        if (n.shadowRoots) n.shadowRoots.forEach((c: any) => stack.push(c));
+      }
+      return buf.trim();
+    };
+
+    const candidates: { nodeId: number; text: string; cx: number; cy: number }[] = [];
+    const walk = (node: any) => {
+      if (!node) return;
+      if (node.nodeId && node.nodeName) {
+        const nodeName = (node.nodeName || '').toLowerCase();
+        const classAttr = getAttr(node.attributes, 'class');
+        if (selector === 'topic-area') {
+          // 查找"点击添加话题"文本的节点
+          if (nodeName === '#text' && node.nodeValue && node.nodeValue.indexOf('点击添加话题') !== -1) {
+            // 向上找可点击的父节点
+            candidates.push({ nodeId: node.parentId || node.nodeId, text: node.nodeValue, cx: 0, cy: 0 });
+          }
+          // 或者 class 含 topicSelector / noTopic
+          if (classAttr && (/topicSelector/i.test(classAttr) || /noTopic/i.test(classAttr))) {
+            const txt = collectText(node);
+            candidates.push({ nodeId: node.nodeId, text: txt, cx: 0, cy: 0 });
+          }
+        } else if (selector === 'confirm-btn') {
+          if (nodeName === 'button' || /btn|button/i.test(classAttr)) {
+            const txt = collectText(node);
+            if (txt.indexOf(textKeyword) !== -1) {
+              candidates.push({ nodeId: node.nodeId, text: txt, cx: 0, cy: 0 });
+            }
+          }
+        } else if (selector === 'topic-suggestion') {
+          // 找话题推荐项：文本以 # 开头，长度合理，且看起来是可点击的项
+          // 只在 DIV / LI / SPAN / A 中找（这些是常见的话题项标签）
+          if (nodeName !== 'div' && nodeName !== 'li' && nodeName !== 'span' && nodeName !== 'a') return;
+          var nodeTxt = collectText(node);
+          if (!nodeTxt || nodeTxt.length < 2 || nodeTxt.length > 50) return;
+          if (nodeTxt.charAt(0) !== '#') return;
+          // 排除纯 # 或无意义内容
+          var afterHash = nodeTxt.slice(1).trim();
+          if (!afterHash) return;
+          if (/^[\d.]+[万亿]?$/.test(afterHash)) return;
+          // 排除已知干扰文本
+          if (nodeTxt.indexOf('确认添加') !== -1) return;
+          if (nodeTxt.indexOf('添加话题') !== -1) return;
+          if (nodeTxt.indexOf('点击添加') !== -1) return;
+          if (nodeTxt.indexOf('已添加') !== -1) return;
+          candidates.push({ nodeId: node.nodeId, text: nodeTxt, cx: 0, cy: 0 });
+        }
+      }
+      if (node.children) node.children.forEach(walk);
+      if (node.shadowRoots) node.shadowRoots.forEach(walk);
+      if (node.templateContent) walk(node.templateContent);
+    };
+    walk(doc.root);
+
+    if (candidates.length === 0) {
+      log('warn', 'cdp-topic', `CDP 未找到 ${selector} 元素`);
+      return false;
+    }
+
+    // 取第一个候选，获取其位置并点击
+    const target = candidates[0];
+    try {
+      const box: any = await win.webContents.debugger.sendCommand('DOM.getBoxModel', { nodeId: target.nodeId }).catch(() => null);
+      if (box && box.model) {
+        const content = box.model.content;
+        target.cx = (content[0] + content[2]) / 2;
+        target.cy = (content[1] + content[3]) / 2;
+      }
+    } catch {
+      // 如果拿不到位置，用 DOM.focus + Enter 兜底
+      try {
+        await win.webContents.debugger.sendCommand('DOM.focus', { nodeId: target.nodeId });
+        await sleep(60);
+        await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyDown', text: '\r', windowsVirtualKeyCode: 13, code: 'Enter', key: 'Enter',
+        }).catch(() => {});
+        await sleep(40);
+        await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyUp', text: '\r', windowsVirtualKeyCode: 13, code: 'Enter', key: 'Enter',
+        }).catch(() => {});
+        log('info', 'cdp-topic', `CDP Focus+Enter 点击成功: ${target.text.slice(0, 20)}`);
+        return true;
+      } catch (e2) {
+        log('warn', 'cdp-topic', `CDP Focus+Enter 失败: ${(e2 as Error).message}`);
+        return false;
+      }
+    }
+
+    if (target.cx === 0 && target.cy === 0) return false;
+
+    // 合成鼠标点击
+    const ts = Date.now() / 1000;
+    await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x: target.cx, y: target.cy, button: 'left', timestamp: ts,
+    }).catch(() => {});
+    await sleep(40);
+    await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: target.cx, y: target.cy, button: 'left', clickCount: 1, timestamp: ts + 0.05,
+    }).catch(() => {});
+    await sleep(80);
+    await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: target.cx, y: target.cy, button: 'left', clickCount: 1, timestamp: ts + 0.15,
+    }).catch(() => {});
+
+    log('info', 'cdp-topic', `CDP 鼠标点击成功: ${target.text.slice(0, 30)}`);
+    return true;
+  } catch (err) {
+    log('warn', 'cdp-topic', `CDP 点击异常: ${(err as Error).message}`);
+    return false;
+  }
+}
+
+/**
+ * 通过 CDP 在弹窗搜索框中输入话题关键词
+ * 注意：搜索关键词不带 # 号，直接输入纯文字
+ */
+async function cdpInputTopicKeyword(
+  win: any,
+  keyword: string,
+  log: (level: any, stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  // 确保关键词不带 # 号前缀
+  const cleanKw = keyword.startsWith('#') ? keyword.slice(1) : keyword;
+  if (!cleanKw) return false;
+  try {
+    try {
+      if (!win.webContents.debugger.isAttached()) {
+        await win.webContents.debugger.attach('1.3');
+      }
+    } catch { /* 已 attached */ }
+
+    // 先用 JS 聚焦搜索框
+    const focusScript = `(function () {
+      var inputs = document.querySelectorAll('input[type="text"], input:not([type])');
+      for (var i = 0; i < inputs.length; i++) {
+        var inp = inputs[i];
+        if (inp.offsetParent === null) continue;
+        var ph = (inp.getAttribute && inp.getAttribute('placeholder')) || '';
+        var phLower = ph.toLowerCase();
+        // 用 indexOf 匹配搜索话题相关 placeholder
+        if ((phLower.indexOf('搜索') !== -1 && phLower.indexOf('话题') !== -1) ||
+            (phLower.indexOf('输入') !== -1 && phLower.indexOf('话题') !== -1) ||
+            phLower.indexOf('添加话题') !== -1 ||
+            phLower.indexOf('搜索') !== -1) {
+          inp.focus();
+          // 清空
+          try {
+            document.execCommand('selectAll');
+            document.execCommand('delete');
+          } catch(eCmd) {
+            try { inp.value = ''; inp.dispatchEvent(new Event('input', { bubbles: true })); } catch(e) {}
+          }
+          return { ok: true, placeholder: ph };
+        }
+      }
+      return { ok: false, reason: 'not-found' };
+    })()`;
+    const focusRes: any = await win.webContents.executeJavaScript(focusScript).catch(() => null);
+    if (!focusRes || !focusRes.ok) {
+      log('warn', 'cdp-topic', 'CDP 搜索框聚焦失败');
+      return false;
+    }
+
+    // 通过 CDP 逐字符输入（使用已去除 # 号的关键词）
+    for (let i = 0; i < cleanKw.length; i++) {
+      await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type: 'char',
+        text: cleanKw[i],
+        key: cleanKw[i],
+        code: '',
+      }).catch(() => {});
+      await sleep(60);
+    }
+
+    return true;
+  } catch (err) {
+    log('warn', 'cdp-topic', `CDP 输入关键词失败: ${(err as Error).message}`);
+    return false;
+  }
+}
+
+/**
+ * 通过弹窗方式添加文章话题
+ * 优先用 JS 方式，失败再用 CDP 方式
+ * @returns 添加成功的话题数量
+ */
+async function addArticleTopicsViaPopup(
+  win: any,
+  tags: string[],
+  log: (level: any, stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<number> {
+  if (!tags || tags.length === 0) {
+    log('info', 'topic-popup', '无话题，跳过弹窗添加');
+    return 0;
+  }
+
+  log('info', 'topic-popup', `开始通过弹窗添加 ${tags.length} 个话题`);
+
+  // 第1步：点击"点击添加话题"区域，弹出对话框
+  let popupOpened = false;
+
+  // 先尝试 JS 方式点击
+  const clickRes: any = await evalJS(win, buildClickTopicAreaScript(), 'topic-click-area', log).catch(() => null);
+  if (clickRes && clickRes.ok) {
+    log('info', 'topic-popup', `JS 点击话题区域成功 (${clickRes.method})`);
+    await sleep(800); // 等待弹窗出现
+    // 验证弹窗是否打开
+    const checkRes: any = await evalJS(win, buildCheckTopicPopupScript(), 'topic-check-popup', log).catch(() => null);
+    if (checkRes && checkRes.popupOpen) {
+      popupOpened = true;
+      log('info', 'topic-popup', '话题弹窗已打开');
+    }
+  }
+
+  // JS 方式失败，尝试 CDP 方式
+  if (!popupOpened) {
+    log('warn', 'topic-popup', 'JS 方式打开话题弹窗失败，尝试 CDP 方式');
+    const cdpOk = await cdpClickElement(win, 'topic-area', '点击添加话题', log);
+    if (cdpOk) {
+      await sleep(1000);
+      const checkRes2: any = await evalJS(win, buildCheckTopicPopupScript(), 'topic-check-popup-2', log).catch(() => null);
+      if (checkRes2 && checkRes2.popupOpen) {
+        popupOpened = true;
+        log('info', 'topic-popup', 'CDP 方式打开话题弹窗成功');
+      }
+    }
+  }
+
+  if (!popupOpened) {
+    log('warn', 'topic-popup', '话题弹窗未能打开，放弃弹窗方式');
+    return 0;
+  }
+
+  // 第2步：逐个添加话题
+  let addedCount = 0;
+  const maxTopics = Math.min(tags.length, ARTICLE_TAG_MAX);
+
+  for (let i = 0; i < maxTopics; i++) {
+    const tag = tags[i];
+    // 去掉 # 号前缀
+    const keyword = tag.startsWith('#') ? tag.slice(1) : tag;
+    if (!keyword) continue;
+
+    log('info', 'topic-popup', `添加第 ${i + 1}/${maxTopics} 个话题: ${keyword}`);
+
+    let topicAdded = false;
+
+    // 方式A：JS 方式输入 + 点击第一个建议
+    const inputRes: any = await evalJS(win, buildSearchAndClickTopicScript(keyword), `topic-search-${i}`, log).catch(() => null);
+    if (inputRes && inputRes.ok) {
+      await sleep(600); // 等待搜索建议出现
+      const clickSuggestionRes: any = await evalJS(win, buildClickFirstTopicSuggestionScript(), `topic-click-suggestion-${i}`, log).catch(() => null);
+      if (clickSuggestionRes && clickSuggestionRes.ok) {
+        topicAdded = true;
+        log('info', 'topic-popup', `✅ JS 方式添加话题成功: ${clickSuggestionRes.clicked}`);
+        addedCount++;
+        await sleep(300);
+        continue;
+      }
+    }
+
+    // 方式B：CDP 方式输入 + JS 点击建议
+    if (!topicAdded) {
+      log('warn', 'topic-popup', `JS 方式搜索话题失败，尝试 CDP 方式: ${keyword}`);
+      const cdpInputOk = await cdpInputTopicKeyword(win, keyword, log);
+      if (cdpInputOk) {
+        await sleep(800); // 等待搜索建议
+        const clickRes2: any = await evalJS(win, buildClickFirstTopicSuggestionScript(), `topic-click-suggestion2-${i}`, log).catch(() => null);
+        if (clickRes2 && clickRes2.ok) {
+          topicAdded = true;
+          log('info', 'topic-popup', `✅ CDP 输入 + JS 点击添加话题成功: ${clickRes2.clicked}`);
+          addedCount++;
+          await sleep(300);
+          continue;
+        }
+      }
+    }
+
+    // 方式C：CDP 输入 + CDP 点击话题推荐项（JS 点击不生效时用 CDP 鼠标点击中心位置）
+    if (!topicAdded) {
+      log('warn', 'topic-popup', `JS 点击话题建议失败，尝试 CDP 点击方式: ${keyword}`);
+      const cdpInputOk2 = await cdpInputTopicKeyword(win, keyword, log);
+      if (cdpInputOk2) {
+        await sleep(800); // 等待搜索建议出现
+        const cdpClickOk = await cdpClickElement(win, 'topic-suggestion', '', log);
+        if (cdpClickOk) {
+          topicAdded = true;
+          addedCount++;
+          log('info', 'topic-popup', `✅ CDP 输入 + CDP 点击话题建议成功: ${keyword}`);
+          await sleep(300);
+          continue;
+        }
+      }
+    }
+
+    // 方式D：CDP 输入 + 回车确认（有些平台回车可以直接选中第一个）
+    if (!topicAdded) {
+      try {
+        if (!win.webContents.debugger.isAttached()) {
+          await win.webContents.debugger.attach('1.3');
+        }
+        // 先确保输入了关键词
+        await cdpInputTopicKeyword(win, keyword, log);
+        await sleep(500);
+        // 按回车选中第一个建议
+        await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyDown', text: '\r', windowsVirtualKeyCode: 13, code: 'Enter', key: 'Enter',
+        }).catch(() => {});
+        await sleep(50);
+        await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyUp', text: '\r', windowsVirtualKeyCode: 13, code: 'Enter', key: 'Enter',
+        }).catch(() => {});
+        await sleep(400);
+        // 假设添加成功（无法直接验证，但继续下一个）
+        addedCount++;
+        topicAdded = true;
+        log('info', 'topic-popup', `CDP 输入 + 回车方式添加话题: ${keyword}`);
+      } catch {
+        log('warn', 'topic-popup', `话题添加失败: ${keyword}`);
+      }
+    }
+
+    if (!topicAdded) {
+      log('warn', 'topic-popup', `话题添加完全失败: ${keyword}，停止继续添加`);
+      break;
+    }
+  }
+
+  // 第3步：点击"确认添加"按钮关闭弹窗
+  if (addedCount > 0) {
+    await sleep(300);
+    const confirmRes: any = await evalJS(win, buildClickConfirmAddScript(), 'topic-confirm-add', log).catch(() => null);
+    if (confirmRes && confirmRes.ok) {
+      log('info', 'topic-popup', `✅ 确认添加 ${addedCount} 个话题，弹窗已关闭`);
+    } else {
+      // JS 失败，尝试 CDP 方式
+      log('warn', 'topic-popup', 'JS 点击确认添加失败，尝试 CDP 方式');
+      await cdpClickElement(win, 'confirm-btn', '确认添加', log);
+      await sleep(500);
+    }
+  } else {
+    // 没添加成功任何话题，关闭弹窗（点击遮罩或ESC）
+    log('warn', 'topic-popup', '未成功添加任何话题，尝试关闭弹窗');
+    try {
+      await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type: 'keyDown', code: 'Escape', key: 'Escape', windowsVirtualKeyCode: 27,
+      }).catch(() => {});
+      await sleep(50);
+      await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type: 'keyUp', code: 'Escape', key: 'Escape', windowsVirtualKeyCode: 27,
+      }).catch(() => {});
+    } catch { /* 忽略 */ }
+  }
+
+  return addedCount;
 }
 
 // === 对外接口
@@ -3265,20 +4236,108 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
     }
 
     onProgress(35, '填写正文…');
+    let contentResult: any = null;
     if (rawContent || articleTagList.length > 0) {
-      const script2 = buildFillContentScript(rawContent);
-      const res2: any = await evalJS(win, script2, 'article-fill-content', log).catch(function () { return null; });
-      if (!res2 || !res2.ok) {
+      if (rawContent) {
+        // 有正文：先探测编辑器类型，再选择合适的填写方式
+        const probeScript = `(function(){
+          try {
+            var ce = document.querySelectorAll('[contenteditable]');
+            var plainCE = null;
+            var pmCE = null;
+            for (var i = 0; i < ce.length; i++) {
+              var val = ce[i].getAttribute && ce[i].getAttribute('contenteditable');
+              if (val === 'false' || val === null) continue;
+              var cls = String(ce[i].className || '');
+              if (/tiptap|ProseMirror|prosemirror/i.test(cls)) {
+                if (!pmCE) pmCE = ce[i];
+              } else {
+                // 普通 contenteditable，找内容区域（非标题）
+                var txt = (ce[i].innerText || ce[i].textContent || '').trim();
+                if (!plainCE || txt.length > (plainCE._len || 0)) {
+                  plainCE = ce[i];
+                  plainCE._len = txt.length;
+                }
+              }
+            }
+            if (pmCE) return { type: 'prosemirror' };
+            if (plainCE) return { type: 'plain-ce' };
+            return { type: 'unknown' };
+          } catch(e) { return { type: 'error', err: String(e) }; }
+        })()`;
+        const probeRes: any = await evalJS(win, probeScript, 'article-probe-editor', log).catch(() => null);
+        const editorType = probeRes && probeRes.type ? probeRes.type : 'plain-ce';
+        log('info', 'fill', '文章编辑器类型: ' + editorType);
+
+        if (editorType === 'plain-ce' || editorType === 'prosemirror' || editorType === 'auto' || editorType === 'unknown') {
+          // 所有类型都优先用 CDP 方式填写（更健壮，有完整的错误处理）
+          // CDP 方式内部会根据 targetKind 选择正确的编辑器
+          const cdpTargetKind = editorType === 'prosemirror' ? 'prosemirror' : (editorType === 'plain-ce' ? 'plain-ce' : 'auto');
+          contentResult = await cdpFillContentWithNewlines(win, rawContent, cdpTargetKind, log);
+          if (!contentResult || !contentResult.ok) {
+            // CDP 方式失败，降级用 JS 方式
+            log('warn', 'fill', '文章CDP正文填写失败，降级用JS方式');
+            const script2 = buildFillContentScript(rawContent);
+            contentResult = await evalJS(win, script2, 'article-fill-content', log).catch(() => null);
+          }
+        }
+      } else {
+        // 没有正文，只有话题：用轻量脚本只查找并聚焦编辑器，不做删除/插入操作
+        // 避免复杂的 fill 脚本在空内容时意外报错，导致标签也无法输入
+        const focusScript = `(function () {
+          function moveCursorToEnd(el) {
+            try {
+              el.focus();
+              var range = document.createRange();
+              range.selectNodeContents(el);
+              range.collapse(false);
+              var sel = window.getSelection();
+              sel.removeAllRanges();
+              sel.addRange(range);
+            } catch(e) {}
+          }
+          // 1) 先找 ProseMirror / tiptap 富文本
+          var pmEls = document.querySelectorAll('[contenteditable]');
+          for (var i = 0; i < pmEls.length; i++) {
+            var el = pmEls[i];
+            var ceVal = el.getAttribute && el.getAttribute('contenteditable');
+            if (ceVal === 'false') continue;
+            var cls = String(el.className || '');
+            if (/tiptap|ProseMirror|prosemirror/i.test(cls)) {
+              moveCursorToEnd(el);
+              return { ok: true, method: 'prosemirror', isContentEditable: true };
+            }
+          }
+          // 2) 再找普通 contenteditable
+          for (var i = 0; i < pmEls.length; i++) {
+            var el = pmEls[i];
+            var ceVal = el.getAttribute && el.getAttribute('contenteditable');
+            if (ceVal === 'false') continue;
+            var cls = String(el.className || '');
+            if (/tiptap|ProseMirror|prosemirror/i.test(cls)) continue;
+            moveCursorToEnd(el);
+            return { ok: true, method: 'plain-ce', isContentEditable: true };
+          }
+          // 3) 兜底 textarea
+          var ta = document.querySelector('textarea');
+          if (ta) {
+            ta.focus();
+            return { ok: true, method: 'textarea', isContentEditable: false };
+          }
+          return { ok: false, reason: 'no-editor-found' };
+        })()`;
+        contentResult = await evalJS(win, focusScript, 'article-focus-editor', log).catch(() => null);
+      }
+
+      if (!contentResult || !contentResult.ok) {
         log('warn', 'fill', '文章正文填写失败');
       } else {
-        log('info', 'fill', '文章正文已写入 (' + (res2 && res2.method) + ')');
+        log('info', 'fill', '文章正文已写入 (' + (contentResult && contentResult.method) + ')');
       }
       await sleep(500);
-      // 通过 CDP 输入话题标签
-      if (articleTagList.length > 0 && res2 && res2.ok && res2.isContentEditable) {
-        await cdpInsertTagsWithSpace(win, articleTagList, rawContent.length > 0, log);
-        await sleep(300);
-      }
+      // 文章话题：先不通过正文插入，改由弹窗方式添加（在封面上传完成后进行）
+      // 此处仅记录话题列表，留待后续弹窗方式处理
+      log('info', 'fill', '文章话题将通过弹窗方式添加（封面上传后）');
     }
 
     // 文章发布：上传封面（第一张图片作为封面）+ 正文图片（如有多余图片）
@@ -3323,8 +4382,80 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
       onProgress(65, '准备发布…');
     }
 
+    // 填写文章摘要（在封面上传完成后，因为摘要输入框在封面区域下方）
+    let summaryFilled = false;
+    if (request.summary && request.summary.trim()) {
+      onProgress(68, '填写文章摘要…');
+      summaryFilled = await fillArticleSummary(win, request.summary, log);
+      await sleep(500);
+    }
+
+    // 添加文章话题（通过弹窗方式）
+    let topicsAddedCount = 0;
+    if (articleTagList.length > 0) {
+      onProgress(72, '添加文章话题…');
+      topicsAddedCount = await addArticleTopicsViaPopup(win, articleTagList, log);
+      log('info', 'topic-popup', `弹窗方式添加了 ${topicsAddedCount}/${articleTagList.length} 个话题`);
+
+      // 兜底：如果弹窗方式完全失败，回退到正文插入话题的方式
+      if (topicsAddedCount === 0 && contentResult && contentResult.ok && contentResult.isContentEditable) {
+        log('warn', 'topic-popup', '弹窗添加话题全部失败，回退到正文插入话题方式');
+        const fallbackOk = await cdpInsertTagsWithSpace(win, articleTagList, rawContent.length > 0, log);
+        if (fallbackOk) {
+          topicsAddedCount = articleTagList.length;
+          log('info', 'topic-popup', '✅ 正文插入话题兜底成功');
+        }
+      }
+      await sleep(500);
+    }
+
     // 点击发布
     onProgress(80, '点击发布按钮…');
+
+    // 测试模式：不点击发布，高亮标记按钮并收集表单状态
+    if (request.testMode) {
+      const testScript = buildTestModeProbeScript(
+        [
+          'button.primary-cECiOJ',
+          'button.button-dhlUZE',
+          'button[type="submit"]',
+          '.publish-btn',
+          '.submit-btn',
+        ],
+        [
+          { name: '文章标题', selector: 'input[placeholder*="标题"]', type: 'input' },
+          { name: '文章摘要', selector: 'textarea[placeholder*="摘要"], textarea[placeholder*="简介"], input[placeholder*="摘要"], input[placeholder*="简介"]', type: 'textarea' },
+          { name: '文章正文', selector: '[contenteditable="true"]', type: 'contenteditable' },
+        ],
+      );
+      const testRes: any = await evalJS(win, testScript, 'article-test-mode-probe', log).catch(() => null);
+      const testResult = {
+        titleFilled: !!(testRes?.fields?.find((f: any) => f.name === '文章标题')?.filled),
+        summaryFilled: !!(testRes?.fields?.find((f: any) => f.name === '文章摘要')?.filled) || summaryFilled,
+        contentFilled: !!(testRes?.fields?.find((f: any) => f.name === '文章正文')?.filled),
+        tagsFilled: topicsAddedCount > 0 || (articleTagList.length > 0 && !!(contentResult && contentResult.ok)),
+        coverUploaded: (request.mediaFiles || []).length > 0,
+        publishButtonFound: !!(testRes?.publishButtonFound),
+        publishButtonInfo: testRes?.publishButtonInfo || null,
+        formFields: testRes?.fields || [],
+        note: testRes?.note || '测试模式完成',
+      };
+      log('info', 'test', '文章测试模式完成: ' + (testRes?.note || '未知'));
+      onProgress(100, '测试完成');
+      // 确保测试模式窗口能正常关闭
+      setupTestModeWindow(win, log);
+      return {
+        accountId: accountId,
+        platform: 'douyin',
+        status: 'success',
+        progress: 100,
+        message: '测试完成 - 文章表单填写验证通过',
+        startedAt: startedAt,
+        finishedAt: Date.now(),
+        testResult: testResult,
+      } as PublishItemProgress;
+    }
+
     const clickScript = buildClickPublishScript();
     const clickRes: any = await evalJS(win, clickScript, 'article-click-publish', log).catch(function () { return null; });
     if (!clickRes || !clickRes.clicked) {
@@ -3336,7 +4467,7 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
     // 等待发布结果
     onProgress(90, '等待发布结果…');
     const resultDeadline = Date.now() + 120000;
-    let lastUrl = '', lastText = '';
+    let lastUrl = '', lastText = '', lastError = '';
     while (Date.now() < resultDeadline) {
       if (!win || win.isDestroyed()) break;
       try {
@@ -3344,27 +4475,35 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
         if (check) {
           lastUrl = check.url || '';
           lastText = check.text || '';
+          if (check.errorText) lastError = check.errorText;
           if (check.success) {
             log('info', 'done', '文章发布成功');
             onProgress(100, '发布成功');
             return { accountId: accountId, platform: 'douyin', status: 'success', progress: 100, message: '文章发布成功', url: lastUrl, startedAt: startedAt, finishedAt: Date.now() } as PublishItemProgress;
           }
           if (check.fail) {
-            log('warn', 'done', '页面提示失败');
-            return makeFailedResult(accountId, 'douyin', '文章发布失败', startedAt);
+            var failMsg = '文章发布失败';
+            if (check.errorText) failMsg = failMsg + ': ' + check.errorText;
+            log('warn', 'done', '页面提示失败: ' + (check.errorText || '未知原因'));
+            return makeFailedResult(accountId, 'douyin', failMsg, startedAt);
           }
         }
       } catch (e) {}
       await sleep(2500);
     }
-    return makeFailedResult(accountId, 'douyin', '等待文章发布结果超时', startedAt);
+    var timeoutMsg = '等待文章发布结果超时';
+    if (lastError) timeoutMsg = timeoutMsg + ' (' + lastError + ')';
+    return makeFailedResult(accountId, 'douyin', timeoutMsg, startedAt);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log('error', 'exception', '文章发布异常: ' + msg);
     return makeFailedResult(accountId, 'douyin', msg, startedAt);
   } finally {
     if (tracker) { try { tracker.dispose(); } catch (e) {} }
-    if (win && !win.isDestroyed()) {
+    // 测试模式：不关闭窗口，让用户可以检查表单填写情况
+    if (request.testMode) {
+      log('info', 'test', '文章测试模式完成，窗口保持打开，方便检查表单填写情况');
+    } else if (win && !win.isDestroyed()) {
       setTimeout(function () { try { if (win && !win.isDestroyed()) win.destroy(); } catch (e) {} }, 3000);
     }
   }
@@ -3396,7 +4535,7 @@ const meta: PlatformMeta = {
   contentTypes: ['video', 'image', 'article'],
   capabilities: { publishVideo: true, publishImage: true, publishArticle: true } as AccountCapabilities,
   contentLimits: { title: 80, content: 1000 },
-  articleLimits: { title: 30, content: 8000, minContent: 100 },
+  articleLimits: { title: 30, content: 8000, minContent: 100, summary: 30 },
   nicknameSelectors: ['[class*="header-"] [class*="name-"]', '[class*="name-"]', '[class*="name"]', '.name-box', '.user-name', '.nickname'],
   avatarSelectors: ['[class*="avatar-"] img', 'img[class*="img-"]', 'img[class*="avatar"]', 'img.user_avatar', '.user-info img'],
   loginKeywords: ['创作中心', '内容管理', '发布', '作品', '数据', '粉丝'],
