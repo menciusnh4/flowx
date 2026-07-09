@@ -175,11 +175,14 @@ export const electronApi = {
   },
 
   // 日志管理
-  async readMainLog(options?: { limit?: number }): Promise<string> {
+  async readMainLog(options?: { limit?: number; date?: string }): Promise<string> {
     return invokeElectron('log.readMain', 'log:readMain', options);
   },
-  async readPublishLog(options?: { limit?: number }): Promise<string> {
+  async readPublishLog(options?: { limit?: number; date?: string }): Promise<string> {
     return invokeElectron('log.readPublish', 'log:readPublish', options);
+  },
+  async listLogFiles(type: 'main' | 'publish'): Promise<{ date: string; path: string; size: number }[]> {
+    return invokeElectron('log.listFiles', 'log:listFiles', type);
   },
   async queryPublishLog(query?: PublishLogQuery): Promise<PublishLogEntry[]> {
     return invokeElectron('log.queryPublish', 'log:queryPublish', query);

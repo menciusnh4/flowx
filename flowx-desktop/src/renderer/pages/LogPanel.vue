@@ -51,11 +51,19 @@
         <!-- 工具栏 -->
         <div class="log-toolbar">
           <el-radio-group v-model="activeTab" size="small" @change="onTabChange">
-            <el-radio-button label="publish">发布日志</el-radio-button>
-            <el-radio-button label="main">主日志</el-radio-button>
+            <el-radio-button value="publish">发布日志</el-radio-button>
+            <el-radio-button value="main">主日志</el-radio-button>
           </el-radio-group>
 
           <div class="toolbar-right">
+            <el-select v-model="selectedDate" size="small" style="width: 140px; margin-right: 8px;" @change="loadLogs">
+              <el-option
+                v-for="f in logFileList"
+                :key="f.date"
+                :label="f.date + ' (' + formatSize(f.size) + ')'"
+                :value="f.date"
+              />
+            </el-select>
             <el-select v-model="lineLimit" size="small" style="width: 120px; margin-right: 8px;" @change="loadLogs">
               <el-option label="最近 100 行" :value="100" />
               <el-option label="最近 500 行" :value="500" />
@@ -88,8 +96,11 @@
 
         <!-- 日志内容 -->
         <div class="log-content" ref="logContentRef">
-          <div v-loading="loading" class="log-loading">加载中...</div>
-          <pre v-if="!loading" class="log-text">{{ filteredContent || '（暂无日志）' }}</pre>
+          <div v-if="loading" class="log-loading-wrap">
+            <el-icon class="is-loading" :size="32"><Loading /></el-icon>
+            <div style="margin-top: 12px; color: #909399;">加载中...</div>
+          </div>
+          <pre v-else class="log-text">{{ filteredContent || '（暂无日志）' }}</pre>
         </div>
       </div>
 
@@ -111,15 +122,17 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Refresh, Download, FolderOpened, Delete } from '@element-plus/icons-vue';
+import { Refresh, Download, FolderOpened, Delete, Loading } from '@element-plus/icons-vue';
 import { electronApi } from '../utils/electron';
 
 const activeTab = ref<'publish' | 'main'>('publish');
 const lineLimit = ref(500);
 const searchKeyword = ref('');
-const loading = ref(false);
+const loading = ref(true);
 const rawContent = ref('');
 const logContentRef = ref<HTMLElement | null>(null);
+const selectedDate = ref<string>('');
+const logFileList = ref<{ date: string; path: string; size: number }[]>([]);
 
 const logInfo = ref({
   mainSize: 0,
@@ -155,13 +168,30 @@ async function loadLogInfo() {
   }
 }
 
+async function loadLogFileList() {
+  try {
+    const files = await electronApi.listLogFiles(activeTab.value);
+    logFileList.value = files;
+    // 默认选择最新的（第一个）
+    if (files.length > 0 && !selectedDate.value) {
+      selectedDate.value = files[0].date;
+    }
+  } catch (e) {
+    console.error('加载日志文件列表失败', e);
+  }
+}
+
 async function loadLogs() {
   loading.value = true;
   try {
+    const options: { limit: number; date?: string } = { limit: lineLimit.value };
+    if (selectedDate.value) {
+      options.date = selectedDate.value;
+    }
     if (activeTab.value === 'publish') {
-      rawContent.value = await electronApi.readPublishLog({ limit: lineLimit.value });
+      rawContent.value = await electronApi.readPublishLog(options);
     } else {
-      rawContent.value = await electronApi.readMainLog({ limit: lineLimit.value });
+      rawContent.value = await electronApi.readMainLog(options);
     }
     await nextTick();
     scrollToBottom();
@@ -183,6 +213,8 @@ function scrollToBottom() {
 
 function onTabChange() {
   searchKeyword.value = '';
+  selectedDate.value = '';
+  loadLogFileList();
   loadLogs();
 }
 
@@ -192,6 +224,7 @@ function applyFilter() {
 
 async function refreshLogs() {
   await loadLogInfo();
+  await loadLogFileList();
   await loadLogs();
   ElMessage.success('已刷新');
 }
@@ -250,9 +283,14 @@ async function clearPublishLogs() {
   }
 }
 
-onMounted(() => {
-  loadLogInfo();
-  loadLogs();
+onMounted(async () => {
+  try {
+    await loadLogFileList();
+    await loadLogs();
+    loadLogInfo(); // 概览信息后台加载，不阻塞
+  } catch (e) {
+    console.error('初始化日志页面失败', e);
+  }
 });
 </script>
 
@@ -360,12 +398,23 @@ onMounted(() => {
   overflow: hidden;
 }
 
-.log-loading {
+.log-loading-wrap {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   height: 100%;
   color: #909399;
+}
+
+.log-loading-wrap .el-icon.is-loading {
+  animation: rotating 1s linear infinite;
+  color: #409eff;
+}
+
+@keyframes rotating {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .log-text {

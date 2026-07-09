@@ -146,12 +146,14 @@ contextBridge.exposeInMainWorld('electron', {
 
   // ========== 日志管理 ==========
   log: {
-    readMain: (options?: { limit?: number }): Promise<string> => invoke('log:readMain', options),
-    readPublish: (options?: { limit?: number }): Promise<string> => invoke('log:readPublish', options),
+    readMain: (options?: { limit?: number; date?: string }): Promise<string> => invoke('log:readMain', options),
+    readPublish: (options?: { limit?: number; date?: string }): Promise<string> => invoke('log:readPublish', options),
+    listFiles: (type: 'main' | 'publish'): Promise<{ date: string; path: string; size: number }[]> =>
+      invoke('log:listFiles', type),
     queryPublish: (query?: PublishLogQuery): Promise<PublishLogEntry[]> => invoke('log:queryPublish', query),
     clearPublish: (): Promise<boolean> => invoke('log:clearPublish'),
     openDir: (): Promise<boolean> => invoke('log:openDir'),
-    export: (type: 'main' | 'publish' | 'all'): Promise<{ ok: boolean; path?: string; error?: string }> =>
+    'export': (type: 'main' | 'publish' | 'all'): Promise<{ ok: boolean; path?: string; error?: string }> =>
       invoke('log:export', type),
     getInfo: (): Promise<{
       mainSize: number;
@@ -438,12 +440,13 @@ declare global {
         closeWindow: () => Promise<boolean>;
       };
       log: {
-        readMain: (options?: { limit?: number }) => Promise<string>;
-        readPublish: (options?: { limit?: number }) => Promise<string>;
+        readMain: (options?: { limit?: number; date?: string }) => Promise<string>;
+        readPublish: (options?: { limit?: number; date?: string }) => Promise<string>;
+        listFiles: (type: 'main' | 'publish') => Promise<{ date: string; path: string; size: number }[]>;
         queryPublish: (query?: PublishLogQuery) => Promise<PublishLogEntry[]>;
         clearPublish: () => Promise<boolean>;
         openDir: () => Promise<boolean>;
-        export: (type: 'main' | 'publish' | 'all') => Promise<{ ok: boolean; path?: string; error?: string }>;
+        'export': (type: 'main' | 'publish' | 'all') => Promise<{ ok: boolean; path?: string; error?: string }>;
         getInfo: () => Promise<{
           mainSize: number;
           publishSize: number;

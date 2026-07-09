@@ -13,27 +13,78 @@ const publishLogger = log.create({ logId: 'publish' });
 const MAX_MEMORY_LOGS = 2000;
 const memoryLogs: PublishLogEntry[] = [];
 
+// 日志保留天数
+const LOG_RETENTION_DAYS = 14;
+
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
+
+/** 获取当前日期字符串 YYYY-MM-DD */
+function getDateStr(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** 清理过期日志文件（保留最近 N 天） */
+function cleanupOldLogs(logsDir: string, prefix: string, suffix: string, retentionDays: number) {
+  try {
+    if (!fs.existsSync(logsDir)) return;
+    const files = fs.readdirSync(logsDir);
+    const now = Date.now();
+    const cutoff = now - retentionDays * 24 * 60 * 60 * 1000;
+
+    for (const file of files) {
+      if (!file.startsWith(prefix) || !file.endsWith(suffix)) continue;
+      // 从文件名中提取日期，例如 main-2026-07-09.log
+      const dateMatch = file.match(/(\d{4}-\d{2}-\d{2})/);
+      if (!dateMatch) continue;
+      const fileDate = new Date(dateMatch[1]).getTime();
+      if (isNaN(fileDate)) continue;
+      if (fileDate < cutoff) {
+        try {
+          fs.unlinkSync(path.join(logsDir, file));
+        } catch {
+          // ignore
+        }
+      }
+    }
+  } catch {
+    // 清理失败不影响日志写入
+  }
+}
 
 export function setupLogger() {
   if (initialized) return;
   initialized = true;
 
-  // 主进程日志
+  const logsDir = getLogsDir();
+
+  // 主进程日志 - 按天生成文件
   log.transports.file.level = 'info';
-  log.transports.file.maxSize = 10 * 1024 * 1024; // 10MB
+  log.transports.file.maxSize = 20 * 1024 * 1024; // 单文件最大 20MB
   log.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}';
-  log.transports.file.fileName = 'main.log';
+  log.transports.file.resolvePath = (variables: any) => {
+    const dateStr = getDateStr();
+    return path.join(logsDir, `main-${dateStr}.log`);
+  };
   log.transports.console.level = 'debug';
   log.transports.console.format = '[{h}:{i}:{s}.{ms}] [{level}] {text}';
 
-  // 发布独立日志文件
+  // 发布独立日志文件 - 按天生成文件
   publishLogger.transports.file.level = 'debug';
-  publishLogger.transports.file.maxSize = 20 * 1024 * 1024; // 20MB
-  publishLogger.transports.file.fileName = 'publish.log';
+  publishLogger.transports.file.maxSize = 30 * 1024 * 1024; // 单文件最大 30MB
   publishLogger.transports.file.format =
     '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] [{processType}] {text}';
+  publishLogger.transports.file.resolvePath = (variables: any) => {
+    const dateStr = getDateStr();
+    return path.join(logsDir, `publish-${dateStr}.log`);
+  };
   publishLogger.transports.console.level = false as any; // 发布日志不打印到控制台（主 log 已打）
+
+  // 启动时清理过期日志
+  cleanupOldLogs(logsDir, 'main-', '.log', LOG_RETENTION_DAYS);
+  cleanupOldLogs(logsDir, 'publish-', '.log', LOG_RETENTION_DAYS);
 
   // 捕获未处理异常
   process.on('uncaughtException', (err) => {
@@ -67,14 +118,51 @@ export function getLogsDir(): string {
   }
 }
 
-/** 获取 publish.log 文件完整路径 */
+/** 获取 publish.log 文件完整路径（当天） */
 export function getPublishLogPath(): string {
-  return path.join(getLogsDir(), 'publish.log');
+  const dateStr = getDateStr();
+  return path.join(getLogsDir(), `publish-${dateStr}.log`);
 }
 
-/** 获取 main.log 文件完整路径 */
+/** 获取 main.log 文件完整路径（当天） */
 export function getMainLogPath(): string {
-  return path.join(getLogsDir(), 'main.log');
+  const dateStr = getDateStr();
+  return path.join(getLogsDir(), `main-${dateStr}.log`);
+}
+
+/** 获取指定日期的日志文件路径 */
+export function getLogPathByDate(type: 'main' | 'publish', date: Date): string {
+  const dateStr = getDateStr(date);
+  const prefix = type === 'main' ? 'main' : 'publish';
+  return path.join(getLogsDir(), `${prefix}-${dateStr}.log`);
+}
+
+/** 列出所有日志文件（按日期倒序） */
+export function listLogFiles(type: 'main' | 'publish'): { date: string; path: string; size: number }[] {
+  try {
+    const logsDir = getLogsDir();
+    if (!fs.existsSync(logsDir)) return [];
+    const prefix = type === 'main' ? 'main-' : 'publish-';
+    const files = fs.readdirSync(logsDir);
+    const result: { date: string; path: string; size: number }[] = [];
+    for (const file of files) {
+      if (!file.startsWith(prefix) || !file.endsWith('.log')) continue;
+      const dateMatch = file.match(/(\d{4}-\d{2}-\d{2})/);
+      if (!dateMatch) continue;
+      const fullPath = path.join(logsDir, file);
+      try {
+        const stat = fs.statSync(fullPath);
+        result.push({ date: dateMatch[1], path: fullPath, size: stat.size });
+      } catch {
+        // ignore
+      }
+    }
+    // 按日期倒序
+    result.sort((a, b) => b.date.localeCompare(a.date));
+    return result;
+  } catch {
+    return [];
+  }
 }
 
 // --- 发布结构化日志 API（PublishEngine / PlatformAdapter 调用）---

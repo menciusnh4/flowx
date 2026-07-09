@@ -2,7 +2,7 @@ import { ipcMain, shell, app, dialog, BrowserWindow } from 'electron';
 import { safeInvoke } from './index';
 import type { SystemInfo, UpdateInfo, PublishLogQuery } from '../../types';
 import { getMainWindow } from '../windows/MainWindow';
-import { getLogsDir, getPublishLogPath, getMainLogPath, queryPublishLogs, clearPublishLogs } from '../utils/logger';
+import { getLogsDir, getPublishLogPath, getMainLogPath, queryPublishLogs, clearPublishLogs, listLogFiles, getLogPathByDate } from '../utils/logger';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -71,10 +71,13 @@ export function registerSystemIpc(): void {
 
   // --- 日志管理 ---
 
-  // 读取主日志文件内容（最后 N 行）
-  safeInvoke('log:readMain', async (options?: { limit?: number }): Promise<string> => {
+  // 读取主日志文件内容（最后 N 行，支持指定日期）
+  safeInvoke('log:readMain', async (options?: { limit?: number; date?: string }): Promise<string> => {
     const limit = options?.limit ?? 500;
-    const logPath = getMainLogPath();
+    let logPath = getMainLogPath();
+    if (options?.date) {
+      logPath = getLogPathByDate('main', new Date(options.date));
+    }
     try {
       if (!fs.existsSync(logPath)) return '';
       const content = fs.readFileSync(logPath, 'utf-8');
@@ -85,10 +88,13 @@ export function registerSystemIpc(): void {
     }
   });
 
-  // 读取发布日志文件内容（最后 N 行）
-  safeInvoke('log:readPublish', async (options?: { limit?: number }): Promise<string> => {
+  // 读取发布日志文件内容（最后 N 行，支持指定日期）
+  safeInvoke('log:readPublish', async (options?: { limit?: number; date?: string }): Promise<string> => {
     const limit = options?.limit ?? 500;
-    const logPath = getPublishLogPath();
+    let logPath = getPublishLogPath();
+    if (options?.date) {
+      logPath = getLogPathByDate('publish', new Date(options.date));
+    }
     try {
       if (!fs.existsSync(logPath)) return '';
       const content = fs.readFileSync(logPath, 'utf-8');
@@ -97,6 +103,11 @@ export function registerSystemIpc(): void {
     } catch (err) {
       return `[读取日志失败] ${(err as Error).message}`;
     }
+  });
+
+  // 列出日志文件（按日期倒序）
+  safeInvoke('log:listFiles', (type: 'main' | 'publish'): { date: string; path: string; size: number }[] => {
+    return listLogFiles(type);
   });
 
   // 查询结构化发布日志（用于发布详情页等）
