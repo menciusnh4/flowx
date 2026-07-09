@@ -47,6 +47,7 @@ const contentType = ref<'video' | 'image' | 'article'>(props.initialValue?.conte
 const title = ref(props.initialValue?.title || '')
 const mediaFiles = ref<string[]>(props.initialValue?.mediaFiles || [])
 const content = ref(props.initialValue?.content || '')
+const summary = ref(props.initialValue?.summary || '')
 const coverImage = ref(props.initialValue?.coverImage || '')
 const tagsRaw = ref((props.initialValue?.tags || []).join(' '))
 const submitting = ref(false)
@@ -59,6 +60,7 @@ function notifyChange() {
     title: title.value,
     mediaFiles: mediaFiles.value,
     content: content.value,
+    summary: summary.value,
     coverImage: coverImage.value,
     tags: tagsRaw.value.split(/[,，\s]+/).map(t => t.trim().replace(/^#/, '')).filter(t => t.length > 0),
   })
@@ -314,6 +316,23 @@ const articleMinContentHint = computed(() => {
   if (minReqs.length === 0) return null
   const parts = minReqs.map((r) => `${platformName(r.platform)}至少${r.min}字`)
   return `📝 ${parts.join('，')}（当前 ${content.value.length} 字）`
+})
+
+// 文章摘要最大字数（取所选平台中最小的限制）
+const articleSummaryMaxLength = computed(() => {
+  if (contentType.value !== 'article') return 2000
+  const ids = getSelectedIds()
+  if (ids.length === 0) return 2000
+  let minLimit = Infinity
+  for (const id of ids) {
+    const a = accountStore.accounts.find((x) => x.id === id)
+    if (!a) continue
+    const meta = accountStore.platforms.find((p) => p.key === a.platform)
+    if (meta?.articleLimits?.summary && meta.articleLimits.summary < minLimit) {
+      minLimit = meta.articleLimits.summary
+    }
+  }
+  return minLimit === Infinity ? 2000 : minLimit
 })
 
 // ============ 图片预览缓存 ============
@@ -577,6 +596,7 @@ async function submitPublish() {
     tags,
     category: '',
     content: content.value,
+    summary: summary.value,
     scheduledAt,
   }
 
@@ -640,6 +660,7 @@ async function submitTestPublish() {
     tags,
     category: '',
     content: content.value,
+    summary: summary.value,
     testMode: true,
   }
 
@@ -654,6 +675,7 @@ function fillForm(data: Partial<PublishRequest>) {
   if (data.title !== undefined) title.value = data.title
   if (data.mediaFiles) mediaFiles.value = [...data.mediaFiles]
   if (data.content !== undefined) content.value = data.content
+  if (data.summary !== undefined) summary.value = data.summary
   if (data.coverImage) coverImage.value = data.coverImage
   if (data.tags) tagsRaw.value = data.tags.join(' ')
   if (data.accountIds) {
@@ -670,6 +692,7 @@ function getFormData(): Partial<PublishRequest> {
     title: title.value,
     mediaFiles: [...mediaFiles.value],
     content: content.value,
+    summary: summary.value,
     coverImage: coverImage.value,
     tags: tagsRaw.value.split(/[,，\s]+/).map(t => t.trim().replace(/^#/, '')).filter(t => t.length > 0),
     accountIds: getSelectedIds(),
@@ -758,11 +781,12 @@ function insertImagePlaceholder(count: number): void {
 
 /** 清空标题、内容、话题（②区域的清空按钮） */
 async function clearContentSection() {
-  if (!title.value && !content.value && !tagsRaw.value) return
-  const ok = await showConfirm('确定要清空标题、正文和话题吗？', '确认清空', { confirmButtonText: '确定清空' })
+  if (!title.value && !content.value && !summary.value && !tagsRaw.value) return
+  const ok = await showConfirm('确定要清空标题、正文、摘要和话题吗？', '确认清空', { confirmButtonText: '确定清空' })
   if (!ok) return
   title.value = ''
   content.value = ''
+  summary.value = ''
   tagsRaw.value = ''
   notifyChange()
   ElMessage.success('已清空内容')
@@ -774,6 +798,7 @@ async function clearForm() {
   if (!ok) return
   title.value = ''
   content.value = ''
+  summary.value = ''
   mediaFiles.value = []
   coverImage.value = ''
   tagsRaw.value = ''
@@ -916,6 +941,19 @@ function iconOf(platform?: string): string {
           <div v-if="articleMinContentHint" class="min-content-hint">
             {{ articleMinContentHint }}
           </div>
+        </el-form-item>
+
+        <!-- 文章模式：文章摘要 -->
+        <el-form-item v-if="contentType === 'article'" label="摘要">
+          <el-input
+            v-model="summary"
+            type="textarea"
+            :rows="2"
+            placeholder="可选：文章摘要/简介，将显示在文章列表或分享卡片中（抖音300字/小红书1000字）"
+            :maxlength="articleSummaryMaxLength"
+            show-word-limit
+            @input="notifyChange"
+          />
         </el-form-item>
 
         <el-form-item label="话题">

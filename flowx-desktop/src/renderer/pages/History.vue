@@ -81,7 +81,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column label="操作" width="360" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" link @click="showDetail(row)">
               <el-icon><View /></el-icon>&nbsp;详情
@@ -113,6 +113,27 @@
               @click="openEditDialog(row)"
             >
               <el-icon><Edit /></el-icon>&nbsp;编辑重发
+            </el-button>
+            <!-- 测试任务：重新测试 -->
+            <el-button
+              v-if="isTestTask(row) && row.status !== 'running' && row.status !== 'queued'"
+              size="small"
+              type="primary"
+              link
+              :loading="retryingId === row.id"
+              @click="retryTest(row)"
+            >
+              <el-icon><Refresh /></el-icon>&nbsp;重新测试
+            </el-button>
+            <!-- 测试任务：立即发布 -->
+            <el-button
+              v-if="isTestTask(row) && row.status !== 'running' && row.status !== 'queued'"
+              size="small"
+              type="success"
+              link
+              @click="retryAsPublish(row)"
+            >
+              <el-icon><Promotion /></el-icon>&nbsp;立即发布
             </el-button>
             <el-popconfirm
               title="确定删除此历史记录？"
@@ -718,6 +739,64 @@ async function retryTask(task: any) {
     }
   } catch (err) {
     ElMessage.error('重试失败: ' + (err as Error).message);
+  } finally {
+    retryingId.value = null;
+  }
+}
+
+/** 重新测试（测试任务专用） */
+async function retryTest(task: any) {
+  try {
+    await ElMessageBox.confirm(
+      `将对所有账号重新执行测试（不真正发布），确定继续？`,
+      '重新测试',
+      { type: 'info', confirmButtonText: '重新测试' },
+    );
+  } catch {
+    return;
+  }
+
+  retryingId.value = task.id as string;
+  try {
+    const newTaskId = await electronApi.retryAsTest(task.id as string);
+    if (newTaskId) {
+      ElMessage.success(`已创建重新测试任务，新任务ID: ${newTaskId}`);
+      detailVisible.value = false;
+      await refresh();
+    } else {
+      ElMessage.warning('无法创建重新测试任务');
+    }
+  } catch (err) {
+    ElMessage.error('重新测试失败: ' + (err as Error).message);
+  } finally {
+    retryingId.value = null;
+  }
+}
+
+/** 立即发布（测试任务转正式发布） */
+async function retryAsPublish(task: any) {
+  try {
+    await ElMessageBox.confirm(
+      `将对所有账号立即执行正式发布（会真的发布内容），确定继续？`,
+      '立即发布',
+      { type: 'warning', confirmButtonText: '立即发布' },
+    );
+  } catch {
+    return;
+  }
+
+  retryingId.value = task.id as string;
+  try {
+    const newTaskId = await electronApi.retryAsPublish(task.id as string);
+    if (newTaskId) {
+      ElMessage.success(`已创建发布任务，新任务ID: ${newTaskId}`);
+      detailVisible.value = false;
+      await refresh();
+    } else {
+      ElMessage.warning('无法创建发布任务');
+    }
+  } catch (err) {
+    ElMessage.error('发布失败: ' + (err as Error).message);
   } finally {
     retryingId.value = null;
   }

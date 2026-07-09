@@ -26,6 +26,12 @@ export function registerPublishIpc(): void {
   // 重试失败任务 -> 返回新的 taskId，或 null（无需重试）
   safeInvoke('publish:retry', (taskId: string) => PublishEngine.retry(taskId));
 
+  // 重新测试（测试任务专用）-> 返回新的 taskId
+  safeInvoke('publish:retryAsTest', (taskId: string) => PublishEngine.retryAsTest(taskId));
+
+  // 立即发布（测试任务转正式发布）-> 返回新的 taskId
+  safeInvoke('publish:retryAsPublish', (taskId: string) => PublishEngine.retryAsPublish(taskId));
+
   // 获取任务详情（含日志）
   safeInvoke('publish:detail', (taskId: string) => PublishEngine.getTaskDetail(taskId));
 

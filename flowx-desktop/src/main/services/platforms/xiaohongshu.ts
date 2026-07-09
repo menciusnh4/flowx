@@ -486,6 +486,83 @@ function buildFillContentScript(content: string): string {
 }
 
 /**
+ * [文章发布专用] 生成填写第三步页面"正文描述/摘要"的 JS 脚本
+ *  - 第三步页面（发布设置页）的正文描述框，与图文发布的正文描述框类似
+ *  - 描述框也是 tiptap / ProseMirror 编辑器，是页面上第二个 ProseMirror 编辑器
+ *  - 第一个 ProseMirror 是正文编辑器，第二个是描述/摘要编辑器
+ *  - 写完后光标保持在末尾，便于后续 CDP 输入话题标签
+ */
+function buildFillArticleSummaryScript(summary: string): string {
+  const contentJSON = JSON.stringify(summary);
+  return (
+    '(function(){' +
+    'var content = ' + contentJSON + ';' +
+    // 辅助：将光标移到编辑器末尾
+    'function moveCursorToEnd(el) {' +
+    '  try {' +
+    '    el.focus();' +
+    '    var range = document.createRange();' +
+    '    range.selectNodeContents(el);' +
+    '    range.collapse(false);' +
+    '    var sel = window.getSelection();' +
+    '    sel.removeAllRanges();' +
+    '    sel.addRange(range);' +
+    '  } catch(e) {}' +
+    '}' +
+    // 辅助：判断是否为 ProseMirror / tiptap
+    'function isProseMirror(el) {' +
+    '  if (!el || !el.getAttribute) return false;' +
+    '  var cls = el.getAttribute(\'class\') || \'\';' +
+    '  if (cls.indexOf(\'ProseMirror\') !== -1) return true;' +
+    '  if (cls.indexOf(\'tiptap\') !== -1) return true;' +
+    '  return false;' +
+    '}' +
+    // 收集所有 ProseMirror 编辑器
+    'var pmEditors = [];' +
+    'try {' +
+    '  var nodes = document.querySelectorAll(\'[contenteditable]\');' +
+    '  for (var i = 0; i < nodes.length; i++) {' +
+    '    var n = nodes[i];' +
+    '    if (isProseMirror(n)) {' +
+    '      pmEditors.push(n);' +
+    '    }' +
+    '  }' +
+    '} catch(e) {}' +
+    // 目标：第二个 ProseMirror 编辑器（描述框）。如果只有一个，就用那一个。
+    'var target = null;' +
+    'if (pmEditors.length >= 2) {' +
+    '  target = pmEditors[1];' +
+    '} else if (pmEditors.length === 1) {' +
+    '  target = pmEditors[0];' +
+    '}' +
+    'if (!target) return { ok: false, kind: \'\', length: 0, isContentEditable: false, reason: \'no-summary-target\' };' +
+    'var kind = \'prosemirror\';' +
+    // 写入内容
+    'try {' +
+    '  target.focus();' +
+    // ProseMirror：selectAll → delete → insertText
+    '  try {' +
+    '    window.getSelection().removeAllRanges();' +
+    '    var range = document.createRange();' +
+    '    range.selectNodeContents(target);' +
+    '    window.getSelection().addRange(range);' +
+    '    try { document.execCommand(\'delete\'); } catch(e) {}' +
+    '    try { document.execCommand(\'insertText\', false, content); } catch(e2) { target.innerText = content; }' +
+    '  } catch(e) {' +
+    '    target.innerText = content;' +
+    '  }' +
+    '  try { target.dispatchEvent(new Event(\'input\', { bubbles: true })); } catch(e) {}' +
+    // 将光标移到末尾，保持焦点（不blur），便于后续CDP输入标签
+    '  moveCursorToEnd(target);' +
+    '  return { ok: true, kind: kind, length: content.length, isContentEditable: true };' +
+    '} catch(e) {' +
+    '  return { ok: false, kind: kind, length: 0, isContentEditable: true, reason: String(e && e.message || e) };' +
+    '}' +
+    '})()'
+  );
+}
+
+/**
  * 生成"点击发布按钮"的脚本
  *  - 匹配文本："发布"、"发布笔记"、"发布视频"、"立即发布" 等
  *  - 对找到的按钮执行 click() + dispatchEvent 兜底
@@ -1353,11 +1430,7 @@ async function publishArticle(
     log('info', 'fill-content', `正文填写结果: ${JSON.stringify(contentRes)}`);
     await sleep(500);
 
-    // 7.5) 通过 CDP 输入话题标签
-    if (articleTagList.length > 0 && contentRes && contentRes.ok && contentRes.isContentEditable) {
-      await cdpInsertTagsWithSpace(win, articleTagList, rawContent.length > 0, log);
-      await sleep(300);
-    }
+    // 注意：文章发布的话题标签不在正文中插入，而是在第三步页面的正文描述框中追加
 
     // 8) 文章发布：点击底部 "next-btn" 红色按钮 2-3 次（文本动态变化）
     //    🔑 关键洞察（来自实际页面 HTML）：
@@ -1497,6 +1570,7 @@ async function publishArticle(
 
     let publishFlowOk = true;
     const totalClicks = 3;
+    let summaryResult: any = null; // 第三步页面摘要填写结果（用于话题插入）
 
     for (let clickN = 1; clickN <= totalClicks && publishFlowOk; clickN++) {
       const stepLabel = clickN === 1 ? '一键排版' : (clickN === 2 ? '下一步' : '发布');
@@ -1542,6 +1616,61 @@ async function publishArticle(
       // 调试辅助：读取按钮文本（仅供日志，不影响流程逻辑）
       const debugText = await readNextBtnText();
       log('info', 'article-publish', `点击 #${clickN} 后 [调试] 按钮文本: "${debugText}", 当前 URL: ${currentUrl}`);
+
+      // 🔑 第二步（点击"下一步"）完成后：在第三步页面填写摘要 + 插入话题标签
+      if (clickN === 2) {
+        // 填写文章摘要（正文描述）
+        const articleSummary = request.summary || '';
+        if (articleSummary.trim() || articleTagList.length > 0) {
+          onProgress(82, '填写文章摘要…');
+          log('info', 'fill-summary', `文章摘要: ${articleSummary.length} 字, 标签: ${articleTagList.length} 个`);
+          summaryResult = await evalJS(win, buildFillArticleSummaryScript(articleSummary), '文章-填写摘要', log).catch(() => null);
+          log('info', 'fill-summary', `摘要填写结果: ${JSON.stringify(summaryResult)}`);
+          await sleep(500);
+
+          // 在摘要框中插入话题标签
+          if (articleTagList.length > 0 && summaryResult && summaryResult.ok && summaryResult.isContentEditable) {
+            log('info', 'cdp-tags', '在摘要描述框中插入话题标签…');
+            await cdpInsertTagsWithSpace(win, articleTagList, articleSummary.trim().length > 0, log);
+            await sleep(300);
+          } else if (articleTagList.length > 0 && summaryResult && summaryResult.ok && summaryResult.kind === 'textarea') {
+            // textarea 类型：用 JS 方式追加标签
+            log('info', 'fill-summary', '摘要框为 textarea 类型，用 JS 追加话题标签');
+            const tagsStr = articleTagList.join(' ');
+            const appendScript = `
+              (function() {
+                try {
+                  var phMatch = /描述|简介|摘要|正文|说点什么|添加描述/i;
+                  var tas = document.querySelectorAll('textarea');
+                  var target = null;
+                  for (var i = 0; i < tas.length; i++) {
+                    var ph = tas[i].getAttribute && tas[i].getAttribute('placeholder') || '';
+                    if (ph && phMatch.test(ph) && !/标题|title/i.test(ph)) {
+                      target = tas[i];
+                      break;
+                    }
+                  }
+                  if (!target) return { ok: false, reason: 'no-target' };
+                  target.focus();
+                  var curVal = target.value || '';
+                  var toAppend = (curVal && curVal.length > 0 ? '\\n' : '') + ${JSON.stringify(tagsStr)};
+                  target.value = curVal + toAppend;
+                  try { target.dispatchEvent(new Event('input', { bubbles: true })); } catch(e) {}
+                  try { target.dispatchEvent(new Event('change', { bubbles: true })); } catch(e) {}
+                  // 光标移到末尾
+                  target.selectionStart = target.value.length;
+                  target.selectionEnd = target.value.length;
+                  return { ok: true, appended: toAppend.length, total: target.value.length };
+                } catch(e) {
+                  return { ok: false, reason: String(e && e.message || e) };
+                }
+              })()
+            `;
+            const appendRes: any = await evalJS(win, appendScript, '文章-摘要追加标签', log).catch(() => null);
+            log('info', 'fill-summary', `摘要追加标签结果: ${JSON.stringify(appendRes)}`);
+          }
+        }
+      }
     }
 
     if (!publishFlowOk) {
@@ -1557,8 +1686,11 @@ async function publishArticle(
     if (request.testMode) {
       const testScript = buildTestModeProbeScript(
         [
+          'button.ce-btn.bg-red',
+          '.publish-page-publish-btn button',
+          '.publish-page-publish-btn',
+          'xhs-publish-btn',
           'button.next-btn',
-          'button.submit',
           'button.bg-red',
           'button[class*="custom-button"]',
           'button[class*="d-button"]',
@@ -1569,13 +1701,15 @@ async function publishArticle(
         [
           { name: '文章标题', selector: 'input[placeholder*="标题"]', type: 'input' },
           { name: '文章正文', selector: '[contenteditable="true"]', type: 'contenteditable' },
+          { name: '文章摘要', selector: '.tiptap-container .ProseMirror, .editor-container .ProseMirror', type: 'contenteditable' },
         ],
       );
       const testRes: any = await evalJS(win, testScript, 'article-test-mode-probe', log).catch(() => null);
       const testResult = {
         titleFilled: !!(testRes?.fields?.find((f: any) => f.name === '文章标题')?.filled),
         contentFilled: !!(testRes?.fields?.find((f: any) => f.name === '文章正文')?.filled),
-        tagsFilled: false, // 文章发布暂时无标签检测
+        summaryFilled: !!(testRes?.fields?.find((f: any) => f.name === '文章摘要')?.filled),
+        tagsFilled: articleTagList.length > 0 && !!(summaryResult && summaryResult.ok),
         coverUploaded: false, // 文章封面后续再实现
         publishButtonFound: !!(testRes?.publishButtonFound),
         publishButtonInfo: testRes?.publishButtonInfo || null,
@@ -1732,7 +1866,7 @@ const meta: PlatformMeta = {
   contentTypes: ['video', 'image', 'article'],
   capabilities: { publishVideo: true, publishImage: true, publishArticle: true } as AccountCapabilities,
   contentLimits: { title: TITLE_LIMIT, content: CONTENT_LIMIT },
-  articleLimits: { title: 64 },
+  articleLimits: { title: 64, summary: 1000 },
   nicknameSelectors: [
     '.account-name',
     '.user-name',

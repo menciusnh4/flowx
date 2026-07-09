@@ -128,6 +128,12 @@ export const electronApi = {
   async retryPublish(taskId: string): Promise<string | null> {
     return invokeElectron('publish.retry', 'publish:retry', taskId);
   },
+  async retryAsTest(taskId: string): Promise<string | null> {
+    return invokeElectron('publish.retryAsTest', 'publish:retryAsTest', taskId);
+  },
+  async retryAsPublish(taskId: string): Promise<string | null> {
+    return invokeElectron('publish.retryAsPublish', 'publish:retryAsPublish', taskId);
+  },
   async getTaskDetail(taskId: string): Promise<{ task: PublishTask | null; logs: PublishLogEntry[] }> {
     return invokeElectron('publish.detail', 'publish:detail', taskId);
   },

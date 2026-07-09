@@ -44,6 +44,8 @@ export interface PlatformMeta {
     content?: number;
     /** 文章正文最小字符数（发布前验证，不足则提示用户） */
     minContent?: number;
+    /** 文章摘要/简介最大字符数（超出将被截断，默认不限制） */
+    summary?: number;
   };
 }
 
@@ -173,6 +175,8 @@ export interface PublishRequest {
   coverImage?: string;
   /** 分类（部分平台需要） */
   category?: string;
+  /** 文章摘要/简介（仅文章发布时使用，各平台按需填充到对应字段） */
+  summary?: string;
   /** 测试模式：不真的点击发布按钮，仅验证表单填写是否正常 */
   testMode?: boolean;
 }
@@ -204,6 +208,8 @@ export interface PublishItemProgress {
 export interface PublishTestResult {
   /** 标题是否填写成功 */
   titleFilled: boolean;
+  /** 文章摘要是否填写成功（仅文章发布） */
+  summaryFilled?: boolean;
   /** 内容/正文是否填写成功 */
   contentFilled: boolean;
   /** 标签/话题是否填写成功 */

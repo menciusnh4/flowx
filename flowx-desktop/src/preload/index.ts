@@ -107,6 +107,8 @@ contextBridge.exposeInMainWorld('electron', {
       invoke('publish:listPaged', page, pageSize),
     getStats: (): Promise<PublishStats> => invoke('publish:getStats'),
     retry: (taskId: string): Promise<string | null> => invoke('publish:retry', taskId),
+    retryAsTest: (taskId: string): Promise<string | null> => invoke('publish:retryAsTest', taskId),
+    retryAsPublish: (taskId: string): Promise<string | null> => invoke('publish:retryAsPublish', taskId),
     detail: (taskId: string): Promise<{ task: PublishTask | null; logs: PublishLogEntry[] }> =>
       invoke('publish:detail', taskId),
     delete: (taskId: string): Promise<boolean> => invoke('publish:delete', taskId),
@@ -420,6 +422,8 @@ declare global {
         listPaged: (page?: number, pageSize?: number) => Promise<PagedResult<PublishTask>>;
         getStats: () => Promise<PublishStats>;
         retry: (taskId: string) => Promise<string | null>;
+        retryAsTest: (taskId: string) => Promise<string | null>;
+        retryAsPublish: (taskId: string) => Promise<string | null>;
         detail: (taskId: string) => Promise<{ task: PublishTask | null; logs: PublishLogEntry[] }>;
         delete: (taskId: string) => Promise<boolean>;
         setConcurrency: (n: number) => Promise<boolean>;
