@@ -8,50 +8,33 @@
         </el-button>
       </div>
 
-      <!-- 环境卡片网格流 -->
-      <div v-loading="envStore.loading" class="env-grid-flow">
-        <div v-for="row in envStore.environments" :key="row.id" class="flow-env-card">
-          <!-- 头部：环境名称与状态 -->
-          <div class="env-card-header">
-            <h3 class="env-title">{{ row.name }}</h3>
-            <span class="env-status-indicator">已激活</span>
-          </div>
-
-          <!-- 主体：User-Agent 预览 -->
-          <div class="env-card-body">
-            <div class="ua-preview-box">
-              <div class="ua-label">User-Agent:</div>
-              <div class="ua-text" :title="row.userAgent">{{ row.userAgent }}</div>
-            </div>
-            <div class="env-proxy-info">
-              <span class="info-label">关联代理:</span>
-              <el-tag v-if="row.proxyId" type="success" size="small" effect="light" class="proxy-tag">
-                {{ getProxyLabel(row.proxyId) }}
-              </el-tag>
-              <span v-else class="direct-span">本机直连 (未绑定代理)</span>
-            </div>
-          </div>
-
-          <!-- 时间说明 -->
-          <div class="env-card-time">
-            <span>创建时间：{{ formatTime(row.createdAt) }}</span>
-          </div>
-
-          <!-- 底部操作按钮 -->
-          <div class="env-card-footer">
-            <el-button size="small" type="primary" link @click="openEditDialog(asEnv(row))">
-              <el-icon><Edit /></el-icon>&nbsp;编辑配置
-            </el-button>
-            <el-popconfirm width="280" title="确定删除此环境配置？（绑定了此环境的账号将变更为未绑定环境）" @confirm="handleDelete(asEnv(row).id)">
+      <el-table v-loading="envStore.loading" :data="envStore.environments" border stripe style="margin-top: 16px">
+        <el-table-column label="环境名称" prop="name" min-width="150" />
+        <el-table-column label="浏览器 User-Agent" prop="userAgent" min-width="260" show-overflow-tooltip />
+        <el-table-column label="绑定的代理 IP" min-width="180">
+          <template #default="{ row }">
+            <el-tag v-if="row.proxyId" type="success" size="small">
+              {{ getProxyLabel(row.proxyId) }}
+            </el-tag>
+            <span v-else style="color:#c0c4cc; font-size:12px">未绑定代理（使用本机直连）</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="160">
+          <template #default="{ row }">
+            {{ formatTime(row.createdAt) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="150" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" type="primary" link @click="openEditDialog(asEnv(row))">编辑</el-button>
+            <el-popconfirm title="确定删除此环境配置？（绑定了此环境的账号将变更为未绑定环境）" @confirm="handleDelete(asEnv(row).id)">
               <template #reference>
-                <el-button size="small" type="danger" link>
-                  <el-icon><Delete /></el-icon>&nbsp;删除
-                </el-button>
+                <el-button size="small" type="danger" link>删除</el-button>
               </template>
             </el-popconfirm>
-          </div>
-        </div>
-      </div>
+          </template>
+        </el-table-column>
+      </el-table>
 
       <div v-if="envStore.environments.length === 0 && !envStore.loading" class="empty-hint">
         暂无环境配置，点击右上角“添加环境配置”创建。
@@ -90,7 +73,7 @@
 <script setup lang="ts">
 import { ref, onMounted, reactive } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Plus, Edit, Delete } from '@element-plus/icons-vue';
+import { Plus } from '@element-plus/icons-vue';
 import { useEnvStore } from '../stores/env';
 import type { BrowserEnvironment } from '../../types';
 
@@ -219,144 +202,5 @@ function formatTime(ts: number): string {
   color: #909399;
   font-size: 14px;
   padding: 40px 0;
-}
-
-/* 浏览器指纹环境卡片流样式 */
-.env-grid-flow {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 20px;
-  margin-top: 16px;
-}
-
-.flow-env-card {
-  background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: var(--glass-border);
-  border-radius: 16px;
-  padding: 20px;
-  box-shadow: var(--glow-shadow-sm);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-}
-
-.flow-env-card:hover {
-  transform: translateY(-4px);
-  box-shadow: var(--glow-shadow-lg);
-  background: #ffffff;
-}
-
-.env-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 14px;
-}
-
-.env-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: #0f172a;
-  margin: 0;
-}
-
-.env-status-indicator {
-  font-size: 10px;
-  font-weight: 700;
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.08);
-  padding: 2px 8px;
-  border-radius: 10px;
-}
-
-.env-card-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-
-.ua-preview-box {
-  background: rgba(0, 0, 0, 0.015);
-  border: 1px solid rgba(0, 0, 0, 0.03);
-  border-radius: 10px;
-  padding: 10px 12px;
-}
-
-.ua-label {
-  font-size: 11px;
-  color: #94a3b8;
-  font-weight: 700;
-  margin-bottom: 4px;
-}
-
-.ua-text {
-  font-size: 11px;
-  font-family: monospace;
-  color: #64748b;
-  word-break: break-all;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  line-height: 1.5;
-}
-
-.env-proxy-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.info-label {
-  font-size: 12px;
-  color: #94a3b8;
-  font-weight: 600;
-}
-
-.proxy-tag {
-  font-weight: 700;
-  border-radius: 6px;
-}
-
-.direct-span {
-  font-size: 12px;
-  color: #cbd5e1;
-  font-weight: 500;
-}
-
-.env-card-time {
-  font-size: 11px;
-  color: #cbd5e1;
-  font-weight: 500;
-  margin-bottom: 14px;
-}
-
-.env-card-footer {
-  border-top: 1px solid rgba(0, 0, 0, 0.03);
-  padding-top: 12px;
-  display: flex;
-  justify-content: space-between;
-  margin-top: auto;
-}
-
-.env-card-footer :deep(.el-button) {
-  margin: 0 !important;
-  font-weight: 700 !important;
-  font-size: 12px !important;
-  transition: all 0.2s ease !important;
-}
-
-.env-card-footer :deep(.el-button--primary:hover) {
-  color: #6366f1 !important;
-  background-color: rgba(99, 102, 241, 0.06) !important;
-}
-
-.env-card-footer :deep(.el-button--danger:hover) {
-  color: #f56c6c !important;
-  background-color: rgba(245, 108, 108, 0.06) !important;
 }
 </style>

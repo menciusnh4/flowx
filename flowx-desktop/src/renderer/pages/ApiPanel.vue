@@ -420,17 +420,17 @@ onMounted(() => {
 .config-card {
   margin-top: 20px;
   padding: 20px;
-  background: rgba(255, 255, 255, 0.7);
-  border-radius: 12px;
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid var(--el-border-color-lighter);
 }
 
 .config-title {
   font-size: 15px;
-  font-weight: 700;
-  color: #1e293b;
+  font-weight: 600;
+  color: #303133;
   padding-bottom: 12px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
 .api-list {
@@ -441,67 +441,62 @@ onMounted(() => {
 }
 
 .api-item {
-  border: 1px solid rgba(0, 0, 0, 0.05);
-  border-radius: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
   overflow: hidden;
-  box-shadow: var(--glow-shadow-sm);
-  background: rgba(255, 255, 255, 0.4);
 }
 
 .api-header {
   display: flex;
   align-items: center;
   padding: 12px 16px;
-  background: rgba(255, 255, 255, 0.75);
+  background: #fafafa;
   cursor: pointer;
   gap: 12px;
-  transition: all 0.2s ease;
 }
 
 .api-header:hover {
-  background: rgba(99, 102, 241, 0.04);
+  background: #f5f5f5;
 }
 
 .method {
   display: inline-block;
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
   color: #fff;
   flex-shrink: 0;
 }
 
-.method-get { background: linear-gradient(135deg, #10b981, #059669); }
-.method-post { background: linear-gradient(135deg, #6366f1, #3b82f6); }
-.method-put { background: linear-gradient(135deg, #f59e0b, #d97706); }
-.method-delete { background: linear-gradient(135deg, #ef4444, #dc2626); }
+.method-get { background: #67c23a; }
+.method-post { background: #409eff; }
+.method-put { background: #e6a23c; }
+.method-delete { background: #f56c6c; }
 
 .api-path {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: 'Consolas', 'Monaco', monospace;
   font-size: 13px;
-  color: #0f172a;
-  font-weight: 700;
+  color: #303133;
+  font-weight: 500;
 }
 
 .api-desc {
   flex: 1;
   font-size: 13px;
-  color: #475569;
+  color: #606266;
   margin-left: 8px;
-  font-weight: 500;
 }
 
 .expand-icon {
-  color: #94a3b8;
+  color: #909399;
   flex-shrink: 0;
-  transition: transform 0.25s ease;
 }
 
 .api-detail {
   padding: 16px;
-  border-top: 1px solid rgba(0, 0, 0, 0.04);
-  background: rgba(255, 255, 255, 0.6);
+  border-top: 1px solid var(--el-border-color-lighter);
+  background: #fff;
 }
 
 .detail-section {
@@ -514,8 +509,8 @@ onMounted(() => {
 
 .detail-label {
   font-size: 13px;
-  font-weight: 700;
-  color: #1e293b;
+  font-weight: 500;
+  color: #303133;
   margin-bottom: 8px;
 }
 
@@ -527,41 +522,39 @@ onMounted(() => {
 
 .param-table th,
 .param-table td {
-  border: 1px solid rgba(0, 0, 0, 0.05);
-  padding: 10px 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  padding: 8px 12px;
   text-align: left;
 }
 
 .param-table th {
-  background: rgba(0, 0, 0, 0.015);
-  font-weight: 600;
-  color: #475569;
+  background: #f5f7fa;
+  font-weight: 500;
+  color: #606266;
 }
 
 .param-table td {
-  color: #334155;
+  color: #303133;
 }
 
 .code-block {
-  background: #0f172a;
-  color: #e2e8f0;
+  background: #282c34;
+  color: #abb2bf;
   padding: 12px 16px;
-  border-radius: 8px;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  border-radius: 6px;
+  font-family: 'Consolas', 'Monaco', monospace;
   font-size: 12px;
   line-height: 1.6;
   overflow-x: auto;
   margin: 0;
   white-space: pre;
-  border: 1px solid rgba(0, 0, 0, 0.05);
 }
 
 .notice-list {
   margin: 12px 0 0 0;
   padding-left: 20px;
   font-size: 13px;
-  color: #475569;
+  color: #606266;
   line-height: 2;
-  font-weight: 500;
 }
 </style>

@@ -1,138 +1,156 @@
 <template>
-  <div class="accounts-container">
-    <div class="panel header-actions-panel">
-      <div class="header-flex">
-        <div class="title-wrap">
-          <h2 class="section-title" style="margin: 0">
-            <el-icon><User /></el-icon>账号管理
-          </h2>
-          <el-tag v-if="accountStore.healthCheckConfig" size="small" :type="accountStore.healthCheckConfig.enabled ? 'success' : 'info'" effect="plain" class="health-tag">
-            {{ accountStore.healthCheckConfig.enabled ? `自动检测：每 ${Math.round(accountStore.healthCheckConfig.intervalMs / 60000)} 分钟` : '自动检测：已禁用' }}
+  <div>
+    <div class="panel">
+      <div style="display:flex; align-items:center; justify-content:space-between">
+        <div style="display:flex; align-items:center; gap:12px">
+          <h2 class="section-title" style="margin:0">账号管理</h2>
+          <el-tag v-if="accountStore.healthCheckConfig" size="small" :type="accountStore.healthCheckConfig.enabled ? 'success' : 'info'">
+            {{ accountStore.healthCheckConfig.enabled ? `定时检测：${Math.round(accountStore.healthCheckConfig.intervalMs / 60000)} 分钟` : '定时检测：已关闭' }}
           </el-tag>
         </div>
-        <div class="actions-wrap">
-          <el-button type="primary" @click="openAuthDialog" class="action-btn">
+        <el-space>
+          <el-button type="primary" @click="openAuthDialog">
             <el-icon><Plus /></el-icon>&nbsp; 授权新账号
           </el-button>
-          <el-button @click="openCategoryDialog" class="action-btn">
+          <el-button @click="openCategoryDialog">
             <el-icon><Folder /></el-icon>&nbsp; 分类管理
           </el-button>
-          <el-button @click="openHealthCheckConfigDialog" class="action-btn">
-            <el-icon><Setting /></el-icon>&nbsp; 定时设置
+          <el-button @click="refresh">
+            <el-icon><Refresh /></el-icon>&nbsp; 刷新
           </el-button>
-          <el-button type="success" @click="checkAllHealth" :loading="checkAllLoading" class="action-btn">
-            <el-icon><Monitor /></el-icon>&nbsp; 批量检测健康
+          <el-button @click="openHealthCheckConfigDialog">
+            <el-icon><Setting /></el-icon>&nbsp; 检测设置
           </el-button>
-          <el-button @click="refresh" class="action-btn refresh-btn" circle>
-            <el-icon><Refresh /></el-icon>
+          <el-button type="success" @click="checkAllHealth" :loading="checkAllLoading">
+            <el-icon><Monitor /></el-icon>&nbsp; 批量检测
           </el-button>
-        </div>
+        </el-space>
       </div>
 
-      <div class="filter-row">
-        <span class="filter-label"><el-icon><Filter /></el-icon>按分类筛选：</span>
-        <el-select v-model="filterCategoryId" placeholder="全部" clearable class="filter-select" size="default">
+      <div style="display:flex; align-items:center; gap:8px; margin-top: 16px;">
+        <span style="font-size: 13px; color: #606266;">分类筛选：</span>
+        <el-select v-model="filterCategoryId" placeholder="全部" clearable style="width: 140px" size="small">
           <el-option label="全部分类" value="" />
           <el-option label="未分类" value="unclassified" />
           <el-option v-for="cat in accountStore.categories" :key="cat.id" :label="cat.name" :value="cat.id" />
         </el-select>
       </div>
 
-      <!-- 账号卡片网格流 -->
-      <div v-loading="accountStore.loading" class="account-grid-flow">
-        <div v-for="row in filteredAccounts" :key="row.id" class="flow-account-card">
-          <!-- 头部：平台标识与健康状态 -->
-          <div class="card-header">
-            <div class="platform-badge" :class="'badge-' + row.platform">
-              <img v-if="getPlatformIcon(row.platform)" :src="getPlatformIcon(row.platform)" class="badge-icon" />
-              <span>{{ platformName(row.platform) }}</span>
+      <el-table
+        v-loading="accountStore.loading"
+        :data="filteredAccounts"
+        border
+        stripe
+        style="margin-top: 12px"
+      >
+        <el-table-column label="平台" width="110">
+          <template #default="{ row }">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <img v-if="getPlatformIcon(row.platform)" :src="getPlatformIcon(row.platform)" style="width: 18px; height: 18px; flex-shrink: 0;" />
+              <span style="font-size: 13px;">{{ platformName(row.platform) }}</span>
             </div>
-            <div class="status-indicator">
-              <span class="status-dot" :class="'dot-' + row.status"></span>
-              <span class="status-text">{{ row.status === 'active' ? '正常' : row.status === 'expired' ? '已过期' : '未激活' }}</span>
-            </div>
-          </div>
-
-          <!-- 主体：头像与昵称 -->
-          <div class="card-profile">
-            <el-avatar
-              :size="52"
-              :src="row.avatar"
-              :style="{ background: row.avatar ? 'transparent' : '#6366f1', color: '#fff', fontWeight: 800, fontSize: '18px' }"
-              class="profile-avatar"
-            >
-              {{ (row.nickname || 'U').slice(0, 1).toUpperCase() }}
-            </el-avatar>
-            <div class="profile-info">
-              <div class="profile-name" :title="row.nickname">{{ row.nickname }}</div>
-              <div class="profile-remark" v-if="row.remark">{{ row.remark }}</div>
-              <div class="profile-id" v-if="row.platformAccountId">
-                {{ accountStore.platforms.find((x) => x.key === row.platform)?.platformAccountLabel || '号' }}: {{ row.platformAccountId }}
+          </template>
+        </el-table-column>
+        <el-table-column label="账号" min-width="200">
+          <template #default="{ row }">
+            <div style="display:flex; align-items:center; gap:10px">
+              <el-avatar
+                :size="40"
+                :src="row.avatar"
+                :style="{ background: row.avatar ? 'transparent' : '#ec4899', color: '#fff', fontWeight: 600 }"
+              >
+                {{ (row.nickname || 'U').slice(0, 1) }}
+              </el-avatar>
+              <div style="line-height:1.4; flex:1">
+                <div style="font-size:14px; color:#303133; font-weight:500">{{ row.nickname }}</div>
+                <div v-if="row.userId" style="font-size:11px; color:#909399; margin-top:3px">
+                  ID: {{ row.userId?.slice(0, 16) }}{{ row.userId && row.userId.length > 16 ? '...' : '' }}
+                </div>
+                <div v-if="row.fansCount !== undefined || row.followCount !== undefined || row.likeCount !== undefined"
+                     style="font-size:11px; color:#606266; margin-top:3px">
+                  <span style="margin-right:12px">粉丝: {{ formatCount(row.fansCount) }}</span>
+                  <span style="margin-right:12px">关注: {{ formatCount(row.followCount) }}</span>
+                  <span>获赞: {{ formatCount(row.likeCount) }}</span>
+                </div>
               </div>
             </div>
-          </div>
-
-          <!-- 数据展示三栏 -->
-          <div class="card-stats" v-if="row.fansCount !== undefined || row.followCount !== undefined || row.likeCount !== undefined">
-            <div class="stat-item">
-              <span class="stat-num">{{ formatCount(row.fansCount) }}</span>
-              <span class="stat-label">粉丝</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="平台账号" width="110">
+          <template #default="{ row }">
+            <div v-if="row.platformAccountId" style="font-size:13px; color:#303133">
+              <span style="color:#909399; font-size:12px">{{ accountStore.platforms.find((x) => x.key === row.platform)?.platformAccountLabel || '账号' }}</span>
+              <br/>
+              <span style="font-weight:500">{{ row.platformAccountId }}</span>
             </div>
-            <div class="stat-divider"></div>
-            <div class="stat-item">
-              <span class="stat-num">{{ formatCount(row.followCount) }}</span>
-              <span class="stat-label">关注</span>
-            </div>
-            <div class="stat-divider"></div>
-            <div class="stat-item">
-              <span class="stat-num">{{ formatCount(row.likeCount) }}</span>
-              <span class="stat-label">获赞</span>
-            </div>
-          </div>
-
-          <!-- 标签区：分类与环境 -->
-          <div class="card-tags">
-            <div class="tag-row">
-              <span class="tag-label">分类:</span>
-              <div class="tag-group" v-if="row.categoryIds && row.categoryIds.length > 0">
-                <el-tag v-for="cid in row.categoryIds" :key="cid" class="category-tag" size="small">
+            <span v-else style="color:#c0c4cc; font-size:12px">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="分类" min-width="120">
+          <template #default="{ row }">
+            <template v-if="row.categoryIds && row.categoryIds.length > 0">
+              <el-space wrap :size="4">
+                <el-tag v-for="cid in row.categoryIds" :key="cid" type="info" size="small">
                   {{ getCategoryName(cid) }}
                 </el-tag>
+              </el-space>
+            </template>
+            <span v-else style="color:#c0c4cc; font-size:12px">未分类</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="浏览器环境" min-width="140">
+          <template #default="{ row }">
+            <el-tag v-if="row.envId" type="success" size="small" effect="plain">
+              {{ getEnvName(row.envId) }}
+            </el-tag>
+            <span v-else style="color:#c0c4cc; font-size:12px">本机直连</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="80">
+          <template #default="{ row }">
+            <el-tag v-if="row.status === 'active'" type="success" size="small">正常</el-tag>
+            <el-tag v-else-if="row.status === 'expired'" type="warning" size="small">已过期</el-tag>
+            <el-tag v-else type="info" size="small">未激活</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="授权/检测时间" width="170">
+          <template #default="{ row }">
+            <div style="display: flex; flex-direction: column; gap: 2px; font-size: 12px; line-height: 1.6;">
+              <div>
+                <span style="color: #909399;">授权：</span>
+                <span style="color: #303133;">{{ fmt(row.authorizedAt) }}</span>
               </div>
-              <span class="tag-empty" v-else>未分类</span>
+              <div>
+                <span style="color: #909399;">检测：</span>
+                <span v-if="row.lastChecked" style="color: #606266;">{{ fmt(row.lastChecked) }}</span>
+                <span v-else style="color: #c0c4cc;">—</span>
+              </div>
             </div>
-            <div class="tag-row">
-              <span class="tag-label">环境:</span>
-              <el-tag v-if="row.envId" type="success" size="small" effect="light" class="env-tag">
-                {{ getEnvName(row.envId) }}
-              </el-tag>
-              <span class="tag-empty" v-else>本机直连</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="230" fixed="right">
+          <template #default="{ row }">
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <div style="display: flex; gap: 6px;">
+                <el-button size="small" type="success" style="width: 108px; margin: 0; justify-content: center;" @click="openCreator(asAccount(row))" :loading="openingId === asAccount(row).id">
+                  <el-icon><Link /></el-icon>创作中心
+                </el-button>
+                <el-button size="small" type="primary" style="width: 108px; margin: 0; justify-content: center;" @click="editRemark(asAccount(row))">
+                  <el-icon><Setting /></el-icon>编辑
+                </el-button>
+              </div>
+              <div style="display: flex; gap: 6px;">
+                <el-button size="small" type="warning" style="width: 108px; margin: 0; justify-content: center;" @click="refreshToken(asAccount(row))" :loading="refreshingId === asAccount(row).id" title="打开平台页面，刷新账号信息/粉丝数/关注数/获赞数">
+                  <el-icon><Refresh /></el-icon>刷新
+                </el-button>
+                <el-button size="small" type="danger" style="width: 108px; margin: 0; justify-content: center;" @click="remove(asAccount(row))">
+                  <el-icon><Delete /></el-icon>删除
+                </el-button>
+              </div>
             </div>
-          </div>
-
-          <!-- 时间说明 -->
-          <div class="card-time">
-            <span>授权：{{ fmt(row.authorizedAt) }}</span>
-            <span v-if="row.lastChecked">检测：{{ fmt(row.lastChecked) }}</span>
-          </div>
-
-          <!-- 底部操作按钮 -->
-          <div class="card-actions">
-            <el-button size="small" type="success" link @click="openCreator(asAccount(row))" :loading="openingId === asAccount(row).id">
-              <el-icon><Link /></el-icon>&nbsp;创作中心
-            </el-button>
-            <el-button size="small" type="primary" link @click="editRemark(asAccount(row))">
-              <el-icon><Edit /></el-icon>&nbsp;编辑
-            </el-button>
-            <el-button size="small" type="warning" link @click="refreshToken(asAccount(row))" :loading="refreshingId === asAccount(row).id" title="刷新数据">
-              <el-icon><Refresh /></el-icon>&nbsp;刷新
-            </el-button>
-            <el-button size="small" type="danger" link @click="remove(asAccount(row))">
-              <el-icon><Delete /></el-icon>&nbsp;删除
-            </el-button>
-          </div>
-        </div>
-      </div>
+          </template>
+        </el-table-column>
+      </el-table>
 
       <div v-if="filteredAccounts.length === 0 && !accountStore.loading" class="empty-hint">
         {{ filterCategoryId ? '当前分类下没有账号。' : '还没有账号，点击右上角"授权新账号"开始。' }}
@@ -143,7 +161,7 @@
     </div>
 
     <!-- 健康检测配置对话框 -->
-    <el-dialog v-model="healthCheckDialogVisible" title="定时检测设置" width="500px">
+    <el-dialog v-model="healthCheckDialogVisible" title="定时检测设置" width="440px">
       <el-form :model="healthCheckForm" label-width="110px">
         <el-form-item label="启用定时检测">
           <el-switch v-model="healthCheckForm.enabled" />
@@ -154,12 +172,8 @@
           </el-select>
         </el-form-item>
         <el-form-item label="首次延迟">
-          <div style="width: 100%; display: flex; flex-direction: column; gap: 6px;">
-            <el-input-number v-model="healthCheckForm.initialDelayMinutes" :min="1" :max="60" :disabled="!healthCheckForm.enabled" style="width:100%" />
-            <span style="font-size:12px; color:#94a3b8; line-height: 1.4; display:block; font-weight: 500;">
-              应用启动后多少分钟开始第一次检测（默认为 5 分钟）
-            </span>
-          </div>
+          <el-input-number v-model="healthCheckForm.initialDelayMinutes" :min="1" :max="60" :disabled="!healthCheckForm.enabled" style="width:100%" />
+          <span style="font-size:12px; color:#909399; margin-left:110px; display:block; margin-top:-10px">应用启动后多少分钟开始第一次检测（默认为 5 分钟）</span>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -169,24 +183,24 @@
     </el-dialog>
 
     <!-- 选择平台授权对话框 -->
-    <el-dialog v-model="authVisible" title="选择平台授权" width="480px">
+    <el-dialog v-model="authVisible" title="选择平台授权" width="460px">
       <el-radio-group v-model="authPlatform" class="platform-radio-group">
-        <el-radio v-for="p in accountStore.platforms" :key="p.key" :value="p.key" class="platform-radio">
-          <div class="platform-option">
-            <div class="platform-main-info">
+        <el-space direction="vertical" style="width:100%">
+          <el-radio v-for="p in accountStore.platforms" :key="p.key" :value="p.key" class="platform-radio">
+            <div class="platform-option">
               <div class="platform-icon-wrap">
                 <img v-if="getPlatformIcon(p.key)" :src="getPlatformIcon(p.key)" class="platform-icon" />
               </div>
               <span class="platform-name">{{ p.name }}</span>
+              <span class="platform-count">
+                已授权 {{ accountStore.byPlatform(p.key).length }} 个账号
+              </span>
             </div>
-            <span class="platform-count">
-              已授权 {{ accountStore.byPlatform(p.key).length }} 个账号
-            </span>
-          </div>
-        </el-radio>
+          </el-radio>
+        </el-space>
       </el-radio-group>
       <div style="margin-top: 20px; border-top: 1px solid var(--el-border-color-lighter); padding-top: 16px;">
-        <span style="font-size:13px; font-weight:600; display:block; margin-bottom:8px; color: #475569">绑定浏览器环境（隔离指纹与代理 IP）</span>
+        <span style="font-size:13px; font-weight:500; display:block; margin-bottom:8px; color: #606266">绑定浏览器环境（隔离指纹与代理 IP）</span>
         <el-select v-model="authEnvId" placeholder="选择绑定的浏览器指纹与代理（可选）" clearable style="width:100%">
           <el-option label="使用本机直连出网" value="" />
           <el-option v-for="env in envStore.environments" :key="env.id" :label="env.name" :value="env.id" />
@@ -199,8 +213,8 @@
     </el-dialog>
 
     <!-- 编辑账号对话框 -->
-    <el-dialog v-model="editVisible" title="编辑账号" width="500px">
-      <el-form label-width="100px">
+    <el-dialog v-model="editVisible" title="编辑账号" width="400px">
+      <el-form label-width="80px">
         <el-form-item label="昵称">
           <el-input v-model="editRow.nickname" placeholder="自定义昵称" />
         </el-form-item>
@@ -231,35 +245,26 @@
         <el-input v-model="newCategoryName" placeholder="输入新分类名称" @keyup.enter="createCategory" />
         <el-button type="primary" @click="createCategory" :loading="creatingCategory">新建分类</el-button>
       </div>
-      <!-- 分类条目列表 -->
-      <div v-loading="accountStore.loading" class="category-item-list" style="max-height: 300px; overflow-y: auto; margin-top: 12px;margin-bottom:18px">
-        <div v-if="accountStore.categories.length === 0" class="category-empty">
-          暂无分类数据，请输入名称并新建
-        </div>
-        <div v-else v-for="cat in accountStore.categories" :key="cat.id" class="category-item-row">
-          <div class="category-item-content">
-            <el-input 
-              v-if="editingCategoryId === asCategory(cat).id" 
-              v-model="editingCategoryName" 
-              size="small" 
-              style="width: 200px" 
-              @keyup.enter="saveCategoryName(asCategory(cat))" 
-            />
-            <span v-else class="category-name-text">{{ asCategory(cat).name }}</span>
-          </div>
-          
-          <div class="category-item-actions">
-            <template v-if="editingCategoryId === asCategory(cat).id">
-              <el-button size="small" type="success" link @click="saveCategoryName(asCategory(cat))">保存</el-button>
+      <el-table :data="accountStore.categories" border size="small" style="width: 100%" max-height="300px">
+        <el-table-column label="分类名称">
+          <template #default="{ row }">
+            <el-input v-if="editingCategoryId === asCategory(row).id" v-model="editingCategoryName" size="small" @keyup.enter="saveCategoryName(asCategory(row))" />
+            <span v-else>{{ asCategory(row).name }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="150" align="center">
+          <template #default="{ row }">
+            <template v-if="editingCategoryId === asCategory(row).id">
+              <el-button size="small" type="success" link @click="saveCategoryName(asCategory(row))">保存</el-button>
               <el-button size="small" link @click="editingCategoryId = ''">取消</el-button>
             </template>
             <template v-else>
-              <el-button size="small" type="primary" link @click="startEditCategory(asCategory(cat))">编辑</el-button>
-              <el-button size="small" type="danger" link @click="deleteCategory(asCategory(cat))">删除</el-button>
+              <el-button size="small" type="primary" link @click="startEditCategory(asCategory(row))">编辑</el-button>
+              <el-button size="small" type="danger" link @click="deleteCategory(asCategory(row))">删除</el-button>
             </template>
-          </div>
-        </div>
-      </div>
+          </template>
+        </el-table-column>
+      </el-table>
     </el-dialog>
   </div>
 </template>
@@ -618,480 +623,54 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.accounts-container {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+.panel { background: #fff; border-radius: 12px; padding: 20px; }
+.section-title { font-size: 16px; font-weight: 600; color: #303133; }
+.empty-hint { padding: 60px 16px; text-align: center; color: #909399; font-size: 14px; }
 
-.header-flex {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-
-.title-wrap {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.health-tag {
-  border-radius: 6px;
-  font-weight: 600;
-}
-
-.actions-wrap {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.action-btn {
-  height: 36px !important;
-  font-size: 13px !important;
-}
-
-.refresh-btn {
-  width: 36px !important;
-  height: 36px !important;
-}
-
-.filter-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid rgba(0, 0, 0, 0.04);
-}
-
-.filter-label {
-  font-size: 13px;
-  color: #64748b;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.filter-select {
-  width: 150px;
-}
-
-/* 授权对话框中的平台选择美化为卡片式 */
+/* 授权对话框 - 平台选项统一样式 */
 .platform-radio-group {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  width: 280px;
 }
-
 .platform-radio {
-  width: 100% !important;
-  margin-right: 0 !important;
-  background: rgba(0, 0, 0, 0.015);
-  border: 1px solid rgba(0, 0, 0, 0.05) !important;
-  border-radius: 10px !important;
-  padding: 10px 16px !important;
-  height: auto !important;
-  box-sizing: border-box;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-}
-
-.platform-radio:hover {
-  background: rgba(99, 102, 241, 0.03);
-  border-color: rgba(99, 102, 241, 0.2) !important;
-}
-
-.platform-radio :deep(.el-radio__input.is-checked + .el-radio__label) {
   width: 100%;
+  margin-right: 0;
 }
-
 .platform-radio :deep(.el-radio__label) {
-  padding-left: 12px;
-  width: 100%;
-  box-sizing: border-box;
+  padding-left: 8px;
+  width: calc(100% - 20px);
 }
-
 .platform-option {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  width: 100%;
+  height: 32px;
 }
-
-.platform-main-info {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
 .platform-icon-wrap {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  overflow: hidden;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
-  background: #ffffff;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.03);
+  justify-content: flex-start;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-right: 10px;
 }
-
 .platform-icon {
-  width: 18px;
-  height: 18px;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
+  object-position: left center;
+  display: block;
 }
-
 .platform-name {
   font-size: 14px;
-  color: #1e293b;
-  font-weight: 700;
+  color: #303133;
+  font-weight: 500;
+  min-width: 72px;
 }
-
 .platform-count {
-  color: #64748b;
+  color: #909399;
   font-size: 12px;
-  font-weight: 500;
-}
-
-/* 账号卡片流样式 */
-.account-grid-flow {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-  gap: 20px;
-  margin-top: 16px;
-}
-
-.flow-account-card {
-  background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(0, 0, 0, 0.05);
-  border-radius: 16px;
-  padding: 20px;
-  box-shadow: var(--glow-shadow-sm);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-}
-
-.flow-account-card:hover {
-  border-color: rgba(99, 102, 241, 0.18);
-  background: rgba(99, 102, 241, 0.04);
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px -4px rgba(99, 102, 241, 0.08), 0 4px 12px -6px rgba(0, 0, 0, 0.04);
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-/* 平台微徽章 */
-.platform-badge {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 20px;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.badge-icon {
-  width: 14px;
-  height: 14px;
-  object-fit: contain;
-}
-
-.badge-xiaohongshu { background: rgba(255, 77, 79, 0.08); color: #ff4d4f; }
-.badge-douyin { background: rgba(6, 182, 212, 0.08); color: #06b6d4; }
-.badge-kuaishou { background: rgba(249, 115, 22, 0.08); color: #f97316; }
-.badge-wechat_channels { background: rgba(16, 185, 129, 0.08); color: #10b981; }
-.badge-zhihu { background: rgba(0, 102, 255, 0.08); color: #0066ff; }
-.badge-toutiao { background: rgba(240, 65, 52, 0.08); color: #f04134; }
-
-/* 状态灯与文字 */
-.status-indicator {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  display: inline-block;
-}
-
-.dot-active {
-  background-color: #10b981;
-  box-shadow: 0 0 8px #10b981;
-  animation: pulse 2s infinite;
-}
-
-.dot-expired {
-  background-color: #f59e0b;
-}
-
-.dot-disabled {
-  background-color: #94a3b8;
-}
-
-.status-text {
-  font-size: 11px;
-  font-weight: 600;
-  color: #64748b;
-}
-
-/* 个人信息 */
-.card-profile {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.profile-avatar {
-  border: 2px solid rgba(255, 255, 255, 0.8);
-  box-shadow: var(--glow-shadow-sm);
-}
-
-.profile-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  overflow: hidden;
-  flex: 1;
-}
-
-.profile-name {
-  font-size: 15px;
-  font-weight: 700;
-  color: #0f172a;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.profile-remark {
-  font-size: 12px;
-  color: #64748b;
-  font-weight: 500;
-}
-
-.profile-id {
-  font-size: 11px;
-  color: #94a3b8;
-  font-family: monospace;
-}
-
-/* 数据展示栏 */
-.card-stats {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: rgba(0, 0, 0, 0.015);
-  border-radius: 10px;
-  padding: 10px 14px;
-  margin-bottom: 16px;
-  border: 1px solid rgba(0, 0, 0, 0.02);
-}
-
-.stat-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  flex: 1;
-}
-
-.stat-num {
-  font-size: 15px;
-  font-weight: 800;
-  color: #0f172a;
-  letter-spacing: -0.02em;
-}
-
-.stat-label {
-  font-size: 11px;
-  color: #94a3b8;
-  font-weight: 600;
-  margin-top: 1px;
-}
-
-.stat-divider {
-  width: 1px;
-  height: 24px;
-  background-color: rgba(0, 0, 0, 0.05);
-}
-
-/* 标签区 */
-.card-tags {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 16px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
-}
-
-.tag-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.tag-label {
-  font-size: 12px;
-  color: #94a3b8;
-  font-weight: 600;
-  min-width: 32px;
-}
-
-.tag-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.tag-empty {
-  font-size: 12px;
-  color: #cbd5e1;
-  font-weight: 500;
-}
-
-.env-tag {
-  font-weight: 600;
-  border-radius: 6px;
-}
-
-.category-tag {
-  background-color: rgba(99, 102, 241, 0.06) !important;
-  color: #6366f1 !important;
-  border: 1px solid rgba(99, 102, 241, 0.15) !important;
-  border-radius: 6px;
-  font-weight: 700;
-}
-
-/* 时间 */
-.card-time {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11px;
-  color: #94a3b8;
-  margin-bottom: 16px;
-  font-weight: 500;
-}
-
-/* 操作面板 */
-.card-actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: auto;
-}
-
-.card-actions :deep(.el-button) {
-  margin: 0 !important;
-  font-weight: 700 !important;
-  font-size: 12px !important;
-  padding: 4px 6px !important;
-  border-radius: 6px !important;
-  transition: all 0.2s ease !important;
-}
-
-.card-actions :deep(.el-button--success:hover) {
-  color: #10b981 !important;
-  background-color: rgba(16, 185, 129, 0.06) !important;
-}
-
-.card-actions :deep(.el-button--primary:hover) {
-  color: #6366f1 !important;
-  background-color: rgba(99, 102, 241, 0.06) !important;
-}
-
-.card-actions :deep(.el-button--warning:hover) {
-  color: #e6a23c !important;
-  background-color: rgba(230, 162, 60, 0.06) !important;
-}
-
-.card-actions :deep(.el-button--danger:hover) {
-  color: #f56c6c !important;
-  background-color: rgba(245, 108, 108, 0.06) !important;
-}
-
-@keyframes pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
-  }
-  70% {
-    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
-  }
-}
-
-/* 分类管理列表样式 */
-.category-item-list {
-  border: 1px solid rgba(0, 0, 0, 0.05);
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.015);
-  padding: 8px 12px;
-  box-sizing: border-box;
-}
-
-.category-empty {
-  text-align: center;
-  color: #94a3b8;
-  font-size: 13px;
-  padding: 24px 0;
-  font-weight: 500;
-}
-
-.category-item-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 8px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.03);
-  transition: all 0.2s ease;
-}
-
-.category-item-row:last-child {
-  border-bottom: none;
-}
-
-.category-item-row:hover {
-  background: rgba(99, 102, 241, 0.02);
-  border-radius: 8px;
-}
-
-.category-name-text {
-  font-size: 14px;
-  font-weight: 700;
-  color: #1e293b;
-}
-
-.category-item-actions {
-  display: flex;
-  gap: 12px;
-}
-
-.category-item-actions :deep(.el-button) {
-  margin: 0 !important;
-  font-weight: 700 !important;
-  font-size: 13px !important;
+  margin-left: 8px;
 }
 </style>
