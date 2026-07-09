@@ -2,7 +2,7 @@ import type { BrowserWindow } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { PlatformAdapter, ExtractedAccountInfo, LoginCheckResult, ProgressCallback } from './types';
-import { sleep, makePublishLogger, makePublishWindow, attachNavigationTracker, evalJS, makeFailedResult, uploadViaCDP, waitForUploadComplete, buildPageStructureProbe, cdpInsertTagsWithSpace, cdpFillContentWithNewlines } from './shared';
+import { sleep, makePublishLogger, makePublishWindow, attachNavigationTracker, evalJS, makeFailedResult, uploadViaCDP, waitForUploadComplete, buildPageStructureProbe, cdpInsertTagsWithSpace, cdpFillContentWithNewlines, buildTestModeProbeScript } from './shared';
 import { registerPlatform } from './registry';
 import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities, ContentType } from '../../../types';
 
@@ -3226,6 +3226,48 @@ async function runDouyinPublish(accountId: string, request: PublishRequest, onPr
       }
     }
     onProgress(75, '点击发布按钮…');
+
+    // 测试模式：不点击发布，高亮标记按钮并收集表单状态
+    if (request.testMode) {
+      const testScript = buildTestModeProbeScript(
+        [
+          'button.primary-cECiOJ',
+          'button.button-dhlUZE',
+          'button[type="submit"]',
+          '.publish-btn',
+          '.submit-btn',
+        ],
+        [
+          { name: '标题', selector: 'input[placeholder*="标题"]', type: 'input' },
+          { name: '描述/正文', selector: '[contenteditable="true"]', type: 'contenteditable' },
+          { name: '描述文本框', selector: 'textarea', type: 'textarea' },
+        ],
+      );
+      const testRes: any = await evalJS(win, testScript, 'test-mode-probe', log).catch(() => null);
+      const testResult = {
+        titleFilled: !!(testRes?.fields?.find((f: any) => f.name === '标题')?.filled),
+        contentFilled: !!(testRes?.fields?.find((f: any) => f.name.includes('描述') || f.name.includes('正文'))?.filled),
+        tagsFilled: douyinTagList.length > 0 && contentResult?.ok,
+        coverUploaded: hasThumb,
+        publishButtonFound: !!(testRes?.publishButtonFound),
+        publishButtonInfo: testRes?.publishButtonInfo || null,
+        formFields: testRes?.fields || [],
+        note: testRes?.note || '测试模式完成',
+      };
+      log('info', 'test', '测试模式完成: ' + (testRes?.note || '未知'));
+      onProgress(100, '测试完成');
+      return {
+        accountId: accountId,
+        platform: 'douyin',
+        status: 'success',
+        progress: 100,
+        message: '测试完成 - 表单填写验证通过',
+        startedAt: startedAt,
+        finishedAt: Date.now(),
+        testResult: testResult,
+      } as PublishItemProgress;
+    }
+
     const clickScript = buildClickPublishScript();
     const clickRes: any = await evalJS(win, clickScript, 'click-publish', log).catch(function () { return null; });
     if (!clickRes || !clickRes.clicked) {
@@ -3509,6 +3551,47 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
 
     // 点击发布
     onProgress(80, '点击发布按钮…');
+
+    // 测试模式：不点击发布，高亮标记按钮并收集表单状态
+    if (request.testMode) {
+      const testScript = buildTestModeProbeScript(
+        [
+          'button.primary-cECiOJ',
+          'button.button-dhlUZE',
+          'button[type="submit"]',
+          '.publish-btn',
+          '.submit-btn',
+        ],
+        [
+          { name: '文章标题', selector: 'input[placeholder*="标题"]', type: 'input' },
+          { name: '文章正文', selector: '[contenteditable="true"]', type: 'contenteditable' },
+        ],
+      );
+      const testRes: any = await evalJS(win, testScript, 'article-test-mode-probe', log).catch(() => null);
+      const testResult = {
+        titleFilled: !!(testRes?.fields?.find((f: any) => f.name === '文章标题')?.filled),
+        contentFilled: !!(testRes?.fields?.find((f: any) => f.name === '文章正文')?.filled),
+        tagsFilled: articleTagList.length > 0 && contentResult?.ok,
+        coverUploaded: hasCover,
+        publishButtonFound: !!(testRes?.publishButtonFound),
+        publishButtonInfo: testRes?.publishButtonInfo || null,
+        formFields: testRes?.fields || [],
+        note: testRes?.note || '测试模式完成',
+      };
+      log('info', 'test', '文章测试模式完成: ' + (testRes?.note || '未知'));
+      onProgress(100, '测试完成');
+      return {
+        accountId: accountId,
+        platform: 'douyin',
+        status: 'success',
+        progress: 100,
+        message: '测试完成 - 文章表单填写验证通过',
+        startedAt: startedAt,
+        finishedAt: Date.now(),
+        testResult: testResult,
+      } as PublishItemProgress;
+    }
+
     const clickScript = buildClickPublishScript();
     const clickRes: any = await evalJS(win, clickScript, 'article-click-publish', log).catch(function () { return null; });
     if (!clickRes || !clickRes.clicked) {

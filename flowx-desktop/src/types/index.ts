@@ -173,6 +173,8 @@ export interface PublishRequest {
   coverImage?: string;
   /** 分类（部分平台需要） */
   category?: string;
+  /** 测试模式：不真的点击发布按钮，仅验证表单填写是否正常 */
+  testMode?: boolean;
 }
 
 /** 发布任务状态 */
@@ -194,6 +196,40 @@ export interface PublishItemProgress {
   resultUrl?: string;
   startedAt?: number;
   finishedAt?: number;
+  /** 测试模式结果 */
+  testResult?: PublishTestResult;
+}
+
+/** 发布测试结果 */
+export interface PublishTestResult {
+  /** 标题是否填写成功 */
+  titleFilled: boolean;
+  /** 内容/正文是否填写成功 */
+  contentFilled: boolean;
+  /** 标签/话题是否填写成功 */
+  tagsFilled: boolean;
+  /** 封面是否上传成功 */
+  coverUploaded: boolean;
+  /** 是否找到发布按钮 */
+  publishButtonFound: boolean;
+  /** 发布按钮位置信息（用于高亮显示） */
+  publishButtonInfo?: {
+    text: string;
+    selector: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  /** 检测到的表单字段列表 */
+  formFields?: {
+    type: string;
+    label: string;
+    filled: boolean;
+    selector?: string;
+  }[];
+  /** 备注信息 */
+  note?: string;
 }
 
 /** 发布任务（含多账号进度） */

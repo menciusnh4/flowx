@@ -279,6 +279,148 @@ export function makeFailedResult(
 }
 
 /**
+ * 构建测试模式结果：在页面上高亮标记发布按钮，并收集表单填写状态
+ *
+ * @param buttonSelectors 发布按钮的选择器列表（按优先级排序）
+ * @param fieldSelectors 表单字段配置，用于检测填写状态
+ */
+export function buildTestModeProbeScript(
+  buttonSelectors: string[],
+  fieldSelectors: { name: string; selector: string; type: 'input' | 'textarea' | 'contenteditable' }[],
+): string {
+  return `
+  (function() {
+    function getOffset(el) {
+      const rect = el.getBoundingClientRect();
+      return {
+        x: rect.left + window.scrollX,
+        y: rect.top + window.scrollY,
+        width: rect.width,
+        height: rect.height,
+      };
+    }
+
+    // 1. 查找发布按钮
+    let publishBtn = null;
+    let publishBtnInfo = null;
+    for (const sel of ${JSON.stringify(buttonSelectors)}) {
+      const btn = document.querySelector(sel);
+      if (btn && btn.offsetParent !== null) {
+        publishBtn = btn;
+        const pos = getOffset(btn);
+        publishBtnInfo = {
+          text: btn.innerText.trim().slice(0, 30),
+          selector: sel,
+          x: pos.x,
+          y: pos.y,
+          width: pos.width,
+          height: pos.height,
+        };
+        break;
+      }
+    }
+
+    // 2. 高亮标记发布按钮
+    if (publishBtn) {
+      // 保存原始样式
+      publishBtn.dataset.originalOutline = publishBtn.style.outline;
+      publishBtn.dataset.originalOutlineOffset = publishBtn.style.outlineOffset;
+      publishBtn.dataset.originalBoxShadow = publishBtn.style.boxShadow;
+      publishBtn.dataset.originalZIndex = publishBtn.style.zIndex;
+      publishBtn.dataset.originalPosition = publishBtn.style.position;
+      
+      // 添加闪烁高亮效果
+      publishBtn.style.outline = '3px solid #ff6b6b';
+      publishBtn.style.outlineOffset = '2px';
+      publishBtn.style.boxShadow = '0 0 0 4px rgba(255, 107, 107, 0.3), 0 0 20px rgba(255, 107, 107, 0.5)';
+      publishBtn.style.zIndex = '99999';
+      
+      // 添加闪烁动画
+      const styleId = 'flowx-test-highlight-style';
+      if (!document.getElementById(styleId)) {
+        const style = document.createElement('style');
+        style.id = styleId;
+        style.textContent = \`
+          @keyframes flowx-test-pulse {
+            0%, 100% { box-shadow: 0 0 0 4px rgba(255, 107, 107, 0.3), 0 0 20px rgba(255, 107, 107, 0.5); }
+            50% { box-shadow: 0 0 0 8px rgba(255, 107, 107, 0.5), 0 0 30px rgba(255, 107, 107, 0.8); }
+          }
+          .flowx-test-highlight {
+            animation: flowx-test-pulse 1.5s ease-in-out infinite !important;
+          }
+        \`;
+        document.head.appendChild(style);
+      }
+      publishBtn.classList.add('flowx-test-highlight');
+      
+      // 添加"测试模式"标签
+      const badge = document.createElement('div');
+      badge.textContent = '🔍 发布按钮（测试模式）';
+      badge.style.cssText = \`
+        position: absolute;
+        top: -28px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #ff6b6b;
+        color: white;
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
+        white-space: nowrap;
+        z-index: 100000;
+        pointer-events: none;
+      \`;
+      if (getComputedStyle(publishBtn).position === 'static') {
+        publishBtn.style.position = 'relative';
+      }
+      publishBtn.appendChild(badge);
+    }
+
+    // 3. 检测表单字段填写状态
+    const fields = [];
+    const fieldConfigs = ${JSON.stringify(fieldSelectors)};
+    for (const cfg of fieldConfigs) {
+      let el = null;
+      let filled = false;
+      let value = '';
+      
+      if (cfg.type === 'contenteditable') {
+        el = document.querySelector(cfg.selector);
+        if (el) {
+          value = el.innerText.trim();
+          filled = value.length > 0;
+        }
+      } else {
+        el = document.querySelector(cfg.selector);
+        if (el) {
+          value = (el.value || '').trim();
+          filled = value.length > 0;
+        }
+      }
+      
+      fields.push({
+        name: cfg.name,
+        type: cfg.type,
+        filled: filled,
+        found: !!el,
+        valueLength: value.length,
+        selector: cfg.selector,
+      });
+    }
+
+    // 4. 返回结果
+    return {
+      publishButtonFound: !!publishBtn,
+      publishButtonInfo: publishBtnInfo,
+      fields: fields,
+      note: publishBtn ? '已找到发布按钮并高亮标记，请检查表单填写是否正常' : '未找到发布按钮',
+    };
+  })();
+  `;
+}
+
+/**
  * CDP 文件上传 v4 — 针对快手等"上传按钮+隐藏 file input 已存在"的页面
  *
  * 策略顺序（按可靠性从高到低）：
