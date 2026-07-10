@@ -48,11 +48,13 @@
     <div class="panel">
       <h2 class="section-title">支持的平台</h2>
       <el-row :gutter="12">
-        <el-col :span="8" v-for="p in accountStore.platforms" :key="p.key">
+        <el-col :span="4" v-for="p in accountStore.platforms" :key="p.key">
           <el-card shadow="hover" class="platform-card">
-            <div style="font-size: 24px">{{ p.icon }}</div>
-            <div style="font-weight: 600; margin-top: 6px">{{ p.name }}</div>
-            <div style="color: #909399; font-size: 12px">
+            <div class="platform-icon-wrap">
+              <img v-if="getPlatformIcon(p.key)" :src="getPlatformIcon(p.key)" class="platform-icon" />
+            </div>
+            <div style="font-weight: 600; margin-top: 8px">{{ p.name }}</div>
+            <div style="color: #909399; font-size: 12px; margin-top: 4px">
               账号数：{{ accountStore.byPlatform(p.key).length }}
             </div>
           </el-card>
@@ -67,6 +69,29 @@ import { onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAccountStore } from '../stores/account';
 import { usePublishStore } from '../stores/publish';
+import iconXiaohongshu from '../assets/xiaohongshu.svg';
+import iconDouyin from '../assets/douyin.svg';
+import iconKuaishou from '../assets/kuaishou.svg';
+import iconBilibili from '../assets/bilibili.svg';
+import iconWechatChannels from '../assets/wechat_channels.svg';
+import iconWeibo from '../assets/weibo.png';
+import iconZhihu from '../assets/zhihu.png';
+import iconToutiao from '../assets/toutiao.png';
+
+const PLATFORM_ICONS: Record<string, string> = {
+  xiaohongshu: iconXiaohongshu,
+  douyin: iconDouyin,
+  kuaishou: iconKuaishou,
+  bilibili: iconBilibili,
+  wechat_channels: iconWechatChannels,
+  weibo: iconWeibo,
+  zhihu: iconZhihu,
+  toutiao: iconToutiao,
+};
+
+function getPlatformIcon(p: string): string {
+  return PLATFORM_ICONS[p] || '';
+}
 
 const router = useRouter();
 const accountStore = useAccountStore();
@@ -96,5 +121,20 @@ onMounted(async () => {
 }
 .platform-card {
   text-align: center;
+}
+.platform-icon-wrap {
+  width: 44px;
+  height: 44px;
+  margin: 0 auto;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f7fa;
+}
+.platform-icon {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
 }
 </style>
