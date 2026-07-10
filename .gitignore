@@ -76,3 +76,6 @@ build/*
 flowx-data/
 *.db
 *.sqlite
+
+# TRAE 工具临时缓存
+.trae-html-share-packages/
