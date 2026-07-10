@@ -110,7 +110,7 @@
   }
   .highlight-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 16px;
   }
   .highlight-card {
@@ -315,11 +315,11 @@
   <div class="container">
     <div class="hero-badge">🎉 新版本发布</div>
     <h1>FlowX Desktop v0.1.1</h1>
-    <p class="subtitle">多平台内容发布工具 · 新增微信视频号支持 · 浏览器内容提取 · 测试发布模式</p>
+    <p class="subtitle">多平台内容发布工具 · 新增微信视频号支持 · 浏览器内容提取 · 测试发布模式 · 对外 API 接口</p>
     <div class="hero-meta">
       <span>📅 发布日期：2026-07-10</span>
       <span>📦 版本号：v0.1.1</span>
-      <span>⚡ 7 项功能更新</span>
+      <span>⚡ 8 项功能更新</span>
     </div>
   </div>
 </div>
@@ -347,6 +347,11 @@
         <div class="highlight-icon">🧪</div>
         <div class="highlight-value">测试模式</div>
         <div class="highlight-label">安全发布验证</div>
+      </div>
+      <div class="highlight-card">
+        <div class="highlight-icon">🔌</div>
+        <div class="highlight-value">API</div>
+        <div class="highlight-label">对外接口发布</div>
       </div>
     </div>
   </div>
@@ -512,6 +517,28 @@
       </div>
 
       <!-- Feature 7 -->
+      <div class="feature-card">
+        <div class="feature-icon" style="background: #f0fdf4;">🔌</div>
+        <div class="feature-content">
+          <h3 class="feature-title">
+            对外 API 接口（支持接口一键发布）
+            <span class="feature-tag new">新增</span>
+          </h3>
+          <p class="feature-desc">
+            提供 <strong>HTTP REST API 接口</strong>，允许第三方系统通过接口调用 FlowX 的发布能力，实现自动化工作流集成。
+          </p>
+          <ul class="feature-points">
+            <li>本地 HTTP 服务（默认端口可配置），支持 JSON 请求</li>
+            <li>接口提交发布任务，支持多账号、多平台批量发布</li>
+            <li>支持查询发布状态、获取发布结果、取消任务</li>
+            <li>支持测试模式接口调用，便于自动化测试</li>
+            <li>Token 鉴权机制，保障接口调用安全</li>
+            <li>可与工作流工具（如 n8n、Zapier）或自建系统无缝对接</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Feature 8: Stability -->
       <div class="feature-card">
         <div class="feature-icon amber">⚡</div>
         <div class="feature-content">

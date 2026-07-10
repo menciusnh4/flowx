@@ -6,7 +6,7 @@ All notable changes to the FlowX Desktop project will be documented in this file
 
 ## [v0.1.1] - 2026-07-10
 
-> 多平台内容发布工具 · 新增微信视频号支持 · 浏览器内容提取 · 测试发布模式
+> 多平台内容发布工具 · 新增微信视频号支持 · 浏览器内容提取 · 测试发布模式 · 对外 API 接口
 
 ### ✨ 亮点速览
 
@@ -14,6 +14,7 @@ All notable changes to the FlowX Desktop project will be documented in this file
 - 🔒 **环境隔离** — 浏览器指纹 UA 与代理 IP 独立隔离
 - 📝 **内容提取** — 自动化浏览器一键提取网页内容至发布表单
 - 🧪 **测试发布** — 填写完成后停留确认，无误后再发布
+- 🔌 **API 接口** — 提供对外 HTTP 接口，支持第三方系统调用一键发布
 
 ### 🚀 新功能
 
@@ -79,6 +80,17 @@ All notable changes to the FlowX Desktop project will be documented in this file
 | 💡 知乎 | ✅ 账号管理（v0.1.1 新增） |
 | 📺 哔哩哔哩 | ✅ 账号管理 |
 | 📢 微博 | ✅ 账号管理 |
+
+#### 7. 对外 API 接口（支持接口一键发布）
+
+提供 **HTTP REST API 接口**，允许第三方系统通过接口调用 FlowX 的发布能力，实现自动化工作流集成。
+
+- 本地 HTTP 服务（默认端口可配置），支持 JSON 请求
+- 接口提交发布任务，支持多账号、多平台批量发布
+- 支持查询发布状态、获取发布结果、取消任务
+- 支持测试模式接口调用，便于自动化测试
+- Token 鉴权机制，保障接口调用安全
+- 可与工作流工具（如 n8n、Zapier）或自建系统无缝对接
 
 ### ⚡ 稳定性提升
 
