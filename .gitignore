@@ -79,3 +79,6 @@ flowx-data/
 
 # TRAE 工具临时缓存
 .trae-html-share-packages/
+/.uploads/
+/browser-extract-design/
+/content-extraction-optimization/
