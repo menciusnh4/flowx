@@ -213,8 +213,11 @@ async function initBrowser() {
     await envStore.loadAll()
     environments.value = envStore.environments
 
+    // 从 URL 参数获取初始 URL（从草稿箱等地方跳转过来时会带 url 参数）
+    const initialUrl = (route.query.url as string) || 'https://www.baidu.com'
+
     // 初始创建一个标签
-    await createTab('https://www.baidu.com')
+    await createTab(initialUrl)
 
     // 检查初始页面的收藏状态
     checkCurrentUrlBookmarked()
