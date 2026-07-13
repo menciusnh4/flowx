@@ -3,19 +3,7 @@
     <!-- 左侧极简磨砂侧边栏 -->
     <aside class="app-sidebar">
       <div class="sidebar-logo">
-        <svg class="logo-icon-img" width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <linearGradient id="logo-bg-grad" x1="0" y1="0" x2="38" y2="38" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stop-color="#6366f1" />
-              <stop offset="100%" stop-color="#3b82f6" />
-            </linearGradient>
-            <filter id="logo-text-shadow" x="-20%" y="-20%" width="140%" height="140%">
-              <feDropShadow dx="0" dy="1.5" stdDeviation="1" flood-color="#000000" flood-opacity="0.12" />
-            </filter>
-          </defs>
-          <rect width="38" height="38" rx="11" fill="url(#logo-bg-grad)" />
-          <text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="#FFFFFF" font-size="14" font-weight="900" font-family="system-ui, -apple-system, sans-serif" letter-spacing="-0.03em" filter="url(#logo-text-shadow)">FX</text>
-        </svg>
+        <img class="logo-icon-img" :src="logoIcon" width="50" height="50" alt="FlowX Logo" />
         <div class="logo-text-wrapper">
           <div class="logo-main">
             <span class="logo-text">FlowX</span>
@@ -104,6 +92,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { electronApi } from './utils/electron';
+import logoIcon from './assets/icon.png';
 
 const route = useRoute();
 const router = useRouter();
@@ -146,14 +135,13 @@ onMounted(async () => {
 .sidebar-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 2px;
   padding-left: 10px;
   margin-bottom: 32px;
   user-select: none;
 }
 
 .logo-icon-img {
-  filter: drop-shadow(0 4px 10px rgba(99, 102, 241, 0.28));
   flex-shrink: 0;
 }
 

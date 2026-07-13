@@ -7,7 +7,7 @@ async function generateIcons() {
   const pngToIco = (await import('png-to-ico')).default;
   
   const BUILD_DIR = path.join(__dirname, '..', 'build');
-  const SOURCE = path.join(BUILD_DIR, 'icon-source.jpg');
+  const SOURCE = path.join(__dirname, '..', 'src', 'renderer', 'assets', 'logo.png');
 
   console.log('=== FlowX 图标生成工具 ===\n');
 

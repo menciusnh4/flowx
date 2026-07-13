@@ -1271,7 +1271,8 @@ onMounted(async () => {
 .card-actions-pills {
   display: flex;
   justify-content: space-between;
-  gap: 8px;
+  align-items: center;
+  gap: 4px;
   margin-top: auto;
 }
 
@@ -1280,14 +1281,15 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 8px 4px;
+  gap: 4px;
+  padding: 6px 2px;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
   transition: all 0.25s ease;
   border: 1px solid transparent;
+  white-space: nowrap;
 }
 
 .pill-success {
