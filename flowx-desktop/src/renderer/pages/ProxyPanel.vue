@@ -73,32 +73,42 @@
           </div>
 
           <!-- 底部操作按钮 -->
-          <div class="proxy-card-footer">
-            <el-button
-              size="small"
-              type="success"
-              link
-              :loading="testingIds.has(row.id)"
+          <div class="card-actions-pills">
+            <div
+              class="action-pill pill-success"
+              :class="{ 'is-loading': testingIds.has(row.id) }"
               @click="handleTest(asProxy(row).id)"
             >
-              <el-icon><Refresh /></el-icon>&nbsp;测试连接
-            </el-button>
-            <el-button size="small" type="primary" link @click="openEditDialog(asProxy(row))">
-              <el-icon><Edit /></el-icon>&nbsp;编辑
-            </el-button>
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" :class="{ 'anim-spin': testingIds.has(row.id) }"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              <span>测试连接</span>
+            </div>
+            <div class="action-pill pill-primary" @click="openEditDialog(asProxy(row))">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+              <span>编辑</span>
+            </div>
             <el-popconfirm width="280" title="删除该代理，会同时解除所有关联环境的代理配置，确认删除？" @confirm="handleDelete(asProxy(row).id)">
               <template #reference>
-                <el-button size="small" type="danger" link>
-                  <el-icon><Delete /></el-icon>&nbsp;删除
-                </el-button>
+                <div class="action-pill pill-danger">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                  <span>删除</span>
+                </div>
               </template>
             </el-popconfirm>
           </div>
         </div>
       </div>
 
-      <div v-if="envStore.proxies.length === 0 && !envStore.loading" class="empty-hint">
-        暂无代理配置，点击右上角"添加代理 IP"创建。
+      <!-- 动态网络底座空态 -->
+      <div v-if="envStore.proxies.length === 0 && !envStore.loading" class="empty-glow-box">
+        <div class="empty-3d-scene">
+          <div class="empty-box-body">
+            <svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>
+          </div>
+        </div>
+        <div class="empty-glow-text">
+          <h3>配置您的专属出网代理</h3>
+          <p>当前暂无代理 IP，点击右上角 “添加代理 IP” 开启全球网络加速</p>
+        </div>
       </div>
     </div>
 
@@ -289,11 +299,71 @@ function formatTime(ts: number): string {
   border-bottom: 1px solid var(--el-border-color-light);
   padding-bottom: 12px;
 }
-.empty-hint {
+/* 高级渐变发光空态组件 */
+.empty-glow-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  background: rgba(255, 255, 255, 0.45);
+  border: 1px dashed rgba(99, 102, 241, 0.15);
+  border-radius: 20px;
+  margin-top: 30px;
   text-align: center;
-  color: #909399;
-  font-size: 14px;
-  padding: 40px 0;
+}
+
+.empty-3d-scene {
+  width: 90px;
+  height: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.1) 0%, rgba(99, 102, 241, 0) 70%);
+  border-radius: 50%;
+  margin-bottom: 16px;
+  position: relative;
+}
+
+.empty-3d-scene::before {
+  content: '';
+  position: absolute;
+  width: 60px;
+  height: 60px;
+  border: 1.5px dashed rgba(99, 102, 241, 0.25);
+  border-radius: 50%;
+  animation: rotate-dashed 20s linear infinite;
+}
+
+@keyframes rotate-dashed {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.empty-box-body {
+  color: #6366f1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: float-slow 4s ease-in-out infinite;
+}
+
+@keyframes float-slow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+.empty-glow-text h3 {
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0 0 8px 0;
+}
+
+.empty-glow-text p {
+  font-size: 13px;
+  color: #64748b;
+  margin: 0;
 }
 .status-cell {
   display: flex;
@@ -343,22 +413,26 @@ function formatTime(ts: number): string {
 }
 
 .flow-proxy-card {
-  background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: var(--glass-border);
+  background: #ffffff;
+  border-top: 1.5px solid rgba(99, 102, 241, 0.2);
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
   border-radius: 16px;
   padding: 20px;
-  box-shadow: var(--glow-shadow-sm);
+  box-shadow: 0 10px 30px -5px rgba(99, 102, 241, 0.04), 0 2px 10px -3px rgba(0, 0, 0, 0.02);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  position: relative;
+  overflow: hidden;
 }
 
 .flow-proxy-card:hover {
   transform: translateY(-4px);
-  box-shadow: var(--glow-shadow-lg);
+  border-top-color: rgba(99, 102, 241, 0.58);
+  box-shadow: 0 16px 36px -4px rgba(99, 102, 241, 0.14), 0 4px 16px -2px rgba(99, 102, 241, 0.04);
   background: #ffffff;
 }
 
@@ -445,33 +519,64 @@ function formatTime(ts: number): string {
   margin-bottom: 14px;
 }
 
-.proxy-card-footer {
-  border-top: 1px solid rgba(0, 0, 0, 0.03);
-  padding-top: 12px;
+.card-actions-pills {
+  border-top: 1px dashed rgba(0, 0, 0, 0.05);
+  padding-top: 14px;
   display: flex;
   justify-content: space-between;
+  gap: 8px;
   margin-top: auto;
 }
 
-.proxy-card-footer :deep(.el-button) {
-  margin: 0 !important;
-  font-weight: 700 !important;
-  font-size: 12px !important;
-  transition: all 0.2s ease !important;
+.action-pill {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 4px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  border: 1px solid transparent;
+}
+.action-pill.is-loading {
+  pointer-events: none;
+  opacity: 0.6;
+}
+.anim-spin {
+  animation: rotate 1s linear infinite;
 }
 
-.proxy-card-footer :deep(.el-button--success:hover) {
-  color: #10b981 !important;
-  background-color: rgba(16, 185, 129, 0.06) !important;
+.pill-success {
+  background: transparent;
+  color: #10b981;
+}
+.pill-success:hover {
+  background: rgba(16, 185, 129, 0.08);
+  color: #059669;
+  border-color: rgba(16, 185, 129, 0.12);
 }
 
-.proxy-card-footer :deep(.el-button--primary:hover) {
-  color: #6366f1 !important;
-  background-color: rgba(99, 102, 241, 0.06) !important;
+.pill-primary {
+  background: transparent;
+  color: #6366f1;
+}
+.pill-primary:hover {
+  background: rgba(99, 102, 241, 0.08);
+  color: #4f46e5;
+  border-color: rgba(99, 102, 241, 0.12);
 }
 
-.proxy-card-footer :deep(.el-button--danger:hover) {
-  color: #f56c6c !important;
-  background-color: rgba(245, 108, 108, 0.06) !important;
+.pill-danger {
+  background: transparent;
+  color: #ef4444;
+}
+.pill-danger:hover {
+  background: rgba(239, 68, 68, 0.08);
+  color: #dc2626;
+  border-color: rgba(239, 68, 68, 0.12);
 }
 </style>

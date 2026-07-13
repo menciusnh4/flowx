@@ -1,36 +1,50 @@
 <template>
   <div class="accounts-container">
+    <!-- 顶部动作面板 -->
     <div class="panel header-actions-panel">
       <div class="header-flex">
         <div class="title-wrap">
-          <h2 class="section-title" style="margin: 0">
-            <el-icon><User /></el-icon>账号管理
-          </h2>
-          <el-tag v-if="accountStore.healthCheckConfig" size="small" :type="accountStore.healthCheckConfig.enabled ? 'success' : 'info'" effect="plain" class="health-tag">
-            {{ accountStore.healthCheckConfig.enabled ? `自动检测：每 ${Math.round(accountStore.healthCheckConfig.intervalMs / 60000)} 分钟` : '自动检测：已禁用' }}
-          </el-tag>
+          <div class="title-icon-wrapper">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          </div>
+          <h2 class="section-title">账号管理</h2>
+          <div class="health-badge-wrap" v-if="accountStore.healthCheckConfig && accountStore.healthCheckConfig.enabled">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="health-success-check"><polyline points="20 6 9 17 4 12"/></svg>
+            <span>自动检测：每 {{ Math.round(accountStore.healthCheckConfig.intervalMs / 60000) }} 分钟</span>
+          </div>
+          <div class="health-badge-wrap disabled-badge" v-else>
+            <span class="dot-disabled"></span>
+            <span>自动检测：已禁用</span>
+          </div>
         </div>
         <div class="actions-wrap">
-          <el-button type="primary" @click="openAuthDialog" class="action-btn">
-            <el-icon><Plus /></el-icon>&nbsp; 授权新账号
+          <el-button type="primary" @click="openAuthDialog" class="action-btn auth-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <span>授权新账号</span>
           </el-button>
-          <el-button @click="openCategoryDialog" class="action-btn">
-            <el-icon><Folder /></el-icon>&nbsp; 分类管理
+          <el-button @click="openCategoryDialog" class="action-btn plain-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <span>分类管理</span>
           </el-button>
-          <el-button @click="openHealthCheckConfigDialog" class="action-btn">
-            <el-icon><Setting /></el-icon>&nbsp; 定时设置
+          <el-button @click="openHealthCheckConfigDialog" class="action-btn plain-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span>定时设置</span>
           </el-button>
-          <el-button type="success" @click="checkAllHealth" :loading="checkAllLoading" class="action-btn">
-            <el-icon><Monitor /></el-icon>&nbsp; 批量检测健康
+          <el-button type="success" @click="checkAllHealth" :loading="checkAllLoading" class="action-btn health-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            <span>批量检测健康</span>
           </el-button>
-          <el-button @click="refresh" class="action-btn refresh-btn" circle>
-            <el-icon><Refresh /></el-icon>
+          <el-button @click="refresh" class="action-btn refresh-round-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
           </el-button>
         </div>
       </div>
 
       <div class="filter-row">
-        <span class="filter-label"><el-icon><Filter /></el-icon>按分类筛选：</span>
+        <span class="filter-label">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+          按分类筛选：
+        </span>
         <el-select v-model="filterCategoryId" placeholder="全部" clearable class="filter-select" size="default">
           <el-option label="全部分类" value="" />
           <el-option label="未分类" value="unclassified" />
@@ -50,24 +64,29 @@
             <div class="status-indicator">
               <span class="status-dot" :class="'dot-' + row.status"></span>
               <span class="status-text">{{ row.status === 'active' ? '正常' : row.status === 'expired' ? '已过期' : '未激活' }}</span>
+              <span class="card-more-action">•••</span>
             </div>
           </div>
 
           <!-- 主体：头像与昵称 -->
           <div class="card-profile">
-            <el-avatar
-              :size="52"
-              :src="row.avatar"
-              :style="{ background: row.avatar ? 'transparent' : '#6366f1', color: '#fff', fontWeight: 800, fontSize: '18px' }"
-              class="profile-avatar"
-            >
-              {{ (row.nickname || 'U').slice(0, 1).toUpperCase() }}
-            </el-avatar>
+            <div class="profile-avatar-wrapper">
+              <el-avatar
+                :size="54"
+                :src="row.avatar"
+                :style="{ background: row.avatar ? 'transparent' : '#6366f1', color: '#fff', fontWeight: 800, fontSize: '18px' }"
+                class="profile-avatar"
+              >
+                {{ (row.nickname || 'U').slice(0, 1).toUpperCase() }}
+              </el-avatar>
+            </div>
             <div class="profile-info">
               <div class="profile-name" :title="row.nickname">{{ row.nickname }}</div>
-              <div class="profile-remark" v-if="row.remark">{{ row.remark }}</div>
-              <div class="profile-id" v-if="row.platformAccountId">
-                {{ accountStore.platforms.find((x) => x.key === row.platform)?.platformAccountLabel || '号' }}: {{ row.platformAccountId }}
+              <div class="profile-id-row" v-if="row.platformAccountId">
+                <span>{{ accountStore.platforms.find((x) => x.key === row.platform)?.platformAccountLabel || '号' }}: {{ row.platformAccountId }}</span>
+                <span class="copy-id-btn" @click.stop="copyId(row.platformAccountId)" title="复制账号 ID">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                </span>
               </div>
             </div>
           </div>
@@ -91,53 +110,79 @@
           </div>
 
           <!-- 标签区：分类与环境 -->
-          <div class="card-tags">
-            <div class="tag-row">
-              <span class="tag-label">分类:</span>
-              <div class="tag-group" v-if="row.categoryIds && row.categoryIds.length > 0">
-                <el-tag v-for="cid in row.categoryIds" :key="cid" class="category-tag" size="small">
-                  {{ getCategoryName(cid) }}
-                </el-tag>
+          <div class="card-tags-list">
+            <div class="tag-row-item">
+              <div class="tag-row-left">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="tag-row-svg"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+                <span>分类</span>
               </div>
-              <span class="tag-empty" v-else>未分类</span>
+              <div class="tag-row-right">
+                <div class="tag-pill-wrap" v-if="row.categoryIds && row.categoryIds.length > 0">
+                  <span v-for="cid in row.categoryIds" :key="cid" class="category-pill">
+                    {{ getCategoryName(cid) }}
+                  </span>
+                </div>
+                <span class="tag-empty-val" v-else>未分类</span>
+              </div>
             </div>
-            <div class="tag-row">
-              <span class="tag-label">环境:</span>
-              <el-tag v-if="row.envId" type="success" size="small" effect="light" class="env-tag">
-                {{ getEnvName(row.envId) }}
-              </el-tag>
-              <span class="tag-empty" v-else>本机直连</span>
+            <div class="tag-row-item">
+              <div class="tag-row-left">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="tag-row-svg"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                <span>环境</span>
+              </div>
+              <div class="tag-row-right">
+                <span class="env-pill-val" v-if="row.envId">{{ getEnvName(row.envId) }}</span>
+                <span class="tag-empty-val" v-else>本机直连</span>
+              </div>
             </div>
           </div>
 
           <!-- 时间说明 -->
-          <div class="card-time">
-            <span>授权：{{ fmt(row.authorizedAt) }}</span>
-            <span v-if="row.lastChecked">检测：{{ fmt(row.lastChecked) }}</span>
+          <div class="card-time-block">
+            <div class="time-item-row">
+              <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="time-svg color-blue"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              <span class="time-lbl">授权时间</span>
+              <span class="time-val">{{ fmt(row.authorizedAt) }}</span>
+            </div>
+            <div class="time-item-row" v-if="row.lastChecked">
+              <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="time-svg color-green"><polyline points="20 6 9 17 4 12"/></svg>
+              <span class="time-lbl">最后检测</span>
+              <span class="time-val">{{ fmt(row.lastChecked) }}</span>
+            </div>
           </div>
 
           <!-- 底部操作按钮 -->
-          <div class="card-actions">
-            <el-button size="small" type="success" link @click="openCreator(asAccount(row))" :loading="openingId === asAccount(row).id">
-              <el-icon><Link /></el-icon>&nbsp;创作中心
-            </el-button>
-            <el-button size="small" type="primary" link @click="editRemark(asAccount(row))">
-              <el-icon><Edit /></el-icon>&nbsp;编辑
-            </el-button>
-            <el-button size="small" type="warning" link @click="refreshToken(asAccount(row))" :loading="refreshingId === asAccount(row).id" title="刷新数据">
-              <el-icon><Refresh /></el-icon>&nbsp;刷新
-            </el-button>
-            <el-button size="small" type="danger" link @click="remove(asAccount(row))">
-              <el-icon><Delete /></el-icon>&nbsp;删除
-            </el-button>
+          <div class="card-actions-pills">
+            <div class="action-pill pill-success" @click="openCreator(asAccount(row))" v-loading="openingId === asAccount(row).id">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+              <span>创作中心</span>
+            </div>
+            <div class="action-pill pill-primary" @click="editRemark(asAccount(row))">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+              <span>编辑</span>
+            </div>
+            <div class="action-pill pill-warning" @click="refreshToken(asAccount(row))" v-loading="refreshingId === asAccount(row).id">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              <span>刷新</span>
+            </div>
+            <div class="action-pill pill-danger" @click="remove(asAccount(row))">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+              <span>删除</span>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div v-if="filteredAccounts.length === 0 && !accountStore.loading" class="empty-hint">
-        {{ filterCategoryId ? '当前分类下没有账号。' : '还没有账号，点击右上角"授权新账号"开始。' }}
-        <div v-if="!filterCategoryId" style="font-size:12px; color:#909399; margin-top:6px">
-          授权会弹出平台登录窗口，扫码完成后点击右上角红色"✅ 登录完成，保存账号"按钮，或直接关闭窗口即可。
+        <!-- 3D 纸飞机立方体空态组件（对齐设计图） -->
+        <div v-if="filteredAccounts.length === 0 && !accountStore.loading" class="empty-glow-box">
+          <div class="empty-3d-scene">
+            <div class="empty-box-body">
+              <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="empty-airplane-svg"><line x1="22" x2="11" y1="2" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </div>
+            <div class="empty-dust dust-1">✦</div>
+            <div class="empty-dust dust-2">✦</div>
+          </div>
+          <div class="empty-main-hint">更多账号正在路上...</div>
+          <div class="empty-sub-hint">点击「授权新账号」开始添加</div>
         </div>
       </div>
     </div>
@@ -381,6 +426,11 @@ function formatCount(n: number | undefined): string {
   return String(n);
 }
 
+function copyId(id: string) {
+  navigator.clipboard.writeText(id);
+  ElMessage.success('账号 ID 已复制到剪贴板');
+}
+
 /** 类型辅助：将 el-table 默认的 DefaultRow 断言为 AccountInfo */
 function asAccount(row: unknown): AccountInfo {
   return row as AccountInfo;
@@ -621,7 +671,17 @@ onMounted(async () => {
 .accounts-container {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 16px;
+  background: transparent;
+}
+
+.panel {
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 24px;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.02);
+  box-sizing: border-box;
 }
 
 .header-flex {
@@ -635,12 +695,58 @@ onMounted(async () => {
 .title-wrap {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
-.health-tag {
-  border-radius: 6px;
-  font-weight: 600;
+.title-icon-wrapper {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(99, 102, 241, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6366f1;
+}
+
+.section-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+/* 自动检测绿色药丸徽章 */
+.health-badge-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 12px;
+  background: rgba(16, 185, 129, 0.06);
+  border: 1px solid rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: 6px;
+}
+
+.health-success-check {
+  color: #10b981;
+}
+
+.disabled-badge {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.06);
+  color: #64748b;
+}
+
+.dot-disabled {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #94a3b8;
+  display: inline-block;
 }
 
 .actions-wrap {
@@ -649,16 +755,76 @@ onMounted(async () => {
   gap: 10px;
 }
 
-.action-btn {
-  height: 36px !important;
-  font-size: 13px !important;
+/* 按钮统一精细样式 */
+.actions-wrap :deep(.el-button) {
+  border-radius: 20px !important;
+  font-weight: 700 !important;
+  font-size: 11px !important;
+  padding: 8px 16px !important;
+  height: auto !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
 }
 
-.refresh-btn {
-  width: 36px !important;
-  height: 36px !important;
+/* 授权新账号紫蓝渐变 */
+.actions-wrap .auth-btn {
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
+  border: none !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.2) !important;
 }
 
+.actions-wrap .auth-btn:hover {
+  transform: translateY(-1.5px);
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.35) !important;
+}
+
+/* 白底配置按钮 */
+.actions-wrap .plain-btn {
+  border: 1px solid rgba(0, 0, 0, 0.05) !important;
+  background: #ffffff !important;
+  color: #475569 !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.01) !important;
+}
+
+.actions-wrap .plain-btn:hover {
+  border-color: rgba(99, 102, 241, 0.2) !important;
+  background: rgba(99, 102, 241, 0.03) !important;
+  color: #6366f1 !important;
+}
+
+/* 批量健康检测绿色 */
+.actions-wrap .health-btn {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+  border: none !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.2) !important;
+}
+
+.actions-wrap .health-btn:hover {
+  transform: translateY(-1.5px);
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.35) !important;
+}
+
+/* 纯圆形刷新按钮 */
+.refresh-round-btn {
+  width: 32px !important;
+  height: 32px !important;
+  border-radius: 50% !important;
+  padding: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.05) !important;
+  color: #475569 !important;
+}
+
+.refresh-round-btn:hover {
+  color: #6366f1 !important;
+  border-color: rgba(99, 102, 241, 0.2) !important;
+}
+
+/* ======== 分类筛选 ======== */
 .filter-row {
   display: flex;
   align-items: center;
@@ -669,16 +835,33 @@ onMounted(async () => {
 }
 
 .filter-label {
-  font-size: 13px;
+  font-size: 12px;
   color: #64748b;
-  font-weight: 600;
+  font-weight: 700;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .filter-select {
-  width: 150px;
+  width: 140px !important;
+}
+
+.filter-row :deep(.el-select__wrapper) {
+  border-radius: 20px !important;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.04) inset !important;
+  background: #ffffff !important;
+  padding: 4px 12px !important;
+  height: 28px !important;
+  line-height: 28px !important;
+  width: 100% !important;
+}
+
+.filter-row :deep(.el-select__wrapper.is-focus),
+.filter-row :deep(.el-select__wrapper:hover) {
+  box-shadow: 0 0 0 1px #6366f1 inset, 0 0 0 4px rgba(99, 102, 241, 0.12) !important;
 }
 
 /* 授权对话框中的平台选择美化为卡片式 */
@@ -761,40 +944,42 @@ onMounted(async () => {
   font-weight: 500;
 }
 
-/* 账号卡片流样式 */
+/* ======== 账号网格流与卡片美化 ======== */
 .account-grid-flow {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
   gap: 20px;
   margin-top: 16px;
 }
 
 .flow-account-card {
-  background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  background: #ffffff;
+  border-top: 1.5px solid rgba(99, 102, 241, 0.2);
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
   border-radius: 16px;
-  padding: 20px;
-  box-shadow: var(--glow-shadow-sm);
+  padding: 24px;
+  box-shadow: 0 10px 30px -5px rgba(99, 102, 241, 0.04), 0 2px 10px -3px rgba(0, 0, 0, 0.02);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;
   flex-direction: column;
+  position: relative;
+  overflow: hidden;
   box-sizing: border-box;
 }
 
 .flow-account-card:hover {
-  border-color: rgba(99, 102, 241, 0.18);
-  background: rgba(99, 102, 241, 0.04);
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px -4px rgba(99, 102, 241, 0.08), 0 4px 12px -6px rgba(0, 0, 0, 0.04);
+  transform: translateY(-4px);
+  border-top-color: rgba(99, 102, 241, 0.58);
+  box-shadow: 0 16px 36px -4px rgba(99, 102, 241, 0.14), 0 4px 16px -2px rgba(99, 102, 241, 0.04);
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 
 /* 平台微徽章 */
@@ -809,8 +994,8 @@ onMounted(async () => {
 }
 
 .badge-icon {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   object-fit: contain;
 }
 
@@ -821,23 +1006,23 @@ onMounted(async () => {
 .badge-zhihu { background: rgba(0, 102, 255, 0.08); color: #0066ff; }
 .badge-toutiao { background: rgba(240, 65, 52, 0.08); color: #f04134; }
 
-/* 状态灯与文字 */
+/* 健康状态 */
 .status-indicator {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .status-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   display: inline-block;
 }
 
 .dot-active {
   background-color: #10b981;
-  box-shadow: 0 0 8px #10b981;
+  box-shadow: 0 0 6px #10b981;
   animation: pulse 2s infinite;
 }
 
@@ -851,62 +1036,102 @@ onMounted(async () => {
 
 .status-text {
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
+  color: #64748b;
+  margin-right: 4px;
+}
+
+.card-more-action {
+  font-size: 10px;
+  color: #cbd5e1;
+  cursor: pointer;
+  letter-spacing: -0.5px;
+  transition: color 0.2s ease;
+}
+
+.card-more-action:hover {
   color: #64748b;
 }
 
 /* 个人信息 */
 .card-profile {
   display: flex;
-  gap: 12px;
+  gap: 16px;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
+}
+
+.profile-avatar-wrapper {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.profile-avatar-wrapper::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, transparent 70%);
+  z-index: 0;
+  pointer-events: none;
 }
 
 .profile-avatar {
-  border: 2px solid rgba(255, 255, 255, 0.8);
-  box-shadow: var(--glow-shadow-sm);
+  position: relative;
+  z-index: 1;
+  border: 2px solid #ffffff;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.12);
 }
 
 .profile-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  overflow: hidden;
+  gap: 4px;
+  min-width: 0;
   flex: 1;
 }
 
 .profile-name {
-  font-size: 15px;
-  font-weight: 700;
+  font-size: 17px;
+  font-weight: 800;
   color: #0f172a;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.profile-remark {
-  font-size: 12px;
-  color: #64748b;
-  font-weight: 500;
-}
-
-.profile-id {
+.profile-id-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   color: #94a3b8;
   font-family: monospace;
 }
 
-/* 数据展示栏 */
+.copy-id-btn {
+  cursor: pointer;
+  color: #94a3b8;
+  display: inline-flex;
+  align-items: center;
+  transition: color 0.2s ease;
+}
+
+.copy-id-btn:hover {
+  color: #6366f1;
+}
+
+/* 数据展示三栏 */
 .card-stats {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: rgba(0, 0, 0, 0.015);
-  border-radius: 10px;
-  padding: 10px 14px;
-  margin-bottom: 16px;
-  border: 1px solid rgba(0, 0, 0, 0.02);
+  background: rgba(99, 102, 241, 0.015);
+  border: 1px solid rgba(99, 102, 241, 0.04);
+  border-radius: 12px;
+  padding: 12px 18px;
+  margin-bottom: 20px;
 }
 
 .stat-item {
@@ -917,118 +1142,196 @@ onMounted(async () => {
 }
 
 .stat-num {
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 800;
   color: #0f172a;
-  letter-spacing: -0.02em;
+  line-height: 1.1;
 }
 
 .stat-label {
   font-size: 11px;
   color: #94a3b8;
   font-weight: 600;
-  margin-top: 1px;
+  margin-top: 3px;
 }
 
 .stat-divider {
   width: 1px;
-  height: 24px;
-  background-color: rgba(0, 0, 0, 0.05);
+  height: 20px;
+  background-color: rgba(99, 102, 241, 0.08);
 }
 
-/* 标签区 */
-.card-tags {
+/* 标签行区 */
+.card-tags-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-bottom: 16px;
-  padding-bottom: 14px;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.04);
 }
 
-.tag-row {
+.tag-row-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.tag-row-left {
   display: flex;
   align-items: center;
-  gap: 8px;
-}
-
-.tag-label {
-  font-size: 12px;
+  gap: 6px;
   color: #94a3b8;
-  font-weight: 600;
-  min-width: 32px;
+  font-weight: 700;
 }
 
-.tag-group {
+.tag-row-svg {
+  color: #94a3b8;
+}
+
+.tag-row-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tag-pill-wrap {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 
-.tag-empty {
-  font-size: 12px;
+.category-pill {
+  background: rgba(99, 102, 241, 0.06);
+  color: #6366f1;
+  border: 1px solid rgba(99, 102, 241, 0.12);
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 10px;
+}
+
+.env-pill-val {
+  color: #10b981;
+  font-weight: 700;
+}
+
+.tag-empty-val {
   color: #cbd5e1;
   font-weight: 500;
 }
 
-.env-tag {
-  font-weight: 600;
-  border-radius: 6px;
+/* 向右小箭头 */
+.tag-row-arrow {
+  width: 4px;
+  height: 4px;
+  border-top: 1.5px solid #cbd5e1;
+  border-right: 1.5px solid #cbd5e1;
+  transform: rotate(45deg);
+  margin-left: 2px;
 }
 
-.category-tag {
-  background-color: rgba(99, 102, 241, 0.06) !important;
-  color: #6366f1 !important;
-  border: 1px solid rgba(99, 102, 241, 0.15) !important;
-  border-radius: 6px;
-  font-weight: 700;
-}
-
-/* 时间 */
-.card-time {
+/* 时间说明区 */
+.card-time-block {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.time-item-row {
+  display: flex;
+  align-items: center;
   font-size: 11px;
   color: #94a3b8;
-  margin-bottom: 16px;
-  font-weight: 500;
 }
 
-/* 操作面板 */
-.card-actions {
+.time-svg {
+  margin-right: 6px;
+}
+
+.time-svg.color-blue { color: #6366f1; }
+.time-svg.color-green { color: #10b981; }
+
+.time-lbl {
+  font-weight: 600;
+  color: #94a3b8;
+  min-width: 60px;
+}
+
+.time-val {
+  margin-left: auto;
+  font-family: monospace;
+  color: #64748b;
+}
+
+/* 底部操作按钮平铺胶囊 */
+.card-actions-pills {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  gap: 8px;
   margin-top: auto;
 }
 
-.card-actions :deep(.el-button) {
-  margin: 0 !important;
-  font-weight: 700 !important;
-  font-size: 12px !important;
-  padding: 4px 6px !important;
-  border-radius: 6px !important;
-  transition: all 0.2s ease !important;
+.action-pill {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 4px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  border: 1px solid transparent;
 }
 
-.card-actions :deep(.el-button--success:hover) {
-  color: #10b981 !important;
-  background-color: rgba(16, 185, 129, 0.06) !important;
+.pill-success {
+  background: transparent;
+  color: #10b981;
+  border-color: transparent;
+}
+.pill-success:hover {
+  background: rgba(16, 185, 129, 0.08);
+  color: #059669;
+  border-color: rgba(16, 185, 129, 0.12);
 }
 
-.card-actions :deep(.el-button--primary:hover) {
-  color: #6366f1 !important;
-  background-color: rgba(99, 102, 241, 0.06) !important;
+.pill-primary {
+  background: transparent;
+  color: #6366f1;
+  border-color: transparent;
+}
+.pill-primary:hover {
+  background: rgba(99, 102, 241, 0.08);
+  color: #4f46e5;
+  border-color: rgba(99, 102, 241, 0.12);
 }
 
-.card-actions :deep(.el-button--warning:hover) {
-  color: #e6a23c !important;
-  background-color: rgba(230, 162, 60, 0.06) !important;
+.pill-warning {
+  background: transparent;
+  color: #f97316;
+  border-color: transparent;
+}
+.pill-warning:hover {
+  background: rgba(249, 115, 22, 0.08);
+  color: #ea580c;
+  border-color: rgba(249, 115, 22, 0.12);
 }
 
-.card-actions :deep(.el-button--danger:hover) {
-  color: #f56c6c !important;
-  background-color: rgba(245, 108, 108, 0.06) !important;
+.pill-danger {
+  background: transparent;
+  color: #ef4444;
+  border-color: transparent;
+}
+.pill-danger:hover {
+  background: rgba(239, 68, 68, 0.08);
+  color: #dc2626;
+  border-color: rgba(239, 68, 68, 0.12);
 }
 
 @keyframes pulse {
@@ -1041,6 +1344,89 @@ onMounted(async () => {
   100% {
     box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
   }
+}
+
+/* ======== 3D 纸飞机立方体空态组件（对齐设计图） ======== */
+.empty-glow-box {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  box-sizing: border-box;
+}
+
+.empty-3d-scene {
+  position: relative;
+  width: 120px;
+  height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.empty-box-body {
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(56, 189, 248, 0.03) 100%);
+  border: 1px solid rgba(99, 102, 241, 0.12);
+  box-shadow: inset 0 2px 6px rgba(255, 255, 255, 0.6), 0 10px 24px -4px rgba(99, 102, 241, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  animation: floatScene 4s ease-in-out infinite;
+}
+
+.empty-airplane-svg {
+  color: #6366f1;
+  filter: drop-shadow(0 4px 8px rgba(99, 102, 241, 0.2));
+  transform: rotate(-15deg);
+}
+
+.empty-dust {
+  position: absolute;
+  font-size: 12px;
+  color: #6366f1;
+  opacity: 0.6;
+}
+
+.dust-1 {
+  top: 10px;
+  left: 15px;
+  animation: particleFloat 3s ease-in-out infinite alternate;
+}
+
+.dust-2 {
+  bottom: 15px;
+  right: 15px;
+  animation: particleFloat 3.5s ease-in-out infinite alternate-reverse;
+}
+
+@keyframes floatScene {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+@keyframes particleFloat {
+  0% { transform: translate(0, 0) scale(0.8); opacity: 0.3; }
+  100% { transform: translate(4px, -4px) scale(1.2); opacity: 0.8; }
+}
+
+.empty-main-hint {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 6px;
+}
+
+.empty-sub-hint {
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 500;
 }
 
 /* 分类管理列表样式 */

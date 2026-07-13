@@ -150,7 +150,30 @@ function newDraft() {
 
     <!-- 草稿卡片列表网格 -->
     <div v-loading="loading" class="draft-list">
-      <el-empty v-if="!loading && totalDraftsCount === 0" :image-size="100" description="暂无草稿" />
+      <!-- 高端美学自定义空状态 (Elegant Custom Empty State) -->
+      <div v-if="!loading && totalDraftsCount === 0" class="elegant-empty-container">
+        <div class="elegant-empty-visual">
+          <div class="elegant-empty-light"></div>
+          <div class="elegant-empty-icon-box">
+            <!-- 带羽翼的草稿文档描边图标 -->
+            <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" class="elegant-empty-icon">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+              <polyline points="10 9 9 9 8 9"/>
+            </svg>
+          </div>
+        </div>
+        <div class="elegant-empty-meta">
+          <h3 class="elegant-empty-title">草稿箱空空如也</h3>
+          <p class="elegant-empty-desc">在这里可以保存和管理您创作的图文、视频和文章草稿</p>
+          <button class="elegant-empty-action" @click="newDraft">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 5px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            立即创作
+          </button>
+        </div>
+      </div>
 
       <div v-for="draft in filteredDrafts" :key="draft.id" class="draft-card" :data-type="draft.contentType">
         <!-- 顶部 3D 拟态封面 -->
@@ -704,4 +727,135 @@ function newDraft() {
   box-shadow: 0 4px 10px rgba(239, 68, 68, 0.08) !important;
 }
 
+/* 高端空状态美学设计 */
+.elegant-empty-container {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  background: rgba(255, 255, 255, 0.4);
+  border: 1px dashed rgba(99, 102, 241, 0.15);
+  border-radius: 20px;
+  backdrop-filter: blur(10px);
+  text-align: center;
+  box-sizing: border-box;
+  margin: 20px 0;
+  transition: all 0.3s ease;
+}
+
+.elegant-empty-container:hover {
+  border-color: rgba(99, 102, 241, 0.3);
+  background: rgba(255, 255, 255, 0.6);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(99, 102, 241, 0.03);
+}
+
+.elegant-empty-visual {
+  position: relative;
+  width: 100px;
+  height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 24px;
+}
+
+.elegant-empty-light {
+  position: absolute;
+  width: 90px;
+  height: 90px;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, rgba(99, 102, 241, 0) 70%);
+  border-radius: 50%;
+  animation: pulse-light 3s infinite ease-in-out;
+}
+
+@keyframes pulse-light {
+  0% { transform: scale(0.9); opacity: 0.7; }
+  50% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(0.9); opacity: 0.7; }
+}
+
+.elegant-empty-icon-box {
+  width: 64px;
+  height: 64px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.8) 0%, rgba(255, 255, 255, 0.2) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 18px;
+  color: #6366f1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 10px 25px rgba(99, 102, 241, 0.08);
+  transform: rotate(-3deg);
+  transition: all 0.3s ease;
+}
+
+.elegant-empty-container:hover .elegant-empty-icon-box {
+  transform: rotate(3deg) scale(1.05);
+  color: #4f46e5;
+  box-shadow: 0 12px 30px rgba(99, 102, 241, 0.12);
+}
+
+.elegant-empty-icon {
+  stroke-dasharray: 80;
+  stroke-dashoffset: 0;
+  animation: draw-line 4s infinite alternate ease-in-out;
+}
+
+@keyframes draw-line {
+  0% { stroke-dashoffset: 0; }
+  50% { stroke-dashoffset: 20; }
+  100% { stroke-dashoffset: 0; }
+}
+
+.elegant-empty-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 320px;
+}
+
+.elegant-empty-title {
+  font-size: 15px;
+  font-weight: 800;
+  color: #1e293b;
+  margin: 0;
+  letter-spacing: 0.5px;
+}
+
+.elegant-empty-desc {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.elegant-empty-action {
+  margin-top: 14px;
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+  color: #ffffff;
+  border: none;
+  border-radius: 10px;
+  padding: 8px 18px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(79, 70, 229, 0.3);
+  display: flex;
+  align-items: center;
+  transition: all 0.25s ease;
+}
+
+.elegant-empty-action:hover {
+  background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+  transform: translateY(-1.5px);
+  box-shadow: 0 6px 18px rgba(79, 70, 229, 0.4);
+}
+
+.elegant-empty-action:active {
+  transform: translateY(0);
+}
 </style>

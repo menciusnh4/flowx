@@ -2,7 +2,10 @@
   <div class="log-panel">
     <div class="panel">
       <div class="header">
-        <h2 class="section-title">日志管理</h2>
+        <div class="title-section">
+          <h2 class="section-title">日志管理</h2>
+          <span class="section-subtitle">集中管理和查看系统日志</span>
+        </div>
         <div class="header-actions">
           <el-button size="small" @click="openLogDir">
             <el-icon><FolderOpened /></el-icon>
@@ -17,52 +20,79 @@
 
       <!-- 日志概览 -->
       <div class="config-card">
-        <div class="config-title">日志概览</div>
+        <div class="config-title-bar">
+          <div class="config-title-icon-wrap wrap-purple">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+          </div>
+          <div class="config-title">日志概览</div>
+        </div>
+        
         <div class="log-overview">
-          <div class="overview-item">
-            <div class="overview-label">主日志</div>
-            <div class="overview-value">{{ formatSize(logInfo.mainSize) }}</div>
-            <el-tooltip :content="logInfo.mainPath" placement="top" effect="dark" :show-after="100">
-              <div class="overview-path">{{ logInfo.mainPath }}</div>
-            </el-tooltip>
-          </div>
-          <div class="overview-item">
-            <div class="overview-label">发布日志</div>
-            <div class="overview-value">{{ formatSize(logInfo.publishSize) }}</div>
-            <el-tooltip :content="logInfo.publishPath" placement="top" effect="dark" :show-after="100">
-              <div class="overview-path">{{ logInfo.publishPath }}</div>
-            </el-tooltip>
-          </div>
-          <div class="overview-item">
-            <div class="overview-label">日志目录</div>
-            <div class="overview-value" @click="openLogDir">
-              {{ logInfo.logsDir ? '点击打开' : '-' }}
+          <div class="overview-item item-indigo">
+            <div class="overview-left">
+              <div class="overview-label">主日志</div>
+              <div class="overview-value">{{ formatSize(logInfo.mainSize) }}</div>
+              <el-tooltip :content="logInfo.mainPath" placement="top" effect="dark" :show-after="100">
+                <div class="overview-path">{{ logInfo.mainPath }}</div>
+              </el-tooltip>
             </div>
-            <el-tooltip :content="logInfo.logsDir" placement="top" effect="dark" :show-after="100">
-              <div class="overview-path">{{ logInfo.logsDir }}</div>
-            </el-tooltip>
+            <div class="overview-right-icon color-indigo">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            </div>
+          </div>
+          <div class="overview-item item-emerald">
+            <div class="overview-left">
+              <div class="overview-label">发布日志</div>
+              <div class="overview-value">{{ formatSize(logInfo.publishSize) }}</div>
+              <el-tooltip :content="logInfo.publishPath" placement="top" effect="dark" :show-after="100">
+                <div class="overview-path">{{ logInfo.publishPath }}</div>
+              </el-tooltip>
+            </div>
+            <div class="overview-right-icon color-emerald">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" x2="11" y1="2" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </div>
+          </div>
+          <div class="overview-item item-sky">
+            <div class="overview-left">
+              <div class="overview-label">日志目录</div>
+              <div class="overview-value" @click="openLogDir">
+                {{ logInfo.logsDir ? '点击打开' : '-' }}
+              </div>
+              <el-tooltip :content="logInfo.logsDir" placement="top" effect="dark" :show-after="100">
+                <div class="overview-path">{{ logInfo.logsDir }}</div>
+              </el-tooltip>
+            </div>
+            <div class="overview-right-icon color-sky">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            </div>
           </div>
         </div>
       </div>
 
       <!-- 日志查看 -->
       <div class="config-card">
-        <div class="config-title">
-          日志查看
-          <span style="margin-left: 12px; font-size: 12px; font-weight: normal; color: #909399;">
-            显示最新 {{ lineLimit }} 行
-          </span>
+        <div class="config-title-bar">
+          <div class="config-title-icon-wrap wrap-purple">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </div>
+          <div class="config-title">
+            日志查看
+            <span class="config-title-sub">显示最新 {{ lineLimit }} 行</span>
+          </div>
         </div>
 
         <!-- 工具栏 -->
         <div class="log-toolbar">
-          <el-radio-group v-model="activeTab" size="small" @change="onTabChange">
+          <el-radio-group v-model="activeTab" size="small" @change="onTabChange" class="custom-tab-group">
             <el-radio-button value="publish">发布日志</el-radio-button>
             <el-radio-button value="main">主日志</el-radio-button>
           </el-radio-group>
 
           <div class="toolbar-right">
-            <el-select v-model="selectedDate" size="small" style="width: 140px; margin-right: 8px;" @change="loadLogs">
+            <el-select v-model="selectedDate" size="small" style="width: 170px; margin-right: 8px;" @change="loadLogs">
+              <template #prefix>
+                <el-icon><Calendar /></el-icon>
+              </template>
               <el-option
                 v-for="f in logFileList"
                 :key="f.date"
@@ -80,7 +110,7 @@
               v-model="searchKeyword"
               size="small"
               placeholder="搜索关键词..."
-              style="width: 200px; margin-right: 8px;"
+              style="width: 180px; margin-right: 8px;"
               clearable
               @keyup.enter="applyFilter"
               @clear="applyFilter"
@@ -112,7 +142,12 @@
 
       <!-- 使用说明 -->
       <div class="config-card">
-        <div class="config-title">使用说明</div>
+        <div class="config-title-bar">
+          <div class="config-title-icon-wrap wrap-purple">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          </div>
+          <div class="config-title">使用说明</div>
+        </div>
         <ul class="notice-list">
           <li>主日志记录应用运行时的所有常规日志，包括启动、错误、警告等信息</li>
           <li>发布日志记录一键发布流程的详细日志，包括每个平台的发布步骤和调试信息</li>
@@ -128,7 +163,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Refresh, Download, FolderOpened, Delete, Loading } from '@element-plus/icons-vue';
+import { Refresh, Download, FolderOpened, Delete, Loading, Calendar } from '@element-plus/icons-vue';
 import { electronApi } from '../utils/electron';
 
 const activeTab = ref<'publish' | 'main'>('publish');
@@ -349,11 +384,30 @@ onMounted(async () => {
   justify-content: space-between;
 }
 
+.title-section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-svg-icon {
+  width: 15px;
+  height: 15px;
+}
+
 .section-title {
   margin: 0;
   font-size: 18px;
   font-weight: 700;
   color: #0f172a;
+}
+
+.section-subtitle {
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 500;
+  margin-left: 8px;
+  margin-top: 2px;
 }
 
 .header-actions {
@@ -373,27 +427,27 @@ onMounted(async () => {
 }
 
 .header-actions :deep(.el-button:first-child) {
-  border: 1px solid rgba(99, 102, 241, 0.15) !important;
-  background: rgba(99, 102, 241, 0.03) !important;
-  color: #6366f1 !important;
+  border: 1px solid rgba(0, 0, 0, 0.05) !important;
+  background: #ffffff !important;
+  color: #475569 !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.01) !important;
 }
 
 .header-actions :deep(.el-button:first-child:hover) {
-  background: #6366f1 !important;
-  color: #ffffff !important;
-  border-color: #6366f1 !important;
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2) !important;
+  border-color: rgba(99, 102, 241, 0.2) !important;
+  background: rgba(99, 102, 241, 0.03) !important;
+  color: #6366f1 !important;
 }
 
 .header-actions :deep(.el-button--primary) {
   background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
   border: none !important;
-  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.25) !important;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.2) !important;
 }
 
 .header-actions :deep(.el-button--primary:hover) {
   transform: translateY(-1.5px);
-  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4) !important;
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.35) !important;
 }
 
 /* ======== 配置卡片 ======== */
@@ -406,13 +460,43 @@ onMounted(async () => {
   box-sizing: border-box;
 }
 
+.config-title-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+.config-title-icon-wrap {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wrap-purple {
+  background: rgba(99, 102, 241, 0.08);
+  color: #6366f1;
+}
+
 .config-title {
   font-size: 15px;
   font-weight: 700;
   color: #0f172a;
-  margin-bottom: 20px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.config-title-sub {
+  font-size: 12px;
+  font-weight: normal;
+  color: #94a3b8;
+  margin-left: 8px;
 }
 
 /* ======== 日志概览 ======== */
@@ -423,10 +507,13 @@ onMounted(async () => {
 }
 
 .overview-item {
-  padding: 18px 22px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
   border-radius: 14px;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.01);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.015);
   box-sizing: border-box;
   min-width: 0;
 }
@@ -435,31 +522,73 @@ onMounted(async () => {
   transform: translateY(-3px);
 }
 
-.overview-item:first-child {
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.04) 0%, #ffffff 100%);
-  border: 1px solid rgba(99, 102, 241, 0.12);
-}
-.overview-item:first-child:hover {
-  border-color: rgba(99, 102, 241, 0.25);
-  box-shadow: 0 10px 24px -4px rgba(99, 102, 241, 0.1);
+.overview-left {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
 }
 
-.overview-item:nth-child(2) {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.04) 0%, #ffffff 100%);
-  border: 1px solid rgba(16, 185, 129, 0.12);
-}
-.overview-item:nth-child(2):hover {
-  border-color: rgba(16, 185, 129, 0.25);
-  box-shadow: 0 10px 24px -4px rgba(16, 185, 129, 0.1);
+.overview-right-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: 12px;
 }
 
-.overview-item:nth-child(3) {
-  background: linear-gradient(135deg, rgba(14, 165, 233, 0.04) 0%, #ffffff 100%);
-  border: 1px solid rgba(14, 165, 233, 0.12);
+.overview-right-icon svg {
+  width: 18px;
+  height: 18px;
 }
-.overview-item:nth-child(3):hover {
-  border-color: rgba(14, 165, 233, 0.25);
-  box-shadow: 0 10px 24px -4px rgba(14, 165, 233, 0.1);
+
+/* 左侧彩条和定制色彩 */
+.item-indigo {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.03) 0%, #ffffff 100%);
+  border: 1px solid rgba(99, 102, 241, 0.08) !important;
+  border-left: 4px solid #6366f1 !important;
+}
+.item-indigo:hover {
+  border-color: rgba(99, 102, 241, 0.2) !important;
+  border-left-color: #6366f1 !important;
+  box-shadow: 0 10px 24px -4px rgba(99, 102, 241, 0.08);
+}
+.color-indigo {
+  background: rgba(99, 102, 241, 0.08);
+  color: #6366f1;
+}
+
+.item-emerald {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.03) 0%, #ffffff 100%);
+  border: 1px solid rgba(16, 185, 129, 0.08) !important;
+  border-left: 4px solid #10b981 !important;
+}
+.item-emerald:hover {
+  border-color: rgba(16, 185, 129, 0.2) !important;
+  border-left-color: #10b981 !important;
+  box-shadow: 0 10px 24px -4px rgba(16, 185, 129, 0.08);
+}
+.color-emerald {
+  background: rgba(16, 185, 129, 0.08);
+  color: #10b981;
+}
+
+.item-sky {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.03) 0%, #ffffff 100%);
+  border: 1px solid rgba(14, 165, 233, 0.08) !important;
+  border-left: 4px solid #0ea5e9 !important;
+}
+.item-sky:hover {
+  border-color: rgba(14, 165, 233, 0.2) !important;
+  border-left-color: #0ea5e9 !important;
+  box-shadow: 0 10px 24px -4px rgba(14, 165, 233, 0.08);
+}
+.color-sky {
+  background: rgba(14, 165, 233, 0.08);
+  color: #0ea5e9;
 }
 
 .overview-label {
@@ -479,12 +608,13 @@ onMounted(async () => {
   line-height: 1.1;
 }
 
-.overview-item:nth-child(3) .overview-value {
+.item-sky .overview-value {
   color: #6366f1;
   font-weight: 800;
   transition: all 0.25s ease;
+  cursor: pointer;
 }
-.overview-item:nth-child(3) .overview-value:hover {
+.item-sky .overview-value:hover {
   color: #4f46e5;
   text-decoration: underline;
 }
@@ -514,16 +644,46 @@ onMounted(async () => {
   gap: 8px;
 }
 
-/* 升级 Element 输入选单圆角 */
-.toolbar-right :deep(.el-input__wrapper) {
+/* 自定义药丸胶囊 Radio-Tabs */
+.custom-tab-group :deep(.el-radio-button__inner) {
+  border-radius: 18px !important;
+  border: 1px solid rgba(0, 0, 0, 0.04) !important;
+  background: #ffffff !important;
+  color: #64748b !important;
+  font-weight: 700 !important;
+  padding: 8px 16px !important;
+  margin-right: 6px;
+  box-shadow: none !important;
+  transition: all 0.25s ease !important;
+}
+
+.custom-tab-group :deep(.el-radio-button.is-active .el-radio-button__inner) {
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
+  border-color: transparent !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25) !important;
+}
+
+.custom-tab-group :deep(.el-radio-button__original-radio:focus + .el-radio-button__inner) {
+  box-shadow: none !important;
+}
+
+/* 升级 Element 输入选单与下拉框圆角 */
+.toolbar-right :deep(.el-input__wrapper),
+.toolbar-right :deep(.el-select__wrapper) {
   border-radius: 8px !important;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.04) inset !important;
   background: #ffffff !important;
   padding: 4px 10px !important;
+  height: 28px !important;
+  line-height: 28px !important;
+  box-sizing: border-box !important;
 }
 
 .toolbar-right :deep(.el-input__wrapper.is-focus),
-.toolbar-right :deep(.el-input__wrapper:hover) {
+.toolbar-right :deep(.el-input__wrapper:hover),
+.toolbar-right :deep(.el-select__wrapper.is-focus),
+.toolbar-right :deep(.el-select__wrapper:hover) {
   box-shadow: 0 0 0 1px #6366f1 inset, 0 0 0 4px rgba(99, 102, 241, 0.12) !important;
 }
 
