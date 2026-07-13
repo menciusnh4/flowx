@@ -53,6 +53,13 @@ const tagsRaw = ref((props.initialValue?.tags || []).join(' '))
 const submitting = ref(false)
 const contentTextareaRef = ref<InstanceType<typeof ElInput> | null>(null)
 
+// 切换发布类型时清空素材文件
+watch(contentType, () => {
+  mediaFiles.value = []
+  coverImage.value = ''
+  notifyChange()
+})
+
 // 监听表单变化，向外通知
 function notifyChange() {
   emit('change', {
