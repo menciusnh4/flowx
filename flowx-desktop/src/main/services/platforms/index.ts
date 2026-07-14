@@ -38,4 +38,5 @@ import './kuaishou';
 import './wechat_channels';
 import './zhihu';
 import './toutiao';
+import './wechat_official';
 // 👇 新增平台：在这里加一行 import './<platformKey>';

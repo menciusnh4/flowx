@@ -74,6 +74,7 @@ import iconDouyin from '../assets/douyin.svg';
 import iconKuaishou from '../assets/kuaishou.svg';
 import iconBilibili from '../assets/bilibili.svg';
 import iconWechatChannels from '../assets/wechat_channels.svg';
+import iconWechatOfficial from '../assets/wechat_official.svg';
 import iconWeibo from '../assets/weibo.png';
 import iconZhihu from '../assets/zhihu.png';
 import iconToutiao from '../assets/toutiao.png';
@@ -84,6 +85,7 @@ const PLATFORM_ICONS: Record<string, string> = {
   kuaishou: iconKuaishou,
   bilibili: iconBilibili,
   wechat_channels: iconWechatChannels,
+  wechat_official: iconWechatOfficial,
   weibo: iconWeibo,
   zhihu: iconZhihu,
   toutiao: iconToutiao,
