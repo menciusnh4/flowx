@@ -45,9 +45,24 @@ function contentTypeIcon(type: string): string {
   return map[type] || '📄'
 }
 
-// 编辑草稿 - 跳转到发布页并加载草稿
+// 正文摘要（取 formData.content 前 120 字）
+function excerpt(draft: PublishDraft): string {
+  const content = (draft.formData as any)?.content
+  return content ? String(content).slice(0, 120) : '暂无内容描述'
+}
+
+// 素材数量
+function mediaCount(draft: PublishDraft): number {
+  return (draft.formData as any)?.mediaFiles?.length || 0
+}
+
+// 编辑草稿 - 跳转到对应类型的发布页并加载草稿
 function editDraft(draft: PublishDraft) {
-  router.push({ path: '/publish', query: { draftId: draft.id } })
+  const type =
+    draft.contentType === 'image' || draft.contentType === 'article'
+      ? draft.contentType
+      : 'video'
+  router.push({ path: `/publish/${type}`, query: { draftId: draft.id } })
 }
 
 // 在浏览器中打开（如果有 sourceUrl）
@@ -76,160 +91,276 @@ async function deleteDraft(draft: PublishDraft) {
 
 // 新建草稿
 function newDraft() {
-  router.push('/publish')
+  router.push('/publish/video')
 }
 </script>
 
 <template>
   <div class="draft-box-page">
-    <div class="page-header">
-      <h2>草稿箱</h2>
-      <el-button type="primary" @click="newDraft">新建</el-button>
+    <!-- 头部：草稿计数 + 新建 -->
+    <div class="db-header">
+      <div class="db-stats">
+        <span class="db-stat"><i class="sdot indigo"></i><b>{{ draftStore.drafts.length }}</b> 条草稿</span>
+      </div>
+      <button class="btn primary" @click="newDraft">＋ 新建</button>
     </div>
 
-    <el-tabs v-model="activeTab" class="draft-tabs">
-      <el-tab-pane label="全部" name="all" />
-      <el-tab-pane label="视频" name="video" />
-      <el-tab-pane label="图文" name="image" />
-      <el-tab-pane label="文章" name="article" />
-    </el-tabs>
+    <!-- 类型筛选（原型 pill） -->
+    <div class="db-filters">
+      <button class="pill" :class="{ active: activeTab === 'all' }" @click="activeTab = 'all'">全部</button>
+      <button class="pill" :class="{ active: activeTab === 'video' }" @click="activeTab = 'video'">视频</button>
+      <button class="pill" :class="{ active: activeTab === 'image' }" @click="activeTab = 'image'">图文</button>
+      <button class="pill" :class="{ active: activeTab === 'article' }" @click="activeTab = 'article'">文章</button>
+    </div>
 
-    <div v-loading="loading" class="draft-list">
-      <el-empty v-if="!loading && filteredDrafts.length === 0" description="暂无草稿" />
-
-      <div v-for="draft in filteredDrafts" :key="draft.id" class="draft-card">
-        <div class="draft-main" @click="editDraft(draft)">
-          <div class="draft-header">
-            <span class="type-tag">{{ contentTypeIcon(draft.contentType) }} {{ contentTypeLabel(draft.contentType) }}</span>
-            <span class="draft-time">{{ formatTime(draft.updatedAt) }}</span>
-          </div>
-          <h3 class="draft-title">{{ draft.title || '（无标题）' }}</h3>
-          <p class="draft-excerpt">
-            {{ (draft.formData as any)?.content?.slice(0, 120) || '暂无内容描述' }}
-          </p>
-          <div class="draft-meta">
-            <span v-if="draft.sourceUrl" class="source-tag" @click.stop="openInBrowser(draft)">
-              🔗 来源链接
-            </span>
-            <span v-if="(draft.formData as any)?.mediaFiles?.length">
-              📎 {{ (draft.formData as any).mediaFiles.length }} 个素材
-            </span>
-          </div>
-        </div>
-        <div class="draft-actions">
-          <el-button size="small" @click="editDraft(draft)">编辑</el-button>
-          <el-button size="small" type="danger" plain @click="deleteDraft(draft)">删除</el-button>
-        </div>
+    <div v-loading="loading" class="draft-grid">
+      <div v-if="!loading && filteredDrafts.length === 0" class="empty">
+        <div class="eic">📭</div>
+        <p>暂无草稿</p>
       </div>
+
+      <article v-for="draft in filteredDrafts" :key="draft.id" class="dcard">
+        <div class="dm" @click="editDraft(draft)">
+          <div class="dh">
+            <span class="chip">{{ contentTypeIcon(draft.contentType) }} {{ contentTypeLabel(draft.contentType) }}</span>
+            <span class="dtime">{{ formatTime(draft.updatedAt) }}</span>
+          </div>
+          <h3 class="dt">{{ draft.title || '（无标题）' }}</h3>
+          <p class="dex">{{ excerpt(draft) }}</p>
+          <div class="dmeta">
+            <span v-if="draft.sourceUrl" class="src" @click.stop="openInBrowser(draft)">🔗 来源链接</span>
+            <span v-if="mediaCount(draft)">📎 {{ mediaCount(draft) }} 个素材</span>
+          </div>
+        </div>
+        <div class="da">
+          <button class="btn sm" @click="editDraft(draft)">编辑</button>
+          <button class="btn sm danger" @click="deleteDraft(draft)">删除</button>
+        </div>
+      </article>
     </div>
   </div>
 </template>
 
 <style scoped>
 .draft-box-page {
-  padding: 20px 24px;
+  padding: 0;
   height: 100%;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
 }
-.page-header {
+/* 头部 */
+.db-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.db-stats {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.db-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.db-stat b {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+}
+.sdot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.sdot.indigo { background: var(--brand-indigo); }
+
+/* 通用按钮（对齐原型 .btn） */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 11px;
+  font-weight: 700;
+  font-size: 13px;
+  font-family: inherit;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--slate);
+  cursor: pointer;
+  transition: all var(--t-fast) var(--ease);
+  white-space: nowrap;
+}
+.btn:hover {
+  border-color: var(--brand-indigo);
+  color: var(--brand-indigo);
+}
+.btn.primary {
+  background: var(--brand-grad);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: var(--shadow-md);
+}
+.btn.primary:hover {
+  filter: brightness(1.05);
+  color: #fff;
+}
+.btn.sm {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+  border-radius: 9px;
+}
+.btn.danger {
+  color: var(--danger);
+}
+.btn.danger:hover {
+  border-color: rgba(244, 63, 94, 0.4);
+  color: var(--danger);
+  background: rgba(244, 63, 94, 0.05);
+}
+/* 筛选 pill */
+.db-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 16px;
 }
-.page-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: #303133;
+.pill {
+  padding: 7px 14px;
+  border-radius: 20px;
+  font-size: 12.5px;
+  font-weight: 700;
+  font-family: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--slate);
+  cursor: pointer;
+  transition: all var(--t-fast) var(--ease);
 }
-.draft-tabs {
-  margin-bottom: 16px;
+.pill:hover {
+  border-color: var(--brand-indigo);
+  color: var(--brand-indigo);
 }
-.draft-list {
+.pill.active {
+  background: var(--brand-grad);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+/* 网格 */
+.draft-grid {
   flex: 1;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
   gap: 16px;
   align-content: start;
+  padding-bottom: 8px;
 }
-.draft-card {
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
+/* 卡片 */
+.dcard {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
   overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: all var(--t) var(--ease);
   display: flex;
   flex-direction: column;
-  transition: box-shadow 0.2s, border-color 0.2s;
 }
-.draft-card:hover {
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
-  border-color: #d0d4dc;
+.dcard:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--line-strong);
+  transform: translateY(-2px);
 }
-.draft-main {
-  padding: 16px;
-  cursor: pointer;
+.dm {
+  padding: 15px;
   flex: 1;
+  cursor: pointer;
 }
-.draft-header {
+.dh {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
+  margin-bottom: 9px;
 }
-.type-tag {
-  font-size: 12px;
-  color: #606266;
-  background: #f5f7fa;
-  padding: 2px 8px;
-  border-radius: 4px;
+.chip {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 8px;
+  background: var(--brand-grad-soft);
+  color: var(--brand-indigo);
 }
-.draft-time {
-  font-size: 12px;
-  color: #909399;
+.dtime {
+  font-size: 11.5px;
+  color: var(--faint);
 }
-.draft-title {
+.dt {
   font-size: 15px;
-  font-weight: 600;
-  color: #303133;
-  margin: 0 0 8px;
-  line-height: 1.4;
+  font-weight: 800;
+  color: var(--ink);
+  margin: 0 0 7px;
+  line-height: 1.35;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.draft-excerpt {
-  font-size: 13px;
-  color: #606266;
-  line-height: 1.5;
-  margin: 0 0 10px;
+.dex {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.55;
+  margin: 0 0 9px;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.draft-meta {
+.dmeta {
   display: flex;
   gap: 12px;
-  font-size: 12px;
-  color: #909399;
+  font-size: 11.5px;
+  color: var(--faint);
 }
-.source-tag {
-  color: #409eff;
+.dmeta .src {
+  color: var(--brand-indigo);
   cursor: pointer;
+  font-weight: 600;
 }
-.source-tag:hover {
+.dmeta .src:hover {
   text-decoration: underline;
 }
-.draft-actions {
+.da {
   display: flex;
-  border-top: 1px solid #f0f2f5;
-  padding: 10px 16px;
-  gap: 8px;
+  gap: 7px;
+  padding: 10px 15px;
+  border-top: 1px solid var(--line);
   justify-content: flex-end;
+}
+/* 空状态 */
+.empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 50px 20px;
+  color: var(--faint);
+}
+.empty .eic {
+  font-size: 46px;
+  margin-bottom: 12px;
+  opacity: 0.6;
 }
 </style>

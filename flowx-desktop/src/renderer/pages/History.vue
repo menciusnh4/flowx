@@ -842,142 +842,121 @@ onMounted(async () => {
 <style scoped>
 .empty-hint {
   text-align: center;
-  color: #909399;
+  color: var(--muted);
   padding: 60px 0;
   font-size: 14px;
 }
-
 .pagination-wrapper {
   display: flex;
   justify-content: center;
   margin-top: 20px;
   padding: 16px 0;
 }
-
 .detail-content {
   max-height: 60vh;
   overflow-y: auto;
 }
-
 .detail-section {
   margin-top: 16px;
 }
-
 .detail-section-title {
   font-weight: 600;
   font-size: 14px;
-  color: #303133;
+  color: var(--ink);
   margin-bottom: 8px;
   padding-bottom: 6px;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--line);
 }
-
 .content-preview {
-  background: #f5f7fa;
-  border-radius: 4px;
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
   padding: 12px;
   font-size: 13px;
-  color: #606266;
+  color: var(--slate);
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 120px;
   overflow-y: auto;
+  border: 1px solid var(--line);
 }
-
 .log-container {
   background: #1e1e1e;
-  border-radius: 4px;
+  border-radius: var(--r-sm);
   padding: 10px;
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 12px;
   max-height: 260px;
   overflow-y: auto;
 }
-
 .log-line {
   line-height: 1.6;
   word-break: break-all;
 }
-
 .log-time {
   color: #888;
   margin-right: 6px;
 }
-
 .log-level {
   margin-right: 4px;
 }
-
 .log-info .log-level { color: #4fc3f7; }
 .log-warn .log-level { color: #ffb74d; }
 .log-error .log-level { color: #ef5350; }
 .log-debug .log-level { color: #888; }
-
 .log-platform {
   color: #81c784;
   margin-right: 4px;
 }
-
 .log-account {
   color: #ba68c8;
   margin-right: 4px;
 }
-
 .log-stage {
   color: #ffd54f;
   margin-right: 4px;
 }
-
 .log-msg {
   color: #e0e0e0;
 }
-
 .log-error .log-msg {
   color: #ef9a9a;
 }
-
-/* 编辑重发表单样式 */
 .edit-form {
   padding: 0 8px;
 }
-
 .edit-file-list {
   max-height: 160px;
   overflow-y: auto;
-  background: #fafafa;
-  border-radius: 4px;
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
   padding: 8px;
+  border: 1px solid var(--line);
 }
-
 .edit-file-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 4px 8px;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--line);
 }
-
 .edit-file-item:last-child {
   border-bottom: none;
 }
-
 .edit-file-item .file-name {
   font-size: 12px;
-  color: #606266;
+  color: var(--slate);
   word-break: break-all;
   flex: 1;
   margin-right: 8px;
 }
-
-/* 测试结果详情 */
 .test-results-detail {
   margin-top: 16px;
 }
 .test-result-item {
-  background: #fdf6ec;
+  background: #fffbe6;
   border: 1px solid #faecd8;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   padding: 12px 16px;
   margin-bottom: 10px;
 }
@@ -992,7 +971,7 @@ onMounted(async () => {
 }
 .test-result-account {
   font-weight: 500;
-  color: #606266;
+  color: var(--slate);
   font-size: 13px;
 }
 .test-result-grid {
@@ -1007,24 +986,24 @@ onMounted(async () => {
   gap: 4px;
   padding: 8px 12px;
   background: #fff;
-  border-radius: 4px;
+  border-radius: var(--r-sm);
   border: 1px solid #f0d9a8;
 }
 .test-field.filled {
-  border-color: #67c23a;
+  border-color: var(--success);
   background: #f0f9eb;
 }
 .test-field-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--muted);
 }
 .test-field-value {
   font-size: 13px;
   font-weight: 500;
-  color: #606266;
+  color: var(--slate);
 }
 .test-field.filled .test-field-value {
-  color: #67c23a;
+  color: var(--success);
 }
 .test-result-note {
   font-size: 12px;
@@ -1032,6 +1011,6 @@ onMounted(async () => {
   margin-top: 8px;
   padding: 6px 10px;
   background: #fffbe6;
-  border-radius: 4px;
+  border-radius: var(--r-sm);
 }
 </style>

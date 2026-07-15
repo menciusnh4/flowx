@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FlowX 界面原型 — 对齐 main 分支最新功能</title>
+<style>
+/* ============ Design Tokens（对齐 FlowX 真实品牌：靛蓝 #6366F1 → 天蓝 #38BDF8）============ */
+:root{
+  --indigo:#6366f1; --indigo-600:#4f46e5; --sky:#38bdf8; --sky-600:#0ea5e9;
+  --ink:#0f172a; --ink-2:#1e293b; --slate:#475569; --muted:#64748b; --faint:#94a3b8;
+  --line:rgba(15,23,42,.08); --line-soft:rgba(15,23,42,.05);
+  --glass:rgba(255,255,255,.85); --glass-strong:#fff;
+  --bg:#f3f5fb;
+  --shadow-sm:0 2px 10px rgba(99,102,241,.06);
+  --shadow-md:0 10px 26px -8px rgba(99,102,241,.16);
+  --shadow-lg:0 22px 44px -14px rgba(99,102,241,.24);
+  --ok:#10b981; --warn:#f59e0b; --danger:#f43f5e; --info:#64748b; --blue:#3b82f6;
+  --p-douyin:#06b6d4; --p-xhs:#ff4d4f; --p-kuaishou:#f97316; --p-wechat:#10b981; --p-zhihu:#2563eb; --p-toutiao:#ef4444;
+  --r-lg:16px; --r-md:12px; --r-sm:9px;
+  --ease:cubic-bezier(.16,1,.3,1);
+  --font:'Plus Jakarta Sans','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--font);background:var(--bg);color:var(--ink-2);-webkit-font-smoothing:antialiased;font-size:14px;line-height:1.5}
+button{font-family:inherit;cursor:pointer;border:none;background:none}
+::selection{background:rgba(99,102,241,.2)}
+a{color:var(--indigo);text-decoration:none}
+
+/* ============ 外壳：左侧圆润侧边栏 ============ */
+.app{display:flex;flex-direction:row;height:100vh;overflow:hidden}
+.sidenav{width:250px;flex-shrink:0;display:flex;flex-direction:column;padding:20px 14px;gap:4px;
+  background:var(--glass);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+  border-right:1px solid var(--line);z-index:40}
+.snav-logo{display:flex;align-items:center;gap:12px;padding:4px 12px 18px}
+.snav-logo .mark{width:40px;height:40px;border-radius:13px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  font-weight:800;font-size:20px;color:#fff;background:linear-gradient(135deg,var(--indigo),var(--sky));box-shadow:var(--shadow-md)}
+.snav-logo .ln1{font-size:18px;font-weight:800;letter-spacing:-.02em;color:var(--ink);line-height:1.1}
+.snav-logo .ln2{font-size:10.5px;color:var(--faint);font-weight:600;margin-top:2px}
+.snav-menu{flex:1;display:flex;flex-direction:column;gap:3px;overflow-y:auto;padding-right:2px;margin-top:4px}
+.snav-menu::-webkit-scrollbar{width:6px}.snav-menu::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+.nav-group{display:flex;flex-direction:column;gap:3px;margin-top:6px}
+.nav-item{display:flex;align-items:center;gap:11px;width:100%;height:44px;padding:0 13px;border-radius:13px;
+  color:var(--slate);font-weight:600;font-size:13.5px;text-align:left;transition:all .2s var(--ease);position:relative}
+.nav-item .ic{font-size:17px;width:20px;text-align:center;flex-shrink:0}
+.nav-item .label{flex:1}
+.nav-item .chev{font-size:10px;color:var(--faint);transition:transform .25s var(--ease)}
+.nav-parent.open .chev{transform:rotate(180deg)}
+.nav-item:hover{background:rgba(99,102,241,.07);color:var(--indigo)}
+.nav-item.active{background:linear-gradient(135deg,rgba(99,102,241,.15),rgba(56,189,248,.06));color:var(--indigo);box-shadow:var(--shadow-sm)}
+.nav-item.active::before{content:"";position:absolute;left:-14px;top:50%;transform:translateY(-50%);width:4px;height:22px;border-radius:0 4px 4px 0;
+  background:linear-gradient(135deg,var(--indigo),var(--sky))}
+.nav-sub{display:none;flex-direction:column;gap:2px;padding:3px 0 4px 33px}
+.nav-sub.open{display:flex;animation:fade .22s var(--ease)}
+.nav-item.sub{height:38px;font-size:12.5px;font-weight:600;color:var(--muted);padding-left:12px}
+.nav-item.sub::before{display:none}
+.nav-item.sub:hover{background:rgba(99,102,241,.06)}
+.nav-item.sub.active{color:var(--indigo);background:rgba(99,102,241,.09)}
+.snav-foot{display:flex;flex-direction:column;gap:10px;padding-top:14px;margin-top:4px;border-top:1px solid var(--line-soft)}
+.snav-user{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:13px;background:rgba(99,102,241,.07);font-weight:700;font-size:13px;color:var(--ink-2)}
+.snav-user .av{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--indigo),var(--sky));color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.snav-ver{font-size:11px;color:var(--faint);font-weight:600;text-align:center}
+
+/* ============ 右侧：精简顶栏 ============ */
+.rightcol{flex:1;display:flex;flex-direction:column;min-width:0}
+.topbar{height:62px;flex-shrink:0;display:flex;align-items:center;gap:18px;padding:0 26px;
+  background:var(--glass);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+  border-bottom:1px solid var(--line);z-index:30}
+.top-title{font-size:16px;font-weight:800;color:var(--ink);letter-spacing:-.01em;flex-shrink:0}
+.top-search{position:relative;flex:1;max-width:400px;margin-left:auto}
+.top-search::before{content:"🔍";position:absolute;left:13px;top:50%;transform:translateY(-50%);font-size:13px;opacity:.45}
+.top-search input{width:100%;height:40px;padding:0 14px 0 38px;border:1px solid var(--line);border-radius:12px;font-size:13px;
+  background:#fff;outline:none;font-family:inherit;color:var(--ink-2);transition:all .2s var(--ease)}
+.top-search input:focus{border-color:var(--indigo);box-shadow:0 0 0 3px rgba(99,102,241,.13)}
+.win-dots{display:flex;gap:8px;padding-left:4px;flex-shrink:0}
+.win-dots span{width:12px;height:12px;border-radius:50%}
+.win-dots .r{background:#ff5f57}.win-dots .y{background:#febc2e}.win-dots .g{background:#28c840}
+
+.main{flex:1;overflow-y:auto;padding:26px 30px 48px}
+.view{display:none;animation:fade .28s var(--ease)}
+.view.active{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* ============ 通用：面板 / 标题 / 按钮 ============ */
+.panel{background:var(--glass-strong);border:1px solid var(--line);border-radius:var(--r-lg);padding:20px 22px;margin-bottom:16px;box-shadow:var(--shadow-sm)}
+.sec-title{font-size:17px;font-weight:800;color:var(--ink);letter-spacing:-.01em;margin:0 0 4px}
+.sec-sub{font-size:12.5px;color:var(--muted);margin-bottom:16px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+.btn{display:inline-flex;align-items:center;gap:7px;height:38px;padding:0 16px;border-radius:11px;font-weight:700;font-size:13px;
+  background:#fff;border:1px solid var(--line);color:var(--ink-2);transition:all .2s var(--ease)}
+.btn:hover{border-color:rgba(99,102,241,.4);color:var(--indigo);box-shadow:var(--shadow-sm)}
+.btn.primary{background:linear-gradient(135deg,var(--indigo),var(--indigo-600));color:#fff;border-color:transparent;box-shadow:var(--shadow-md)}
+.btn.primary:hover{filter:brightness(1.05);color:#fff}
+.btn.ghost{background:transparent}
+.btn.sm{height:32px;padding:0 12px;font-size:12px;border-radius:9px}
+.btn.danger{color:var(--danger)}
+.btn.danger:hover{border-color:rgba(244,63,94,.4);color:var(--danger);background:rgba(244,63,94,.05)}
+.btn.plain{border-color:rgba(99,102,241,.3);color:var(--indigo)}
+.tag{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11.5px;font-weight:700}
+.tag.ok{background:rgba(16,185,129,.12);color:#0f9d6b}
+.tag.warn{background:rgba(245,158,11,.14);color:#b97a09}
+.tag.danger{background:rgba(244,63,94,.12);color:#e11d48}
+.tag.blue{background:rgba(59,130,246,.12);color:#2563eb}
+.tag.gray{background:#f1f5f9;color:var(--muted)}
+input.in,textarea.in,select.in{width:100%;padding:10px 13px;border:1px solid var(--line);border-radius:11px;font-size:13.5px;
+  font-family:inherit;color:var(--ink-2);background:#fff;transition:all .2s var(--ease);outline:none}
+input.in:focus,textarea.in:focus,select.in:focus{border-color:var(--indigo);box-shadow:0 0 0 3px rgba(99,102,241,.13)}
+.grid{display:grid;gap:16px}
+
+/* 指标卡 */
+.stats{grid-template-columns:repeat(4,1fr)}
+.stat{background:var(--glass-strong);border:1px solid var(--line);border-radius:var(--r-lg);padding:18px 20px;box-shadow:var(--shadow-sm);position:relative;overflow:hidden;transition:all .25s var(--ease)}
+.stat:hover{transform:translateY(-3px);box-shadow:var(--shadow-md)}
+.stat .lab{font-size:12.5px;color:var(--muted);font-weight:600;margin-bottom:8px}
+.stat .num{font-size:30px;font-weight:800;color:var(--ink);letter-spacing:-.03em;line-height:1}
+.stat .ico{position:absolute;right:16px;top:16px;width:38px;height:38px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:18px;
+  background:linear-gradient(135deg,rgba(99,102,241,.14),rgba(56,189,248,.08));color:var(--indigo)}
+.stat .sub{font-size:11.5px;color:var(--faint);margin-top:8px}
+
+/* ============ 账号卡 ============ */
+.acct-grid{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+.acct{background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);padding:16px;box-shadow:var(--shadow-sm);transition:all .25s var(--ease);position:relative}
+.acct:hover{transform:translateY(-3px);box-shadow:var(--shadow-md)}
+.acct .top{display:flex;gap:12px;align-items:center;margin-bottom:12px}
+.avatar{width:46px;height:46px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff;flex-shrink:0}
+.acct .nm{font-weight:800;font-size:14.5px;color:var(--ink)}
+.acct .pl{font-size:12px;color:var(--muted);font-weight:600}
+.acct .meta{display:flex;gap:14px;font-size:12px;color:var(--slate);margin-bottom:12px}
+.acct .meta b{color:var(--ink);font-weight:800}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.chip{font-size:11px;font-weight:700;padding:3px 9px;border-radius:8px;background:#f1f5f9;color:var(--muted)}
+.chip.env{background:rgba(99,102,241,.1);color:var(--indigo)}
+.acct .acts{display:flex;gap:8px;border-top:1px solid var(--line-soft);padding-top:11px}
+
+/* 筛选条 */
+.filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.pill{padding:7px 14px;border-radius:20px;font-size:12.5px;font-weight:700;background:#fff;border:1px solid var(--line);color:var(--slate);transition:all .2s}
+.pill:hover{border-color:rgba(99,102,241,.4);color:var(--indigo)}
+.pill.active{background:linear-gradient(135deg,var(--indigo),var(--indigo-600));color:#fff;border-color:transparent}
+.spacer{flex:1}
+
+/* 发布表单 */
+.pub-wrap{display:grid;grid-template-columns:1.35fr 1fr;gap:16px;align-items:start}
+@media(max-width:1080px){.pub-wrap{grid-template-columns:1fr}}
+.field{margin-bottom:15px}
+.field>label{display:block;font-size:12.5px;font-weight:700;color:var(--slate);margin-bottom:7px}
+.counter{float:right;font-size:11.5px;color:var(--faint);font-weight:600}
+/* 发布类型条（二级菜单驱动） */
+.pub-typebar{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.pub-typebadge{display:inline-flex;align-items:center;gap:6px;padding:7px 15px;border-radius:11px;font-weight:800;font-size:13.5px;color:#fff;
+  background:linear-gradient(135deg,var(--indigo),var(--sky));box-shadow:var(--shadow-sm)}
+.pub-hint{font-size:12.5px;color:var(--muted);font-weight:600}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tab{border:1px solid var(--line);background:#fff;border-radius:11px;padding:9px 16px;font-weight:700;font-size:13px;color:var(--slate);transition:all .2s}
+.tab.active{background:linear-gradient(135deg,rgba(99,102,241,.13),rgba(56,189,248,.05));color:var(--indigo);border-color:rgba(99,102,241,.4)}
+.pick-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.pick{display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:#fff;cursor:pointer;transition:all .2s}
+.pick:hover{border-color:rgba(99,102,241,.4)}
+.pick.on{border-color:var(--indigo);background:rgba(99,102,241,.06);box-shadow:0 0 0 3px rgba(99,102,241,.1)}
+.pick .pd{width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff;flex-shrink:0}
+.pick .pn{font-size:12.5px;font-weight:700;color:var(--ink)}
+.pick .pf{font-size:11px;color:var(--muted)}
+.modal-mask{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(3px)}
+.modal-mask.show{display:flex;animation:fade .2s}
+.modal{background:#fff;border-radius:var(--r-lg);padding:24px;width:420px;max-width:92vw;box-shadow:var(--shadow-lg)}
+.modal h3{margin:0 0 16px;font-size:16px;color:var(--ink)}
+
+/* 任务进度 */
+.task{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:14px 16px;margin-bottom:11px;box-shadow:var(--shadow-sm)}
+.task .th{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-size:12.5px;color:var(--slate)}
+.pbar{height:8px;border-radius:6px;background:#eef1f7;overflow:hidden}
+.pbar>i{display:block;height:100%;border-radius:6px;background:linear-gradient(135deg,var(--indigo),var(--sky));transition:width .5s var(--ease)}
+.trow{display:grid;grid-template-columns:1.6fr .8fr .7fr 1.2fr;gap:10px;align-items:center;padding:8px 0;font-size:12.5px;border-top:1px solid var(--line-soft)}
+.trow .tacc{display:flex;align-items:center;gap:7px;font-weight:600;color:var(--ink-2)}
+.trow .pd{width:24px;height:24px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff}
+
+/* 日志终端 */
+.overview{grid-template-columns:repeat(3,1fr)}
+.ov{background:#f6f8fc;border:1px solid var(--line-soft);border-radius:var(--r-md);padding:14px 16px}
+.ov .l{font-size:12px;color:var(--muted);font-weight:600;margin-bottom:7px}
+.ov .v{font-size:19px;font-weight:800;color:var(--ink);margin-bottom:6px}
+.ov .p{font-size:11.5px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.term{background:#1e1e1e;border-radius:var(--r-md);height:420px;overflow:auto;padding:14px;font-family:'SF Mono','Consolas',monospace;font-size:12px;line-height:1.7;color:#d4d4d4}
+.term .ln{white-space:pre-wrap;word-break:break-all}
+.term .t{color:#7a7a7a}
+.term .info{color:#6a9955}
+.term .warn{color:#e5c07b}
+.term .err{color:#f48771}
+.toolbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:13px}
+
+/* 浏览器模块 */
+.brk{display:flex;flex-direction:column;height:calc(100vh - 58px - 52px)}
+.brk .tabbar{display:flex;gap:5px;align-items:center;background:#eef0f3;padding:7px 10px;border-bottom:1px solid var(--line);flex-shrink:0}
+.btab{display:flex;align-items:center;gap:7px;min-width:90px;max-width:190px;height:34px;padding:0 11px;background:#e2e5ea;border-radius:9px 9px 0 0;font-size:12.5px;font-weight:600;color:var(--slate);cursor:pointer}
+.btab.active{background:#fff;color:var(--ink)}
+.btab .x{margin-left:auto;opacity:.5;font-size:13px}
+.brk .tools{display:flex;align-items:center;gap:10px;padding:10px 16px;background:#fff;border-bottom:1px solid var(--line);flex-shrink:0;flex-wrap:wrap}
+.brk .navbtns{display:flex;gap:5px}
+.iconbtn{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;background:#f1f5f9;color:var(--slate);font-size:15px;transition:all .2s}
+.iconbtn:hover{background:rgba(99,102,241,.1);color:var(--indigo)}
+.iconbtn.on{background:rgba(99,102,241,.15);color:var(--indigo)}
+.url{flex:1;min-width:160px}
+.brk .content{display:flex;flex:1;overflow:hidden;position:relative}
+.bview{flex:1;background:#fff;position:relative;overflow:hidden}
+.bmock{padding:22px;font-family:var(--font)}
+.bmock .mh{display:flex;gap:14px;align-items:center;border-bottom:1px solid #eee;padding-bottom:14px;margin-bottom:16px}
+.bmock .mh .ava{width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,var(--p-douyin),var(--sky));color:#fff;display:flex;align-items:center;justify-content:center;font-size:22px}
+.bmock h1{font-size:20px;color:var(--ink);margin:0 0 6px}
+.bmock p{color:var(--slate);font-size:14px;line-height:1.8}
+.bmock .imgs{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
+.bmock .imgs div{height:90px;border-radius:10px;background:linear-gradient(135deg,#e0e7ff,#cffafe)}
+.divider{width:5px;background:#e4e7ed;cursor:col-resize;flex-shrink:0;position:relative}
+.divider:hover{background:var(--indigo)}
+.divider::after{content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:2px;height:36px;background:#c0c4cc;border-radius:2px}
+.pubpane{width:38%;background:#f6f8fc;padding:14px;overflow-y:auto;border-left:1px solid var(--line)}
+.sidebar-mask{position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:90;display:none}
+.sidebar-mask.show{display:block}
+.sidebar{position:fixed;top:0;left:0;bottom:0;width:310px;background:#fff;box-shadow:var(--shadow-lg);z-index:95;display:flex;flex-direction:column;
+  transform:translateX(-100%);transition:transform .25s var(--ease)}
+.sidebar.show{transform:none}
+.sidebar .sh{display:flex;align-items:center;padding:12px;border-bottom:1px solid var(--line)}
+.sidebar .stabs{flex:1;display:flex;gap:5px}
+.sidebar .stab{flex:1;text-align:center;padding:7px;border-radius:8px;font-size:12.5px;font-weight:700;color:var(--muted);cursor:pointer}
+.sidebar .stab.active{background:rgba(99,102,241,.1);color:var(--indigo)}
+.sidebar .slist{flex:1;overflow-y:auto}
+.sitem{display:flex;gap:9px;align-items:center;padding:10px 13px;cursor:pointer;border-bottom:1px solid var(--line-soft)}
+.sitem:hover{background:#f6f8fc}
+.sitem .si{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.sitem .si.bm{background:#fdf6ec;color:#e6a23c}
+.sitem .si.hi{background:#ecf5ff;color:var(--blue)}
+.sitem .st{font-size:12.5px;color:var(--ink);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sitem .su{font-size:11px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conf-badge{font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px}
+
+/* 草稿箱 */
+.draft-grid{grid-template-columns:repeat(auto-fill,minmax(310px,1fr))}
+.dcard{background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;box-shadow:var(--shadow-sm);transition:all .25s var(--ease);display:flex;flex-direction:column}
+.dcard:hover{transform:translateY(-3px);box-shadow:var(--shadow-md)}
+.dcard .dm{padding:15px;flex:1;cursor:pointer}
+.dcard .dh{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px}
+.dcard .dt{font-size:15px;font-weight:800;color:var(--ink);margin:0 0 7px;line-height:1.35}
+.dcard .dex{font-size:12.5px;color:var(--muted);line-height:1.55;margin-bottom:9px}
+.dcard .dmeta{display:flex;gap:12px;font-size:11.5px;color:var(--faint)}
+.dcard .da{display:flex;gap:7px;padding:10px 15px;border-top:1px solid var(--line-soft);justify-content:flex-end}
+
+/* toast */
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;
+  padding:12px 20px;border-radius:12px;font-size:13px;font-weight:600;opacity:0;pointer-events:none;transition:all .3s var(--ease);z-index:200;box-shadow:var(--shadow-lg)}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* 历史 */
+.hist-card{background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);padding:15px 17px;box-shadow:var(--shadow-sm);margin-bottom:11px;display:flex;gap:13px;align-items:flex-start}
+.hist-card .hd{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:19px;color:#fff;flex-shrink:0}
+.hist-card .hb{flex:1}
+.hist-card .htt{font-weight:800;font-size:14px;color:var(--ink);margin-bottom:4px}
+.hist-card .hmeta{font-size:12px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.hist-card .hacts{display:flex;gap:7px;flex-wrap:wrap}
+
+/* 空态 */
+.empty{text-align:center;padding:50px 20px;color:var(--faint)}
+.empty .eic{font-size:46px;margin-bottom:12px;opacity:.6}
+.empty p{font-size:13.5px}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ============ 左侧圆润导航 ============ -->
+  <aside class="sidenav">
+    <div class="snav-logo">
+      <div class="mark">F</div>
+      <div><div class="ln1">FlowX</div><div class="ln2">多平台内容发布助手</div></div>
+    </div>
+    <nav class="snav-menu" id="snav">
+      <button class="nav-item" data-view="dashboard"><span class="ic">🏠</span><span class="label">仪表盘</span></button>
+      <button class="nav-item" data-view="accounts"><span class="ic">👤</span><span class="label">账号管理</span></button>
+      <div class="nav-group">
+        <button class="nav-item nav-parent open" id="pubParent" data-group="publish">
+          <span class="ic">🚀</span><span class="label">一键发布</span><span class="chev">▾</span>
+        </button>
+        <div class="nav-sub open" id="subPublish">
+          <button class="nav-item sub" data-view="publish" data-pubtype="video">🎬 发布视频</button>
+          <button class="nav-item sub" data-view="publish" data-pubtype="image">🖼️ 发布图文</button>
+          <button class="nav-item sub" data-view="publish" data-pubtype="article">📄 发布文章</button>
+          <button class="nav-item sub" data-view="publish-history">🕘 发布历史</button>
+        </div>
+      </div>
+      <button class="nav-item" data-view="drafts"><span class="ic">📝</span><span class="label">草稿箱</span></button>
+      <button class="nav-item" data-view="browser"><span class="ic">🌐</span><span class="label">浏览器</span></button>
+      <div class="nav-group">
+        <button class="nav-item nav-parent open" id="settingsParent" data-group="settings">
+          <span class="ic">⚙️</span><span class="label">系统配置</span><span class="chev">▾</span>
+        </button>
+        <div class="nav-sub open" id="subSettings">
+          <button class="nav-item sub" data-view="settings-environments">环境配置</button>
+          <button class="nav-item sub" data-view="settings-proxies">代理 IP 设置</button>
+          <button class="nav-item sub" data-view="settings-api">对外接口</button>
+          <button class="nav-item sub" data-view="settings-logs">日志管理</button>
+        </div>
+      </div>
+    </nav>
+    <div class="snav-foot">
+      <div class="snav-user"><span class="av">A</span>管理员</div>
+      <div class="snav-ver">v1.0.3 · Electron 31</div>
+    </div>
+  </aside>
+
+  <div class="rightcol">
+    <!-- ============ 精简顶栏 ============ -->
+    <header class="topbar">
+      <div class="top-title" id="topTitle">仪表盘</div>
+      <div class="top-search"><input type="text" placeholder="搜索账号、任务、日志…"></div>
+      <div class="win-dots"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    </header>
+
+  <main class="main" id="main">
+
+    <!-- ===================== 仪表盘 ===================== -->
+    <section class="view" id="view-dashboard">
+      <div class="row"><div><h1 class="sec-title">仪表盘</h1><div class="sec-sub">多平台内容发布总览</div></div>
+        <button class="btn primary" data-view="publish">＋ 新建发布</button></div>
+      <div class="grid stats">
+        <div class="stat"><div class="lab">账号总数</div><div class="num">12</div><div class="ico">👤</div><div class="sub">覆盖 4 个平台</div></div>
+        <div class="stat"><div class="lab">今日发布</div><div class="num">38</div><div class="ico">🚀</div><div class="sub">较昨日 +12%</div></div>
+        <div class="stat"><div class="lab">发布成功率</div><div class="num">96.4%</div><div class="ico">✅</div><div class="sub">近 7 日</div></div>
+        <div class="stat"><div class="lab">待发布</div><div class="num">5</div><div class="ico">⏰</div><div class="sub">含定时任务</div></div>
+      </div>
+      <div class="grid" style="grid-template-columns:1.4fr 1fr;gap:16px">
+        <div class="panel">
+          <h2 class="sec-title">平台账号分布</h2><div class="sec-sub">各平台已授权账号数量</div>
+          <div class="grid" style="grid-template-columns:repeat(2,1fr);gap:12px">
+            <div class="acct"><div class="top"><div class="avatar" style="background:var(--p-douyin)">🎵</div><div><div class="nm">抖音</div><div class="pl">4 个账号</div></div></div></div>
+            <div class="acct"><div class="top"><div class="avatar" style="background:var(--p-xhs)">📕</div><div><div class="nm">小红书</div><div class="pl">3 个账号</div></div></div></div>
+            <div class="acct"><div class="top"><div class="avatar" style="background:var(--p-kuaishou)">⚡</div><div><div class="nm">快手</div><div class="pl">3 个账号</div></div></div></div>
+            <div class="acct"><div class="top"><div class="avatar" style="background:var(--p-wechat)">🎬</div><div><div class="nm">微信视频号</div><div class="pl">2 个账号</div></div></div></div>
+          </div>
+        </div>
+        <div class="panel">
+          <h2 class="sec-title">最近动态</h2><div class="sec-sub">最新发布记录</div>
+          <div class="hist-card"><div class="hd" style="background:var(--p-douyin)">🎵</div><div class="hb"><div class="htt">夏日穿搭分享</div><div class="hmeta"><span>抖音 · 美妆日记</span><span class="tag ok">成功</span><span>10:24</span></div></div></div>
+          <div class="hist-card"><div class="hd" style="background:var(--p-xhs)">📕</div><div class="hb"><div class="htt">一周好物清单</div><div class="hmeta"><span>小红书 · 种草号</span><span class="tag ok">成功</span><span>09:51</span></div></div></div>
+          <div class="hist-card"><div class="hd" style="background:var(--p-kuaishou)">⚡</div><div class="hb"><div class="htt">探店 vlog</div><div class="hmeta"><span>快手 · 美食家</span><span class="tag warn">发布中</span><span>刚刚</span></div></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== 账号管理 ===================== -->
+    <section class="view" id="view-accounts">
+      <div class="row"><div><h1 class="sec-title">账号管理</h1><div class="sec-sub">授权账号 · 健康检测 · 分类与环境</div></div>
+        <div style="display:flex;gap:8px"><button class="btn" id="healthBtn">♻️ 批量健康检测</button><button class="btn primary">＋ 添加账号</button></div></div>
+      <div class="filters">
+        <button class="pill active">全部</button><button class="pill">抖音</button><button class="pill">小红书</button><button class="pill">快手</button><button class="pill">微信视频号</button>
+        <span class="spacer"></span>
+        <button class="pill">📁 分类：全部</button><button class="pill">🩺 健康：正常</button>
+      </div>
+      <div class="grid acct-grid" id="acctGrid"></div>
+    </section>
+
+    <!-- ===================== 一键发布 ===================== -->
+    <section class="view" id="view-publish">
+      <div class="row"><div><h1 class="sec-title" id="pubTitle">发布视频</h1><div class="sec-sub" id="pubSub">填写视频内容并选择目标账号，支持定时与测试发布</div></div>
+        <button class="btn plain" id="saveDraftBtn">💾 存草稿</button></div>
+      <div class="pub-typebar">
+        <span class="pub-typebadge" id="pubTypeBadge">🎬 视频</span>
+        <span class="pub-hint" id="pubHint">抖音 / 微信视频号需上传封面</span>
+      </div>
+      <div class="pub-wrap">
+        <!-- 发布表单 -->
+        <div class="panel" id="publishForm">
+          <div class="field"><label>标题<span class="counter" id="titleLim">0 / 80</span></label>
+            <input class="in" id="titleIn" placeholder="输入标题…" oninput="updTitle()" maxlength="80"></div>
+          <div class="field"><label>正文 / 描述<span class="counter" id="bodyLim">0 / 1000</span></label>
+            <textarea class="in" id="bodyIn" rows="4" placeholder="输入正文内容…" oninput="updBody()"></textarea></div>
+          <div class="field"><label>话题标签</label><input class="in" placeholder="用空格分隔，如：穿搭 日常 好物"></div>
+          <div class="field"><label>素材文件</label>
+            <div style="border:1.5px dashed var(--line);border-radius:var(--r-md);padding:20px;text-align:center;color:var(--muted);font-size:13px">
+              📎 拖拽或点击上传视频 / 图片（支持本地路径与远程 URL）</div></div>
+          <div class="field" id="coverField"><label>封面图</label>
+            <div style="border:1.5px dashed var(--line);border-radius:var(--r-md);padding:16px;text-align:center;color:var(--muted);font-size:13px">🖼️ 上传封面（抖音 / 视频号必填）</div></div>
+          <div class="field"><label>定时发布</label>
+            <div style="display:flex;gap:10px;align-items:center">
+              <label style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600"><input type="radio" name="pt" checked> 立即发布</label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600"><input type="radio" name="pt"> 定时</label>
+              <input class="in" type="datetime-local" style="width:220px" disabled></div></div>
+        </div>
+        <!-- 账号选择 -->
+        <div class="panel">
+          <h2 class="sec-title">选择账号</h2>
+          <div class="filters" style="margin-bottom:12px">
+            <button class="pill active">全部能力</button><button class="pill">支持视频</button><button class="pill">支持图文</button><button class="pill">支持文章</button>
+          </div>
+          <div class="pick-grid" id="pickGrid"></div>
+          <div style="display:flex;gap:8px;margin-top:16px">
+            <button class="btn primary" style="flex:1;justify-content:center" id="submitBtn">🚀 提交发布</button>
+            <button class="btn" id="testBtn">🧪 测试发布</button>
+          </div>
+        </div>
+      </div>
+      <!-- 任务进行中 -->
+      <div class="panel" id="taskPanel" style="display:none"><h2 class="sec-title">任务进行中</h2><div class="sec-sub" id="taskSub">刚刚提交</div><div id="taskList"></div></div>
+      <!-- 调试日志 -->
+      <div class="panel"><div class="row" style="margin-bottom:10px"><h2 class="sec-title">实时调试日志</h2><button class="btn sm ghost" onclick="toast('已输出 store 到 console')">打印 store</button></div>
+        <div class="term" id="debugTerm"></div></div>
+    </section>
+
+    <!-- ===================== 草稿箱 ===================== -->
+    <section class="view" id="view-drafts">
+      <div class="row"><div><h1 class="sec-title">草稿箱</h1><div class="sec-sub">未完成的发布内容，可继续编辑或来源打开</div></div>
+        <button class="btn primary" data-view="publish">＋ 新建</button></div>
+      <div class="filters"><button class="pill active" data-df="all">全部</button><button class="pill" data-df="video">视频</button><button class="pill" data-df="image">图文</button><button class="pill" data-df="article">文章</button></div>
+      <div class="grid draft-grid" id="draftGrid"></div>
+    </section>
+
+    <!-- ===================== 浏览器（内容提取） ===================== -->
+    <section class="view" id="view-browser">
+      <div class="brk">
+        <div class="tabbar">
+          <div class="btab active">🌐 百度一下 <span class="x">✕</span></div>
+          <div class="btab">📕 小红书创作中心 <span class="x">✕</span></div>
+          <button class="iconbtn" title="新建标签页" style="border-radius:9px 9px 0 0">＋</button>
+        </div>
+        <div class="tools">
+          <div class="navbtns">
+            <button class="iconbtn" title="刷新">⟳</button>
+            <button class="iconbtn" title="后退">‹</button>
+            <button class="iconbtn" title="前进">›</button>
+            <button class="iconbtn" id="bmBtn" title="收藏">☆</button>
+            <button class="iconbtn" id="hiBtn" title="历史">🕘</button>
+          </div>
+          <input class="in url" value="https://www.xiaohongshu.com/discovery/item/abc123">
+          <select class="in" style="width:140px"><option>默认环境</option><option>主账号防关联配置</option></select>
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:var(--slate)"><input type="checkbox"> 忽略证书</label>
+          <div style="display:flex;gap:5px;background:#f1f5f9;border-radius:9px;padding:2px">
+            <button class="pill active" style="border:none;padding:5px 10px" id="emReplace">替换</button>
+            <button class="pill" style="border:none;padding:5px 10px" id="emAppend">追加</button>
+          </div>
+          <button class="btn primary sm" id="extractBtn">🪄 一键提取</button>
+          <button class="btn plain sm" id="selExtractBtn">🎯 选择提取</button>
+          <button class="btn sm" id="layoutBtn">▦ 布局</button>
+        </div>
+        <div class="content" id="brContent">
+          <div class="bview" id="bview">
+            <div class="bmock">
+              <div class="mh"><div class="ava">📕</div><div><h1>夏日穿搭分享｜显瘦又高级</h1><div style="color:var(--muted);font-size:13px">小红书博主 · 32.5万粉丝</div></div></div>
+              <p>今年夏天最值得入手的 5 套通勤穿搭，利用基础款叠穿就能穿出高级感。面料透气、版型显瘦，职场约会都能驾驭。点击下方查看完整搭配清单与购买链接～</p>
+              <div class="imgs"><div></div><div></div><div></div></div>
+              <p style="margin-top:14px;color:var(--faint);font-size:12px">（这是从网页提取的示例正文，点击「一键提取」可自动填充到右侧发布表单）</p>
+            </div>
+          </div>
+          <div class="divider" id="brDivider"></div>
+          <div class="pubpane" id="brPubPane">
+            <div style="font-size:12.5px;font-weight:800;color:var(--slate);margin-bottom:10px">发布表单（嵌入）</div>
+            <div class="field"><label>标题<span class="counter" id="brTitleLim">0 / 20</span></label><input class="in" id="brTitle" placeholder="小红书标题≤20字" oninput="updBRT('title')"></div>
+            <div class="field"><label>正文<span class="counter" id="brBodyLim">0 / 1000</span></label><textarea class="in" id="brBody" rows="4" placeholder="正文内容" oninput="updBRT('body')"></textarea></div>
+            <div class="field"><label>素材</label><div style="border:1.5px dashed var(--line);border-radius:10px;padding:14px;text-align:center;color:var(--muted);font-size:12px">📎 提取的图片将自动下载到此</div></div>
+            <button class="btn primary sm" style="width:100%;justify-content:center" onclick="toast('已提交发布任务')">🚀 发布</button>
+            <button class="btn sm" style="width:100%;justify-content:center;margin-top:8px" onclick="toast('已保存到草稿箱')">💾 保存草稿</button>
+          </div>
+        </div>
+      </div>
+      <!-- 侧边栏：收藏夹 / 历史 -->
+      <div class="sidebar-mask" id="sbMask"></div>
+      <aside class="sidebar" id="sidebar">
+        <div class="sh"><div class="stabs">
+          <div class="stab active" id="sbBookmarks">☆ 收藏夹</div>
+          <div class="stab" id="sbHistory">🕘 历史记录</div>
+        </div><button class="iconbtn" id="sbClose">✕</button></div>
+        <div class="slist" id="sbList"></div>
+      </aside>
+    </section>
+
+    <!-- ===================== 发布历史（一键发布子菜单） ===================== -->
+    <section class="view" id="view-publish-history">
+      <div class="row"><div><h1 class="sec-title">发布历史</h1><div class="sec-sub">所有发布任务记录与状态</div></div>
+        <button class="btn" id="histFilter">⌕ 筛选</button></div>
+      <div id="histList"></div>
+    </section>
+
+    <!-- ===================== 系统配置：环境配置 ===================== -->
+    <section class="view" id="view-settings-environments">
+      <div class="row"><div><h1 class="sec-title">环境配置</h1><div class="sec-sub">浏览器指纹环境（User-Agent）与代理绑定</div></div>
+        <button class="btn primary">＋ 添加环境配置</button></div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))" id="envGrid"></div>
+    </section>
+
+    <!-- ===================== 系统配置：代理 IP ===================== -->
+    <section class="view" id="view-settings-proxies">
+      <div class="row"><div><h1 class="sec-title">代理 IP 设置</h1><div class="sec-sub">HTTP / SOCKS5 代理，支持测试连接</div></div>
+        <button class="btn primary">＋ 添加代理</button></div>
+      <div class="panel"><div class="field" style="max-width:520px"><label>代理地址</label>
+        <input class="in" value="socks5://127.0.0.1:10808"></div>
+        <div style="display:flex;gap:8px"><button class="btn plain">🔌 测试连接</button><button class="btn primary">保存</button></div>
+        <div class="tag ok" style="margin-top:12px">✓ 延迟 36ms · 出口 IP 113.x.x.x</div></div>
+    </section>
+
+    <!-- ===================== 系统配置：对外接口 ===================== -->
+    <section class="view" id="view-settings-api">
+      <div class="row"><div><h1 class="sec-title">对外接口</h1><div class="sec-sub">本机 HTTP API（仅监听 127.0.0.1）</div></div>
+        <span class="tag gray">服务未启动</span></div>
+      <div class="panel"><div style="max-width:520px">
+        <div class="field" style="display:flex;align-items:center;gap:10px"><label style="margin:0">启用服务</label><label style="display:flex;align-items:center;gap:5px"><input type="checkbox"> 启用后提供 HTTP API</label></div>
+        <div class="field"><label>监听端口</label><input class="in" value="37652" style="width:200px"></div>
+        <div class="field"><label>API Key</label><input class="in" type="password" placeholder="留空则不验证" style="width:300px"></div>
+        <div style="display:flex;gap:8px"><button class="btn primary">启动服务</button><button class="btn">保存配置</button></div>
+      </div></div>
+      <div class="panel"><h2 class="sec-title">接口文档</h2><div class="sec-sub">Base URL: http://127.0.0.1:37652</div>
+        <div style="font-family:monospace;font-size:12.5px;line-height:2;color:var(--slate)">
+          <div><span class="tag ok" style="font-family:inherit">GET</span> /api/health</div>
+          <div><span class="tag blue" style="font-family:inherit">GET</span> /api/accounts</div>
+          <div><span class="tag warn" style="font-family:inherit;background:rgba(245,158,11,.14);color:#b97a09">POST</span> /api/publish</div>
+          <div><span class="tag blue" style="font-family:inherit">GET</span> /api/publish/:taskId</div>
+        </div></div>
+    </section>
+
+    <!-- ===================== 系统配置：日志管理 ===================== -->
+    <section class="view" id="view-settings-logs">
+      <div class="row"><div><h1 class="sec-title">日志管理</h1><div class="sec-sub">查看与导出应用运行日志</div></div>
+        <div style="display:flex;gap:8px"><button class="btn" id="openLogDir">📂 打开日志目录</button><button class="btn primary" id="exportAllLogs">⬇️ 导出全部日志</button></div></div>
+      <div class="panel">
+        <h2 class="sec-title">日志概览</h2>
+        <div class="grid overview" style="margin-top:12px">
+          <div class="ov"><div class="l">主日志</div><div class="v">2.4 MB</div><div class="p">app-2026-07-14.log</div></div>
+          <div class="ov"><div class="l">发布日志</div><div class="v">5.1 MB</div><div class="p">publish-2026-07-14.log</div></div>
+          <div class="ov"><div class="l">日志目录</div><div class="v" style="color:var(--blue);cursor:pointer">点击打开</div><div class="p">%APPDATA%/flowx/logs</div></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2 class="sec-title">日志查看 <span style="font-size:12px;font-weight:600;color:var(--muted)">显示最新 500 行</span></h2>
+        <div class="toolbar" style="margin-top:12px">
+          <div style="display:flex;gap:5px;background:#f1f5f9;border-radius:9px;padding:2px">
+            <button class="pill active" id="logPub" style="border:none;padding:5px 12px">发布日志</button>
+            <button class="pill" id="logMain" style="border:none;padding:5px 12px">主日志</button>
+          </div>
+          <select class="in" style="width:150px"><option>2026-07-14</option><option>2026-07-13</option></select>
+          <select class="in" style="width:130px"><option>最近 500 行</option><option>最近 100 行</option><option>最近 1000 行</option><option>最近 2000 行</option></select>
+          <input class="in" placeholder="搜索关键词…" style="width:180px" id="logSearch" oninput="filterLog()">
+          <button class="btn sm" onclick="toast('已刷新日志')">⟳ 刷新</button>
+          <button class="btn sm primary" id="exportCurLog">⬇️ 导出</button>
+          <button class="btn sm danger" id="clearMemLog" style="margin-left:auto">🗑️ 清空内存日志</button>
+        </div>
+        <div class="term" id="logTerm"></div>
+      </div>
+      <div class="panel"><h2 class="sec-title">使用说明</h2>
+        <ul style="margin:8px 0 0 18px;font-size:13px;color:var(--slate);line-height:2">
+          <li>主日志记录应用运行时的常规日志；发布日志记录一键发布流程详细日志</li>
+          <li>日志文件有大小限制（主日志 10MB，发布日志 20MB），超出自动滚动覆盖</li>
+          <li>遇到问题时可导出日志文件发给技术支持排查</li>
+        </ul></div>
+    </section>
+
+  </main>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============ 视图切换 ============ */
+const views = ['dashboard','accounts','publish','drafts','browser','publish-history','settings-environments','settings-proxies','settings-api','settings-logs'];
+const titles = {
+  'dashboard':'仪表盘','accounts':'账号管理','publish':'一键发布','drafts':'草稿箱','browser':'浏览器',
+  'publish-history':'发布历史','settings-environments':'环境配置','settings-proxies':'代理 IP 设置','settings-api':'对外接口','settings-logs':'日志管理'
+};
+const pubTitleByType = { video:'发布视频', image:'发布图文', article:'发布文章' };
+function showView(v){
+  views.forEach(id=>{const el=document.getElementById('view-'+id);if(el)el.classList.toggle('active', id===v);});
+  // 导航高亮（二级菜单按 pubtype 精确匹配）
+  document.querySelectorAll('.nav-item[data-view]').forEach(b=>{
+    let active=false;
+    if(b.classList.contains('sub') && b.dataset.pubtype){ active = (v==='publish' && b.dataset.pubtype===curType); }
+    else if(b.classList.contains('sub')){ active = (b.dataset.view===v); }
+    else { active = (b.dataset.view===v); }
+    b.classList.toggle('active', active);
+  });
+  // 系统配置父项
+  const sp=document.getElementById('settingsParent'), subS=document.getElementById('subSettings');
+  if(v.startsWith('settings-')){ subS.classList.add('open'); sp.classList.add('open','active'); } else { sp.classList.remove('active'); }
+  // 一键发布父项
+  const pp=document.getElementById('pubParent'), subP=document.getElementById('subPublish');
+  if(v==='publish'||v==='publish-history'){ subP.classList.add('open'); pp.classList.add('open','active'); } else { pp.classList.remove('active'); }
+  document.getElementById('topTitle').textContent = (v==='publish') ? (pubTitleByType[curType]||'一键发布') : (titles[v]||'FlowX');
+  document.getElementById('main').scrollTop=0;
+}
+/* 导航点击：发布子菜单带 pubtype 时先设定内容类型 */
+document.querySelectorAll('[data-view]').forEach(b=>{
+  b.addEventListener('click',()=>{
+    if(b.dataset.pubtype){ setPubType(b.dataset.pubtype); showView('publish'); }
+    else { showView(b.dataset.view); }
+  });
+});
+/* 系统配置父项：展开 / 收起 */
+document.getElementById('settingsParent').addEventListener('click',()=>{
+  const open=document.getElementById('subSettings').classList.toggle('open');
+  document.getElementById('settingsParent').classList.toggle('open',open);
+});
+/* 一键发布父项：展开 / 收起 */
+document.getElementById('pubParent').addEventListener('click',()=>{
+  const open=document.getElementById('subPublish').classList.toggle('open');
+  document.getElementById('pubParent').classList.toggle('open',open);
+});
+
+/* toast */
+let toastT;
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2200);}
+
+/* ============ 数据 ============ */
+const platforms=[
+  {id:'douyin',name:'抖音',emoji:'🎵',color:'var(--p-douyin)',fans:'32.5万',caps:{video:1,image:1,article:0}},
+  {id:'xhs',name:'小红书',emoji:'📕',color:'var(--p-xhs)',fans:'12.1万',caps:{video:1,image:1,article:0}},
+  {id:'kuaishou',name:'快手',emoji:'⚡',color:'var(--p-kuaishou)',fans:'8.7万',caps:{video:1,image:1,article:0}},
+  {id:'wechat',name:'微信视频号',emoji:'🎬',color:'var(--p-wechat)',fans:'5.3万',caps:{video:1,image:0,article:0}},
+  {id:'zhihu',name:'知乎',emoji:'💡',color:'var(--p-zhihu)',fans:'2.0万',caps:{video:1,image:1,article:1}},
+  {id:'toutiao',name:'今日头条',emoji:'📰',color:'var(--p-toutiao)',fans:'1.4万',caps:{video:1,image:1,article:1}},
+];
+const accounts=[
+  {nm:'美妆日记',pl:'douyin',fans:'32.5万',status:'正常',env:'主账号防关联配置',cats:['美妆','穿搭']},
+  {nm:'种草号',pl:'xhs',fans:'12.1万',status:'正常',env:'默认环境',cats:['好物','生活']},
+  {nm:'美食家',pl:'kuaishou',fans:'8.7万',status:'正常',env:'主账号防关联配置',cats:['美食']},
+  {nm:'旅行Vlog',pl:'douyin',fans:'15.2万',status:'正常',env:'旅行专用环境',cats:['旅行']},
+  {nm:'知识分享',pl:'zhihu',fans:'2.0万',status:'已过期',env:'默认环境',cats:['知识']},
+  {nm:'资讯头条',pl:'toutiao',fans:'1.4万',status:'正常',env:'默认环境',cats:['资讯']},
+  {nm:'视频号主',pl:'wechat',fans:'5.3万',status:'正常',env:'默认环境',cats:['生活']},
+  {nm:'穿搭达人',pl:'xhs',fans:'9.8万',status:'正常',env:'主账号防关联配置',cats:['穿搭']},
+];
+
+/* 账号卡渲染 */
+function renderAccounts(){
+  const g=document.getElementById('acctGrid');g.innerHTML='';
+  accounts.forEach(a=>{
+    const p=platforms.find(x=>x.id===a.pl);
+    const stCls=a.status==='正常'?'ok':'danger';
+    g.insertAdjacentHTML('beforeend',`
+    <div class="acct">
+      <div class="top"><div class="avatar" style="background:${p.color}">${p.emoji}</div>
+        <div><div class="nm">${a.nm}</div><div class="pl">${p.name}</div></div></div>
+      <div class="meta"><span>粉丝 <b>${a.fans}</b></span><span class="tag ${stCls}">${a.status}</span></div>
+      <div class="chips">${a.cats.map(c=>`<span class="chip">${c}</span>`).join('')}<span class="chip env">🌐 ${a.env}</span></div>
+      <div class="acts"><button class="btn sm" onclick="toast('打开编辑账号')">编辑</button>
+        <button class="btn sm plain" onclick="toast('打开创作中心')">创作中心</button>
+        <button class="btn sm danger" onclick="toast('删除账号')">删除</button></div>
+    </div>`);
+  });
+}
+renderAccounts();
+
+/* 账号选择网格（发布页） */
+let curType='video';
+function renderPicks(){
+  const g=document.getElementById('pickGrid');g.innerHTML='';
+  platforms.forEach(p=>{
+    const capOk=p.caps[curType];
+    g.insertAdjacentHTML('beforeend',`
+    <div class="pick ${capOk?'':'on'}" data-cap="${capOk}" onclick="togglePick(this)">
+      <div class="pd" style="background:${p.color}">${p.emoji}</div>
+      <div><div class="pn">${p.name}</div><div class="pf">${capOk?'✓ 支持':'✗ 不支持'+ctName(curType)}</div></div>
+    </div>`);
+    // 不支持的默认选中态用不同样式
+    if(!capOk) g.lastElementChild.classList.remove('on');
+  });
+}
+function ctName(t){return t==='video'?'视频':t==='image'?'图文':'文章';}
+function togglePick(el){ if(el.dataset.cap==='0'){toast('该平台不支持'+ctName(curType));return;} el.classList.toggle('on'); }
+renderPicks();
+
+/* 内容类型由「一键发布」二级菜单驱动 */
+const pubMeta={
+  video:{title:'发布视频',short:'🎬 视频',sub:'填写视频内容并选择目标账号，支持定时与测试发布',hint:'抖音 / 微信视频号需上传封面',titleLim:80,bodyMax:1000,cover:true},
+  image:{title:'发布图文',short:'🖼️ 图文',sub:'填写图文内容并选择目标账号，支持定时发布',hint:'小红书标题≤20字',titleLim:20,bodyMax:1000,cover:false},
+  article:{title:'发布文章',short:'📄 文章',sub:'撰写长文并选择目标账号（知乎 / 头条支持）',hint:'支持长正文，无需封面',titleLim:64,bodyMax:8000,cover:false},
+};
+let curTitleLim=80, curBodyMax=1000;
+function setPubType(t){
+  curType=t;const m=pubMeta[t];
+  document.getElementById('pubTitle').textContent=m.title;
+  document.getElementById('pubSub').textContent=m.sub;
+  document.getElementById('pubTypeBadge').textContent=m.short;
+  document.getElementById('pubHint').textContent=m.hint;
+  curTitleLim=m.titleLim; curBodyMax=m.bodyMax;
+  document.getElementById('titleIn').setAttribute('maxlength',m.titleLim);
+  document.getElementById('titleLim').textContent=`0 / ${m.titleLim}`;
+  document.getElementById('bodyLim').textContent=`0 / ${m.bodyMax}`;
+  document.getElementById('coverField').style.display=m.cover?'block':'none';
+  renderPicks();
+}
+function updTitle(){const v=document.getElementById('titleIn').value;document.getElementById('titleLim').textContent=`${v.length} / ${curTitleLim}`;}
+function updBody(){const v=document.getElementById('bodyIn').value;document.getElementById('bodyLim').textContent=`${v.length} / ${curBodyMax}`;}
+
+/* 提交发布 → 模拟任务进度 */
+document.getElementById('submitBtn').addEventListener('click',submitPub);
+document.getElementById('testBtn').addEventListener('click',()=>{toast('已提交测试发布');});
+function submitPub(){
+  const sel=[...document.querySelectorAll('#pickGrid .pick.on')];
+  if(sel.length===0){toast('请至少选择一个账号');return;}
+  const panel=document.getElementById('taskPanel');panel.style.display='block';
+  const list=document.getElementById('taskList');
+  const taskId='task_'+Math.random().toString(36).slice(2,9);
+  const rows=sel.map(p=>{
+    const name=p.querySelector('.pn').textContent;
+    return `<div class="trow"><div class="tacc"><span class="pd" style="background:${p.querySelector('.pd').style.background}">${p.querySelector('.pd').textContent}</span>${name}</div>
+      <div><span class="tag warn">发布中</span></div><div><span class="tag blue">0%</span></div><div>正在上传…</div></div>`;
+  }).join('');
+  list.innerHTML=`<div class="task"><div class="th"><span>任务 ${taskId.slice(0,14)} · 进行中 · ${sel.length} 个账号</span><span class="tag blue">${Math.round(0)}%</span></div>
+    <div class="pbar"><i style="width:0%"></i></div><div style="margin-top:8px">${rows}</div></div>`;
+  // 模拟进度
+  let prog=0;
+  const iv=setInterval(()=>{
+    prog+=Math.random()*22+8;if(prog>100)prog=100;
+    const bar=list.querySelector('.pbar>i');if(bar)bar.style.width=prog+'%';
+    const pct=list.querySelector('.th .tag');if(pct)pct.textContent=Math.round(prog)+'%';
+    if(prog>=100){clearInterval(iv);
+      list.querySelectorAll('.trow .tag').forEach(t=>{t.className='tag ok';t.textContent='成功';});
+      list.querySelectorAll('.trow div:last-child').forEach(d=>d.textContent='https://... 已发布');
+      toast('发布任务完成 ✓');
+      pushDebug('发布完成 task='+taskId+' 账号数='+sel.length);
+    }
+  },700);
+  pushDebug('提交发布 task='+taskId+' 账号='+sel.map(p=>p.querySelector('.pn').textContent).join(','));
+}
+/* 存草稿 */
+document.getElementById('saveDraftBtn').addEventListener('click',()=>toast('已保存到草稿箱'));
+
+/* 调试日志 */
+function pushDebug(msg){const t=document.getElementById('debugTerm');if(!t)return;
+  const d=new Date();const ts=`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+  t.insertAdjacentHTML('beforeend',`<div class="ln"><span class="t">${ts}</span> <span class="info">[INFO]</span> ${msg}</div>`);t.scrollTop=t.scrollHeight;}
+pushDebug('PublishForm 已就绪，监听发布事件');
+
+/* ============ 草稿箱 ============ */
+const drafts=[
+  {t:'夏日穿搭分享',type:'image',ex:'今年夏天最值得入手的5套通勤穿搭，基础款叠穿穿出高级感…',time:'07-14 10:20',src:1,media:3},
+  {t:'探店 vlog 脚本',type:'video',ex:'周末探店合集，记录本地三家宝藏小店的美食体验…',time:'07-13 21:05',src:0,media:1},
+  {t:'AI 工具使用心得',type:'article',ex:'分享几款提升效率的 AI 工具，从写作到设计全覆盖…',time:'07-12 15:42',src:1,media:0},
+  {t:'护肤空瓶记',type:'image',ex:'半年用空的护肤好物真实测评，附购买建议…',time:'07-11 09:18',src:0,media:5},
+];
+function renderDrafts(filter='all'){
+  const g=document.getElementById('draftGrid');g.innerHTML='';
+  const list=filter==='all'?drafts:drafts.filter(d=>d.type===filter);
+  if(list.length===0){g.innerHTML='<div class="empty"><div class="eic">📭</div><p>暂无草稿</p></div>';return;}
+  list.forEach(d=>{
+    const ic={video:'🎬',image:'🖼️',article:'📄'}[d.type];
+    const lb={video:'视频',image:'图文',article:'文章'}[d.type];
+    g.insertAdjacentHTML('beforeend',`
+    <div class="dcard"><div class="dm" onclick="toast('编辑草稿')">
+      <div class="dh"><span class="chip">${ic} ${lb}</span><span style="font-size:11.5px;color:var(--faint)">${d.time}</span></div>
+      <h3 class="dt">${d.t||'（无标题）'}</h3><p class="dex">${d.ex}</p>
+      <div class="dmeta">${d.src?'<span>🔗 来源链接</span>':''}${d.media?`<span>📎 ${d.media} 个素材</span>`:''}</div>
+    </div><div class="da"><button class="btn sm" onclick="toast('编辑草稿')">编辑</button><button class="btn sm danger" onclick="toast('删除草稿')">删除</button></div></div>`);
+  });
+}
+renderDrafts();
+document.querySelectorAll('.pill[data-df]').forEach(p=>p.addEventListener('click',()=>{
+  document.querySelectorAll('.pill[data-df]').forEach(x=>x.classList.remove('active'));p.classList.add('active');renderDrafts(p.dataset.df);
+}));
+
+/* ============ 浏览器（内容提取） ============ */
+document.getElementById('extractBtn').addEventListener('click',()=>{
+  // 模拟提取：填充右侧表单
+  document.getElementById('brTitle').value='夏日穿搭分享｜显瘦又高级';
+  document.getElementById('brBody').value='今年夏天最值得入手的 5 套通勤穿搭，利用基础款叠穿就能穿出高级感。面料透气、版型显瘦，职场约会都能驾驭。';
+  updBRT('title');updBRT('body');
+  // 置信度徽章
+  let badge=document.getElementById('confBadge');
+  if(!badge){badge=document.createElement('span');badge.id='confBadge';badge.className='conf-badge';document.querySelector('.brk .tools').appendChild(badge);}
+  badge.textContent='置信度: 92%';badge.style.background='rgba(16,185,129,.14)';badge.style.color='#0f9d6b';
+  toast('已提取：夏日穿搭分享…（98 字，3 张图，置信度 92%）');
+  pushDebug('提取网页内容 → 标题/正文/3图 已填充发布表单');
+});
+function updBRT(k){const max=k==='title'?20:1000;const v=document.getElementById(k==='title'?'brTitle':'brBody').value;
+  document.getElementById(k==='title'?'brTitleLim':'brBodyLim').textContent=`${v.length} / ${max}`;}
+document.getElementById('selExtractBtn').addEventListener('click',()=>toast('点击页面元素提取内容，按 Esc 取消'));
+/* 布局切换 */
+document.getElementById('layoutBtn').addEventListener('click',()=>{
+  const c=document.getElementById('brContent');const div=document.getElementById('brDivider');const pane=document.getElementById('brPubPane');
+  if(pane.style.display==='none'){pane.style.display='';div.style.display='';toast('左右分栏');}
+  else{pane.style.display='none';div.style.display='none';toast('仅浏览器');}
+});
+document.getElementById('emReplace').addEventListener('click',()=>{document.getElementById('emReplace').classList.add('active');document.getElementById('emAppend').classList.remove('active');});
+document.getElementById('emAppend').addEventListener('click',()=>{document.getElementById('emAppend').classList.add('active');document.getElementById('emReplace').classList.remove('active');});
+/* 侧边栏 */
+function openSidebar(tab){
+  document.getElementById('sidebar').classList.add('show');document.getElementById('sbMask').classList.add('show');
+  document.getElementById('sbBookmarks').classList.toggle('active',tab==='bookmarks');
+  document.getElementById('sbHistory').classList.toggle('active',tab==='history');
+  renderSidebar(tab);
+}
+function renderSidebar(tab){
+  const l=document.getElementById('sbList');
+  if(tab==='bookmarks'){
+    l.innerHTML=[['📕 小红书创作中心','https://www.xiaohongshu.com/creator'],['🎬 抖音创作者平台','https://creator.douyin.com']]
+      .map(([t,u])=>`<div class="sitem"><div class="si bm">☆</div><div style="flex:1;min-width:0"><div class="st">${t}</div><div class="su">${u}</div></div></div>`).join('');
+  }else{
+    l.innerHTML=[['夏日穿搭分享','今天 10:20'],['探店 vlog','今天 09:15'],['AI 工具测评','昨天 21:40']]
+      .map(([t,time])=>`<div class="sitem"><div class="si hi">🕘</div><div style="flex:1;min-width:0"><div class="st">${t}</div><div class="su">${time}</div></div></div>`).join('');
+  }
+}
+document.getElementById('bmBtn').addEventListener('click',()=>{toast('已添加到收藏夹');});
+document.getElementById('hiBtn').addEventListener('click',()=>openSidebar('history'));
+document.getElementById('sbBookmarks').addEventListener('click',()=>openSidebar('bookmarks'));
+document.getElementById('sbHistory').addEventListener('click',()=>openSidebar('history'));
+document.getElementById('sbClose').addEventListener('click',closeSidebar);
+document.getElementById('sbMask').addEventListener('click',closeSidebar);
+function closeSidebar(){document.getElementById('sidebar').classList.remove('show');document.getElementById('sbMask').classList.remove('show');}
+
+/* ============ 发布历史 ============ */
+const hists=[
+  {t:'夏日穿搭分享',pl:'douyin',acc:'美妆日记',st:'success',time:'07-14 10:24',dur:'12s'},
+  {t:'一周好物清单',pl:'xhs',acc:'种草号',st:'success',time:'07-14 09:51',dur:'8s'},
+  {t:'探店 vlog',pl:'kuaishou',acc:'美食家',st:'running',time:'07-14 10:30',dur:'发布中'},
+  {t:'AI 工具心得',pl:'zhihu',acc:'知识分享',st:'failed',time:'07-13 22:10',dur:'失败'},
+];
+function renderHist(){
+  const g=document.getElementById('histList');
+  const stMap={success:['ok','成功'],running:['warn','发布中'],failed:['danger','失败'],scheduled:['blue','待发布']};
+  g.innerHTML=hists.map(h=>{
+    const p=platforms.find(x=>x.id===h.pl);const[s,c,l]=stMap[h.st];
+    return `<div class="hist-card"><div class="hd" style="background:${p.color}">${p.emoji}</div><div class="hb">
+      <div class="htt">${h.t}</div>
+      <div class="hmeta"><span>${p.name} · ${h.acc}</span><span class="tag ${s}">${l}</span><span>${h.time}</span><span>${h.dur}</span></div>
+      <div class="hacts"><button class="btn sm" onclick="toast('查看详情')">查看</button>
+        ${h.st==='running'?'<button class="btn sm danger" onclick="toast(\'已取消\')">取消</button>':''}
+        ${h.st==='failed'?'<button class="btn sm" onclick="toast(\'重试\')">重试</button><button class="btn sm" onclick="toast(\'编辑重发\')">编辑重发</button>':''}
+        <button class="btn sm danger" onclick="toast('删除记录')">删除</button></div>
+    </div></div>`;
+  }).join('');
+}
+renderHist();
+
+/* ============ 环境配置 ============ */
+const envs=[
+  {n:'主账号防关联配置',ua:'Chrome 126 · Windows',proxy:'socks5 127.0.0.1:10808'},
+  {n:'旅行专用环境',ua:'Safari 17 · macOS',proxy:'本机直连'},
+  {n:'默认环境',ua:'Edge 126 · Windows',proxy:'本机直连'},
+];
+function renderEnv(){
+  const g=document.getElementById('envGrid');
+  g.innerHTML=envs.map(e=>`<div class="acct"><div class="top"><div class="avatar" style="background:linear-gradient(135deg,var(--indigo),var(--sky))">🌐</div>
+    <div><div class="nm">${e.n}</div><div class="pl"><span class="tag ok">已激活</span></div></div></div>
+    <div style="font-size:11.5px;color:var(--muted);font-weight:600;margin-bottom:8px">User-Agent</div>
+    <div style="background:#f6f8fc;border:1px solid var(--line-soft);border-radius:9px;padding:9px 11px;font-family:monospace;font-size:11px;color:var(--slate);margin-bottom:10px">${e.ua}</div>
+    <div class="chips"><span class="chip env">🔗 ${e.proxy}</span></div>
+    <div class="acts"><button class="btn sm" onclick="toast('编辑环境')">编辑配置</button><button class="btn sm danger" onclick="toast('删除环境')">删除</button></div>
+  </div>`).join('');
+}
+renderEnv();
+
+/* ============ 日志管理 ============ */
+const pubLog=[
+  '[10:24:01] INFO 提交发布任务 task_a1b2c3d4 账号数=2',
+  '[10:24:02] INFO 抖音(美妆日记) 开始上传视频…',
+  '[10:24:06] WARN 小红书(种草号) 标题接近长度上限(18/20)',
+  '[10:24:09] INFO 抖音(美妆日记) 视频转码完成，进度 60%',
+  '[10:24:12] INFO 小红书(种草号) 封面上传成功',
+  '[10:24:15] ERROR 快手(美食家) 登录态失效，跳过发布',
+  '[10:24:18] INFO 抖音(美妆日记) 发布成功 → https://v.douyin.com/abc',
+  '[10:24:21] INFO 小红书(种草号) 发布成功 → https://xhslink.com/xyz',
+  '[10:24:22] INFO 任务 task_a1b2c3d4 完成：成功 2 / 失败 1',
+];
+const mainLog=[
+  '[10:20:00] INFO 应用启动 v1.0.3 (electron 31)',
+  '[10:20:01] INFO 加载账号配置：12 个账号',
+  '[10:20:03] WARN 远程接口未启用（仅本地）',
+  '[10:22:14] INFO 浏览器环境「旅行专用环境」已创建',
+  '[10:24:30] INFO 收到发布任务，分发至发布引擎',
+  '[10:25:02] INFO 定时任务扫描：5 个待发布',
+  '[10:26:11] ERROR 代理连接超时，已重试 1 次',
+];
+let curLog='publish';
+function renderLog(){
+  const term=document.getElementById('logTerm');
+  const src=curLog==='publish'?pubLog:mainLog;
+  const kw=document.getElementById('logSearch').value.toLowerCase();
+  term.innerHTML=src.filter(l=>!kw||l.toLowerCase().includes(kw)).map(l=>{
+    let cls='info';if(l.includes('ERROR'))cls='err';else if(l.includes('WARN'))cls='warn';
+    return `<div class="ln"><span class="${cls}">${l}</span></div>`;
+  }).join('')||'<div class="ln">（无匹配日志）</div>';
+  term.scrollTop=term.scrollHeight;
+}
+document.getElementById('logPub').addEventListener('click',()=>{curLog='publish';document.getElementById('logPub').classList.add('active');document.getElementById('logMain').classList.remove('active');renderLog();});
+document.getElementById('logMain').addEventListener('click',()=>{curLog='main';document.getElementById('logMain').classList.add('active');document.getElementById('logPub').classList.remove('active');renderLog();});
+function filterLog(){renderLog();}
+document.getElementById('exportAllLogs').addEventListener('click',()=>toast('已导出全部日志'));
+document.getElementById('exportCurLog').addEventListener('click',()=>toast('已导出当前日志'));
+document.getElementById('openLogDir').addEventListener('click',()=>toast('已打开日志目录'));
+document.getElementById('clearMemLog').addEventListener('click',()=>{if(confirm('确定清空内存中的发布日志？')){pubLog.length=0;renderLog();toast('已清空内存日志');}});
+renderLog();
+
+document.getElementById('healthBtn').addEventListener('click',()=>toast('正在批量检测账号健康状态…'));
+document.getElementById('histFilter').addEventListener('click',()=>toast('打开筛选'));
+
+/* 初始视图 */
+setPubType('video');
+showView('dashboard');
+</script>
+</body>
+</html>

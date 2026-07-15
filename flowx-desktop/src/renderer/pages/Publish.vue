@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { usePublishStore } from '../stores/publish'
@@ -13,6 +13,13 @@ const route = useRoute()
 const accountStore = useAccountStore()
 const publishStore = usePublishStore()
 const draftStore = useDraftStore()
+
+// 根据路由派生内容类型：/publish/video|image|article
+const formContentType = computed<'video' | 'image' | 'article'>(() => {
+  if (route.path === '/publish/image') return 'image'
+  if (route.path === '/publish/article') return 'article'
+  return 'video'
+})
 
 // ============ UI ============
 const showDebug = ref(false)
@@ -173,7 +180,7 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
 <template>
   <div class="publish-page">
     <!-- ==================== 发布表单 ==================== -->
-    <PublishForm ref="publishFormRef" @submit="handleSubmit" @test-submit="handleTestSubmit">
+    <PublishForm ref="publishFormRef" :key="formContentType" :content-type="formContentType" @submit="handleSubmit" @test-submit="handleTestSubmit">
       <template #footer-extra>
         <el-button @click="toggleDebug" :type="showDebug ? 'warning' : 'default'">
           {{ showDebug ? '隐藏调试日志' : '调试模式' }}（{{ publishStore.logs.length }}）
@@ -323,64 +330,66 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
 
 <style scoped>
 .publish-page {
-  padding: 16px;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
 }
 .panel {
-  background: #fff;
-  border-radius: 8px;
-  padding: 16px 20px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-xs);
 }
 .section-title {
-  font-size: 14px;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
   margin: 0 0 12px;
-  color: #303133;
+  color: var(--ink);
 }
 
 /* 调试日志 */
-.debug-hint { font-size: 12px; color: #909399; margin-bottom: 6px; }
+.debug-hint { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .debug-actions { margin-bottom: 10px; display: flex; gap: 8px; }
 .debug-log {
-  background: #1e1e1e;
+  background: #0f1320;
   color: #d4d4d4;
-  padding: 10px;
-  border-radius: 4px;
+  padding: 12px;
+  border-radius: var(--r-sm);
   max-height: 420px;
   overflow-y: auto;
-  font-family: 'Consolas', 'Monaco', monospace;
+  font-family: 'JetBrains Mono', 'Consolas', 'Monaco', monospace;
   font-size: 12px;
   line-height: 1.7;
 }
 .log-line { display: flex; gap: 6px; flex-wrap: wrap; }
 .log-line.warn { color: #e5c07b; }
 .log-line.error { color: #f48771; }
-.log-time { color: #858585; flex-shrink: 0; }
+.log-time { color: #6b7280; flex-shrink: 0; }
 .log-level { color: #6a9955; flex-shrink: 0; }
 .log-msg { color: #d4d4d4; }
-.log-data { color: #858585; margin-left: 4px; word-break: break-all; }
+.log-data { color: #6b7280; margin-left: 4px; word-break: break-all; }
 .empty { padding: 20px 0; }
-.task-meta { display: flex; gap: 20px; color: #606266; font-size: 13px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+.task-meta { display: flex; gap: 20px; color: var(--slate); font-size: 13px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
 
 /* 测试结果 */
 .test-results {
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px dashed #e4e7ed;
+  border-top: 1px dashed var(--line-strong);
 }
 .test-results-title {
   font-size: 14px;
   font-weight: 600;
   margin: 0 0 12px;
-  color: #e6a23c;
+  color: var(--warning);
 }
 .test-result-item {
-  background: #fdf6ec;
-  border: 1px solid #faecd8;
-  border-radius: 6px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: var(--r-sm);
   padding: 12px 16px;
   margin-bottom: 10px;
 }
@@ -395,7 +404,7 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
 }
 .test-result-account {
   font-weight: 500;
-  color: #606266;
+  color: var(--slate);
   font-size: 13px;
 }
 .test-result-grid {
@@ -410,39 +419,39 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
   gap: 4px;
   padding: 8px 12px;
   background: #fff;
-  border-radius: 4px;
-  border: 1px solid #f0d9a8;
+  border-radius: var(--r-sm);
+  border: 1px solid #fde68a;
 }
 .test-field.filled {
-  border-color: #67c23a;
-  background: #f0f9eb;
+  border-color: var(--success);
+  background: #ecfdf5;
 }
 .test-field-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--muted);
 }
 .test-field-value {
   font-size: 13px;
   font-weight: 500;
-  color: #606266;
+  color: var(--slate);
 }
 .test-field.filled .test-field-value {
-  color: #67c23a;
+  color: var(--success);
 }
 .test-result-note {
   font-size: 12px;
-  color: #e6a23c;
+  color: var(--warning);
   margin-top: 8px;
   padding: 6px 10px;
-  background: #fffbe6;
-  border-radius: 4px;
+  background: #fffbeb;
+  border-radius: var(--r-sm);
 }
 .test-fields-detail {
   margin-top: 10px;
 }
 .test-fields-detail-title {
   font-size: 12px;
-  color: #909399;
+  color: var(--muted);
   margin-bottom: 6px;
 }
 .test-fields-list {
@@ -455,13 +464,13 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
   padding: 2px 8px;
   font-size: 11px;
   border-radius: 10px;
-  background: #fef0f0;
-  color: #f56c6c;
-  border: 1px solid #fbc4c4;
+  background: #fef2f2;
+  color: #f87171;
+  border: 1px solid #fecaca;
 }
 .test-field-chip.filled {
-  background: #f0f9eb;
-  color: #67c23a;
-  border-color: #c2e7b0;
+  background: #ecfdf5;
+  color: var(--success);
+  border-color: #bbf7d0;
 }
 </style>

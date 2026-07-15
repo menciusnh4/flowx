@@ -12,6 +12,12 @@ const props = defineProps<{
   showSubmit?: boolean
   /** 提交按钮文本 */
   submitText?: string
+  /**
+   * 内容类型由父级（路由）控制时传入。
+   * 传入后隐藏页面内分段 Tab，类型完全由该 prop 决定。
+   * 不传则保持旧行为：页面内显示 视频/图文/文章 切换。
+   */
+  contentType?: 'video' | 'image' | 'article'
 }>()
 
 const emit = defineEmits<{
@@ -43,7 +49,18 @@ async function showConfirm(message: string, title: string, options?: Record<stri
 }
 
 // ============ 表单 ============
-const contentType = ref<'video' | 'image' | 'article'>(props.initialValue?.contentType || 'video')
+const contentType = ref<'video' | 'image' | 'article'>(props.contentType || props.initialValue?.contentType || 'video')
+/** 是否由路由/父级控制内容类型（隐藏页面内 Tab） */
+const controlled = computed(() => !!props.contentType)
+/** 当前类型对应的展示信息（用于受控模式下的类型徽标） */
+const typeMeta = computed(() => {
+  const map: Record<string, { icon: string; label: string }> = {
+    video: { icon: '🎬', label: '发布视频' },
+    image: { icon: '🖼️', label: '发布图文' },
+    article: { icon: '📄', label: '发布文章' },
+  }
+  return map[contentType.value] || map.video
+})
 const title = ref(props.initialValue?.title || '')
 const mediaFiles = ref<string[]>(props.initialValue?.mediaFiles || [])
 const content = ref(props.initialValue?.content || '')
@@ -831,65 +848,124 @@ function iconOf(platform?: string): string {
   }
   return map[platform ?? ''] || '🔘'
 }
+
+// ============ 原型视觉辅助 ============
+/** 切换发布类型（顺带清理类型不兼容的账号选中，与 watch 一致） */
+function setType(t: 'video' | 'image' | 'article') {
+  contentType.value = t
+  notifyChange()
+}
+
+/** 平台品牌色，用于账号选择卡片的彩色图标底 */
+function platColor(p?: string): string {
+  const map: Record<string, string> = {
+    douyin: '#161823',
+    kuaishou: '#FF4906',
+    xiaohongshu: '#FF2442',
+    bilibili: '#FB7299',
+    wechat_channels: '#07C160',
+    zhihu: '#0084FF',
+    toutiao: '#FF4500',
+  }
+  return map[p ?? ''] || '#6366F1'
+}
 </script>
 
 <template>
   <div class="publish-form">
-    <div class="panel">
-      <h2 class="section-title">① 选择发布类型</h2>
-      <el-radio-group v-model="contentType" size="default" @change="notifyChange">
-        <el-radio-button value="video">视频</el-radio-button>
-        <el-radio-button value="image">图文</el-radio-button>
-        <el-radio-button value="article">文章</el-radio-button>
-      </el-radio-group>
-      <el-divider />
+    <div class="pub-wrap">
+      <!-- 左：发布内容 -->
+      <div class="panel pub-card">
+        <!-- 受控模式（路由驱动）下展示类型徽标，替代页面内 Tab -->
+        <div v-if="controlled" class="type-badge">
+          <span class="tb-ic">{{ typeMeta.icon }}</span>
+          <span class="tb-label">{{ typeMeta.label }}</span>
+        </div>
+        <!-- ① 内容类型 -->
+        <div class="type-tabs" v-if="!controlled">
+          <button type="button" class="t-tab" :class="{ active: contentType === 'video' }" @click="setType('video')">🎬 视频</button>
+          <button type="button" class="t-tab" :class="{ active: contentType === 'image' }" @click="setType('image')">🖼️ 图文</button>
+          <button type="button" class="t-tab" :class="{ active: contentType === 'article' }" @click="setType('article')">📄 文章</button>
+        </div>
 
-      <div class="section-header">
-        <h2 class="section-title">② 标题与内容</h2>
-        <el-button size="small" text type="danger" @click="clearContentSection">清空内容</el-button>
-      </div>
-      <el-form label-width="80px" label-position="right">
-        <el-form-item label="标题">
+        <!-- 标题 -->
+        <div class="field">
+          <label>标题<span class="counter">{{ title.length }} / {{ titleMaxLength }}</span></label>
+          <el-input v-model="title" :placeholder="titlePlaceholder" :maxlength="titleMaxLength" @input="notifyChange" />
+        </div>
+
+        <!-- 正文 / 描述 -->
+        <div class="field">
+          <label>{{ contentType === 'article' ? '正文' : '正文 / 描述' }}<span class="counter">{{ content.length }} / {{ platformContentLimit.min }}</span></label>
           <el-input
-            v-model="title"
-            :placeholder="titlePlaceholder"
-            :maxlength="titleMaxLength"
-            show-word-limit
+            ref="contentTextareaRef"
+            v-model="content"
+            type="textarea"
+            :rows="contentType === 'article' ? 8 : 4"
+            :placeholder="contentType === 'article'
+              ? '请输入文章正文（抖音：至少100字，最多8000字；小红书：不限制字数）'
+              : contentType === 'image'
+                ? '可选：为图文添加描述文案（将作为笔记正文发布，小红书 1000 字/抖音 1000 字/快手 500 字）'
+                : '可选：为视频添加描述文案（快手最多 500 字）'"
+            :maxlength="platformContentLimit.min"
             @input="notifyChange"
           />
-        </el-form-item>
+          <div v-if="kuaishouSelected" class="kuaishou-hint">⚡ 已选快手账号：正文将被限制为 500 字，超出部分将自动截断</div>
+          <div v-if="isContentWithTagsOverLimit" class="over-limit-hint">⚠️ 正文+话题共 {{ content.length + tagsLength }} 字，超出所选平台最大限制（{{ platformContentLimit.min }} 字），发布后可能被截断</div>
+          <div v-else-if="isContentOverLimit" class="over-limit-hint">⚠️ 当前内容（{{ content.length }} 字）超出所选平台最大限制（{{ platformContentLimit.min }} 字），超出部分将在发布时自动截断</div>
+          <div v-if="platformContentLimit.platforms.length > 0" class="limits-hint">各平台正文限制：{{ platformContentLimit.platforms.map(p => `${platformName(p.platform)} ${p.limit}字`).join(' / ') }}<span v-if="tagsLength > 0">（当前话题约 {{ tagsLength }} 字）</span></div>
+          <div v-if="articleMinContentHint" class="min-content-hint">{{ articleMinContentHint }}</div>
+        </div>
 
-        <el-form-item v-if="contentType !== 'article'" label="素材">
-          <el-button @click="pickMediaFiles">选择文件</el-button>
-          <span v-if="mediaFiles.length > 0" style="margin-left:8px; color:#909399; font-size:12px;">
-            已选择 {{ mediaFiles.length }} 个文件
-          </span>
+        <!-- 话题 -->
+        <div class="field">
+          <label>话题标签</label>
+          <el-input v-model="tagsRaw" placeholder="多个话题用空格或逗号分隔，例如：美食探店 上海生活" @input="notifyChange" />
+        </div>
+
+        <!-- 素材（视频 / 图文） -->
+        <div class="field" v-if="contentType !== 'article'">
+          <label>素材文件</label>
+          <div class="dropzone" @click="pickMediaFiles">
+            <div class="dz-ico">📎</div>
+            <div>
+              <div class="dz-main">点击或拖拽上传{{ contentType === 'video' ? '视频' : '图片' }}</div>
+              <div class="dz-sub">{{ contentType === 'video' ? '支持 mp4 / mov / avi 等' : '支持 jpg / png / webp 等' }}</div>
+            </div>
+          </div>
+          <div v-if="mediaFiles.length > 0" class="file-tip">已选择 {{ mediaFiles.length }} 个文件</div>
           <div class="file-list" v-if="mediaFiles.length > 0">
             <div v-for="(f, idx) in mediaFiles" :key="idx" class="file-item">
               <span class="file-name">{{ f }}</span>
               <el-button size="small" type="danger" link @click="removeMediaFile(f)">删除</el-button>
             </div>
           </div>
-        </el-form-item>
+        </div>
 
-        <!-- 文章模式：封面图片上传 -->
-        <el-form-item v-if="contentType === 'article'" label="封面">
-          <div class="article-cover-actions">
-            <el-button @click="pickArticleCover">选择封面图片</el-button>
-            <el-button
-              v-if="mediaFiles.length > 0"
-              type="danger"
-              plain
-              size="small"
-              @click="clearMediaFiles"
-            >清空图片</el-button>
-            <span v-if="mediaFiles.length > 0" style="color:#909399; font-size:12px;">
-              已选择 {{ mediaFiles.length }} 张图片（第 1 张作为封面）
-            </span>
+        <!-- 封面（视频） -->
+        <div class="field" v-if="contentType === 'video'">
+          <label>封面图</label>
+          <div class="dropzone" @click="pickCover">
+            <div class="dz-ico">🖼️</div>
+            <div>
+              <div class="dz-main">上传封面</div>
+              <div class="dz-sub">抖音 / 视频号必填</div>
+            </div>
           </div>
-          <div class="article-cover-hint" v-if="hasDouyinAccount">
-            <span style="color:#F56C6C;">⚠️ 已选抖音账号：封面为必填项</span>
+          <div v-if="coverImage" class="cover-path">🖼️ {{ coverImage }}</div>
+        </div>
+
+        <!-- 封面（文章：取图片首张） -->
+        <div class="field" v-if="contentType === 'article'">
+          <label>封面图片</label>
+          <div class="dropzone" @click="pickArticleCover">
+            <div class="dz-ico">🖼️</div>
+            <div>
+              <div class="dz-main">选择封面图片</div>
+              <div class="dz-sub">第 1 张将作为封面</div>
+            </div>
           </div>
+          <div class="article-cover-hint" v-if="hasDouyinAccount"><span class="warn-text">⚠️ 已选抖音账号：封面为必填项</span></div>
           <div class="image-grid" v-if="mediaFiles.length > 0">
             <div v-for="(f, idx) in mediaFiles" :key="idx" class="image-item">
               <div class="image-thumb">
@@ -903,141 +979,77 @@ function iconOf(platform?: string): string {
               </div>
             </div>
           </div>
-        </el-form-item>
+        </div>
 
-        <el-form-item v-if="contentType === 'video'" label="封面">
-          <el-button @click="pickCover">选择封面</el-button>
-          <span v-if="coverImage" style="margin-left:8px; color:#909399; font-size:12px;">{{ coverImage }}</span>
-        </el-form-item>
+        <!-- 摘要（文章） -->
+        <div class="field" v-if="contentType === 'article'">
+          <label>摘要<span class="counter">{{ summary.length }} / {{ articleSummaryMaxLength }}</span></label>
+          <el-input v-model="summary" type="textarea" :rows="2" placeholder="可选：文章摘要/简介（抖音300字/小红书1000字）" :maxlength="articleSummaryMaxLength" @input="notifyChange" />
+        </div>
 
-        <el-form-item label="描述">
-          <el-input
-            ref="contentTextareaRef"
-            v-model="content"
-            type="textarea"
-            :rows="contentType === 'article' ? 8 : 4"
-            :placeholder="contentType === 'article'
-              ? '请输入文章正文（抖音：至少100字，最多8000字；小红书：不限制字数）'
-              : contentType === 'image'
-                ? '可选：为图文添加描述文案（将作为笔记正文发布，小红书 1000 字/抖音 1000 字/快手 500 字）'
-                : '可选：为视频添加描述文案（快手最多 500 字）'"
-            :maxlength="platformContentLimit.min"
-            show-word-limit
-            @input="notifyChange"
-          />
-          <div v-if="kuaishouSelected" class="kuaishou-hint">
-            ⚡ 已选快手账号：正文将被限制为 500 字，超出部分将自动截断
+        <!-- 发布时间 -->
+        <div class="field">
+          <label>发布时间</label>
+          <div class="time-row">
+            <div class="seg">
+              <button type="button" class="seg-btn" :class="{ active: publishTimeType === 'now' }" @click="publishTimeType = 'now'; notifyChange()">⚡ 立即发布</button>
+              <button type="button" class="seg-btn" :class="{ active: publishTimeType === 'scheduled' }" @click="publishTimeType = 'scheduled'; notifyChange()">🕘 定时发布</button>
+            </div>
+            <el-date-picker
+              v-if="publishTimeType === 'scheduled'"
+              v-model="scheduledTime"
+              type="datetime"
+              placeholder="选择发布时间"
+              :disabled-date="disabledScheduledDate"
+              class="time-picker"
+              @change="notifyChange"
+            />
           </div>
-          <div v-if="isContentWithTagsOverLimit" class="over-limit-hint">
-            ⚠️ 正文+话题共 {{ content.length + tagsLength }} 字，超出所选平台最大限制（{{ platformContentLimit.min }} 字），发布后可能被截断
-          </div>
-          <div v-else-if="isContentOverLimit" class="over-limit-hint">
-            ⚠️ 当前内容（{{ content.length }} 字）超出所选平台最大限制（{{ platformContentLimit.min }} 字），超出部分将在发布时自动截断
-          </div>
-          <div v-if="platformContentLimit.platforms.length > 0" class="limits-hint">
-            各平台正文限制：{{ platformContentLimit.platforms.map(p => `${platformName(p.platform)} ${p.limit}字`).join(' / ') }}
-            <span v-if="tagsLength > 0">（当前话题约 {{ tagsLength }} 字）</span>
-          </div>
-          <div v-if="articleMinContentHint" class="min-content-hint">
-            {{ articleMinContentHint }}
-          </div>
-        </el-form-item>
-
-        <!-- 文章模式：文章摘要 -->
-        <el-form-item v-if="contentType === 'article'" label="摘要">
-          <el-input
-            v-model="summary"
-            type="textarea"
-            :rows="2"
-            placeholder="可选：文章摘要/简介，将显示在文章列表或分享卡片中（抖音300字/小红书1000字）"
-            :maxlength="articleSummaryMaxLength"
-            show-word-limit
-            @input="notifyChange"
-          />
-        </el-form-item>
-
-        <el-form-item label="话题">
-          <el-input v-model="tagsRaw" placeholder="多个话题用空格或逗号分隔，例如：美食探店 上海生活" @input="notifyChange" />
-        </el-form-item>
-      </el-form>
-
-      <el-divider />
-
-      <h2 class="section-title">③ 选择发布账号</h2>
-      <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-        <span style="font-size: 13px; color: #606266;">分类筛选：</span>
-        <el-select v-model="publishFilterCategoryId" placeholder="全部分类" clearable style="width: 140px" size="small">
-          <el-option label="全部分类" value="" />
-          <el-option label="未分类" value="unclassified" />
-          <el-option v-for="cat in accountStore.categories" :key="cat.id" :label="cat.name" :value="cat.id" />
-        </el-select>
-      </div>
-      <div class="account-actions">
-        <el-button size="small" @click="selectAll">全选可见</el-button>
-        <el-button size="small" @click="clearSelection">清空</el-button>
-        <span class="hint">已选 {{ getSelectedIds().length }} / {{ visibleAccounts.length }}</span>
-      </div>
-
-      <div v-if="visibleAccounts.length === 0" class="empty">
-        <el-empty description="没有可用账号，请先在账号管理授权" />
-      </div>
-
-      <div v-else class="account-grid">
-        <div
-          v-for="a in visibleAccounts"
-          :key="a.id"
-          class="account-card"
-          :class="{ selected: !!selectedIds[a.id] }"
-          @click="toggleAccount(a.id)"
-        >
-          <div class="platform-tag">{{ iconOf(a.platform) }} {{ platformName(a.platform) }}</div>
-          <div class="nickname">{{ a.nickname }}</div>
-          <div class="account-id">{{ a.id }}</div>
-          <div class="content-limit-tag">
-            {{ (() => {
-              const meta = accountStore.platforms.find(p => p.key === a.platform);
-              if (!meta) return '';
-              if (contentType === 'article') {
-                const t = meta.articleLimits?.title;
-                const c = meta.articleLimits?.content;
-                if (typeof t === 'number' && typeof c === 'number') return `标题${t}字 / 正文${c}字`;
-                if (typeof t === 'number') return `标题${t}字 / 正文不限`;
-                if (typeof c === 'number') return `正文最多 ${c} 字`;
-                return '字数不限';
-              }
-              return meta.contentLimits?.content ? `正文最多 ${meta.contentLimits.content} 字` : '';
-            })() }}
-          </div>
-          <div v-if="selectedIds[a.id]" class="selected-mark">✓</div>
         </div>
       </div>
 
-      <el-divider />
+      <!-- 右：选择账号 -->
+      <div class="panel acc-card">
+        <h2 class="sec-title">选择发布账号</h2>
+        <div class="filters">
+          <button type="button" class="pill" :class="{ active: publishFilterCategoryId === '' }" @click="publishFilterCategoryId = ''">全部分类</button>
+          <button type="button" class="pill" :class="{ active: publishFilterCategoryId === 'unclassified' }" @click="publishFilterCategoryId = 'unclassified'">未分类</button>
+          <button type="button" class="pill" v-for="cat in accountStore.categories" :key="cat.id" :class="{ active: publishFilterCategoryId === cat.id }" @click="publishFilterCategoryId = cat.id">{{ cat.name }}</button>
+        </div>
+        <div class="pick-actions">
+          <button type="button" class="link-btn" @click="selectAll">全选可见</button>
+          <button type="button" class="link-btn" @click="clearSelection">清空</button>
+          <span class="hint">已选 {{ getSelectedIds().length }} / {{ visibleAccounts.length }}</span>
+        </div>
 
-      <h2 class="section-title">④ 发布设置</h2>
-      <el-form label-width="80px" style="margin-bottom: 20px;">
-        <el-form-item label="发布时间">
-          <el-radio-group v-model="publishTimeType" size="default" @change="notifyChange">
-            <el-radio value="now">立即发布</el-radio>
-            <el-radio value="scheduled">定时发布</el-radio>
-          </el-radio-group>
-          
-          <el-date-picker
-            v-if="publishTimeType === 'scheduled'"
-            v-model="scheduledTime"
-            type="datetime"
-            placeholder="选择发布时间"
-            :disabled-date="disabledScheduledDate"
-            style="margin-left: 16px; width: 220px;"
-          />
-        </el-form-item>
-      </el-form>
+        <div v-if="visibleAccounts.length === 0" class="empty"><el-empty description="没有可用账号，请先在账号管理授权" /></div>
+
+        <div v-else class="pick-scroll">
+          <div class="pick-grid">
+            <div
+              v-for="a in visibleAccounts"
+              :key="a.id"
+              class="pick"
+              :class="{ on: !!selectedIds[a.id] }"
+              @click="toggleAccount(a.id)"
+            >
+              <div class="pd" :style="{ background: platColor(a.platform) }">{{ iconOf(a.platform) }}</div>
+              <div class="pinfo">
+                <div class="pn">{{ a.nickname }}</div>
+                <div class="pf">{{ platformName(a.platform) }} · {{ a.id }}</div>
+              </div>
+              <div v-if="selectedIds[a.id]" class="check">✓</div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
+    <!-- 底部提交栏 -->
     <div class="form-footer">
       <div class="submit-row">
         <el-button type="primary" :loading="submitting" :disabled="submitting || visibleAccounts.length === 0" @click="submitPublish">
-          {{ submitText || (publishTimeType === 'scheduled' ? '定时发布到' : '一键发布到') + ' ' + getSelectedIds().length + ' 个账号' }}
+          {{ submitText || (publishTimeType === 'scheduled' ? '🕘 定时发布到' : '🚀 一键发布到') + ' ' + getSelectedIds().length + ' 个账号' }}
         </el-button>
         <el-button type="warning" :loading="submitting" :disabled="submitting || visibleAccounts.length === 0" @click="submitTestPublish">
           🔍 发布测试
@@ -1057,165 +1069,192 @@ function iconOf(platform?: string): string {
   min-height: 0;
   overflow: hidden;
 }
-.panel {
-  background: #fff;
-  border-radius: 8px;
-  padding: 16px 20px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+.pub-wrap {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 16px;
+  align-items: start;
   flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
+  min-height: 0;
+  overflow: hidden;
 }
-.section-title {
-  font-size: 14px;
-  font-weight: 600;
-  margin: 0 0 12px;
-  color: #303133;
+@media (max-width: 1080px) {
+  .pub-wrap { grid-template-columns: 1fr; }
 }
-.section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 20px 22px;
+  box-shadow: var(--shadow-xs);
 }
-.section-header .section-title {
-  margin: 0;
-}
-.article-cover-actions {
-  display: flex;
+.pub-card { overflow-y: auto; }
+.acc-card { display: flex; flex-direction: column; min-height: 0; }
+.pick-scroll { overflow-y: auto; min-height: 0; flex: 1; padding-right: 4px; }
+
+/* 内容类型切换 */
+.type-badge {
+  display: inline-flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  background: var(--brand-grad-soft);
+  color: var(--brand-indigo);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: 12px;
+  padding: 7px 14px;
+  margin-bottom: 16px;
+  font-weight: 700;
+  font-size: 13.5px;
 }
-.image-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 12px;
-  margin-top: 12px;
-}
-.image-item {
+.tb-ic { font-size: 16px; }
+.type-tabs {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  margin-bottom: 18px;
+  background: var(--surface-2);
+  padding: 5px;
+  border-radius: 14px;
 }
-.image-thumb {
-  position: relative;
-  width: 100%;
-  padding-top: 100%;
-  border-radius: 6px;
-  overflow: hidden;
-  background: #f5f7fa;
-  border: 1px solid #e4e7ed;
+.t-tab {
+  flex: 1;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-weight: 700;
+  font-size: 13.5px;
+  color: var(--slate);
+  cursor: pointer;
+  transition: all var(--t) var(--ease);
+  font-family: inherit;
 }
-.image-thumb img {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+.t-tab:hover { color: var(--brand-indigo); }
+.t-tab.active {
+  background: #fff;
+  color: var(--brand-indigo);
+  box-shadow: var(--shadow-sm);
 }
-.image-loading {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+
+/* 字段 */
+.field { margin-bottom: 15px; }
+.field > label {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 7px;
+}
+.counter { float: right; font-size: 11.5px; color: var(--faint); font-weight: 600; }
+
+/* 拖拽上传区 */
+.dropzone {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: var(--r-md);
+  padding: 16px;
+  cursor: pointer;
+  transition: all var(--t) var(--ease);
+  background: var(--surface-2);
+}
+.dropzone:hover { border-color: var(--brand-indigo); background: var(--brand-grad-soft); }
+.dz-ico {
+  font-size: 22px;
+  width: 40px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  color: #909399;
-  background: #f5f7fa;
+  background: #fff;
+  border-radius: 11px;
+  box-shadow: var(--shadow-xs);
+  flex-shrink: 0;
 }
-.cover-badge {
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  background: #409eff;
-  color: #fff;
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-weight: 500;
-}
-.image-actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
-}
-.image-index {
-  color: #909399;
-  font-size: 11px;
-}
-.file-list { margin-top: 8px; max-height: 160px; overflow-y: auto; }
-.file-item { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 12px; color: #606266; }
+.dz-main { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.dz-sub { font-size: 12px; color: var(--muted); font-weight: 500; }
+.file-tip { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.file-list { margin-top: 8px; max-height: 150px; overflow-y: auto; }
+.file-item { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; font-size: 12px; color: var(--slate); border-bottom: 1px dashed var(--line); }
 .file-name { word-break: break-all; }
-.account-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-.hint { color: #909399; font-size: 12px; }
-.account-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
-.account-card {
-  border: 1px solid #e4e7ed;
-  border-radius: 6px;
-  padding: 10px;
+
+/* 封面 */
+.cover-path { font-size: 12px; color: var(--muted); margin-top: 8px; word-break: break-all; }
+.article-cover-hint { margin-top: 8px; }
+.warn-text { color: var(--danger); font-size: 12px; font-weight: 600; }
+.image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; margin-top: 10px; }
+.image-item { display: flex; flex-direction: column; gap: 5px; }
+.image-thumb { position: relative; width: 100%; padding-top: 100%; border-radius: var(--r-sm); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
+.image-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.image-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--muted); }
+.cover-badge { position: absolute; top: 6px; left: 6px; background: var(--brand-indigo); color: #fff; font-size: 11px; padding: 2px 6px; border-radius: 6px; font-weight: 600; }
+.image-actions { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+.image-index { color: var(--muted); font-size: 11px; }
+
+/* 账号选择 */
+.sec-title { font-family: var(--font-display); font-size: 16px; font-weight: 700; margin: 0 0 12px; color: var(--ink); }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.pill {
+  padding: 7px 14px;
+  border-radius: 20px;
+  font-size: 12.5px;
+  font-weight: 700;
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--slate);
   cursor: pointer;
-  position: relative;
-  transition: all 0.15s;
+  transition: all var(--t) var(--ease);
+  font-family: inherit;
 }
-.account-card:hover { border-color: #409eff; background: #f4faff; }
-.account-card.selected { border-color: #409eff; background: #ecf5ff; border-width: 2px; padding: 9px; }
-.platform-tag { font-size: 12px; color: #909399; margin-bottom: 4px; }
-.nickname { font-size: 14px; font-weight: 500; color: #303133; }
-.account-id { font-size: 11px; color: #c0c4cc; margin-top: 4px; word-break: break-all; }
-.selected-mark { position: absolute; top: 8px; right: 10px; color: #409eff; font-weight: bold; }
-.submit-row { display: flex; gap: 10px; align-items: center; }
+.pill:hover { border-color: var(--brand-indigo); color: var(--brand-indigo); }
+.pill.active { background: var(--brand-grad); color: #fff; border-color: transparent; }
+.pick-actions { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+.link-btn { background: none; border: none; color: var(--brand-indigo); font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 0; font-family: inherit; }
+.link-btn:hover { text-decoration: underline; }
+.hint { color: var(--muted); font-size: 12px; margin-left: auto; }
+.pick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; padding-right: 2px; }
+.pick {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: #fff;
+  cursor: pointer;
+  transition: all var(--t) var(--ease);
+  position: relative;
+}
+.pick:hover { border-color: var(--brand-indigo); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+.pick.on { border-color: var(--brand-indigo); background: var(--brand-grad-soft); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12); }
+.pd { width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; color: #fff; flex-shrink: 0; }
+.pinfo { min-width: 0; }
+.pn { font-size: 13px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pf { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.check { position: absolute; top: 8px; right: 10px; width: 18px; height: 18px; border-radius: 50%; background: var(--brand-indigo); color: #fff; font-size: 11px; display: flex; align-items: center; justify-content: center; font-weight: 800; }
+
+/* 发布时间 */
+.time-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.seg { display: inline-flex; background: var(--surface-2); border-radius: 11px; padding: 4px; gap: 4px; }
+.seg-btn { border: none; background: transparent; border-radius: 8px; padding: 8px 14px; font-weight: 700; font-size: 13px; color: var(--slate); cursor: pointer; transition: all var(--t) var(--ease); font-family: inherit; }
+.seg-btn.active { background: #fff; color: var(--brand-indigo); box-shadow: var(--shadow-xs); }
+.time-picker { width: 220px; }
+
+/* 底部提交栏 */
+.submit-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .form-footer {
   flex-shrink: 0;
-  padding: 12px 20px;
-  border-top: 1px solid #e4e7ed;
-  background: #fff;
+  padding: 14px 22px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
   display: flex;
   justify-content: center;
 }
 
 /* 字数限制提示 */
-.kuaishou-hint {
-  font-size: 12px;
-  color: #e6a23c;
-  margin-top: 4px;
-  background: #fdf6ec;
-  border-left: 3px solid #e6a23c;
-  padding: 6px 10px;
-  border-radius: 3px;
-}
-.over-limit-hint {
-  font-size: 12px;
-  color: #f56c6c;
-  margin-top: 4px;
-  background: #fef0f0;
-  border-left: 3px solid #f56c6c;
-  padding: 6px 10px;
-  border-radius: 3px;
-}
-.limits-hint {
-  font-size: 11px;
-  color: #909399;
-  margin-top: 4px;
-}
-.min-content-hint {
-  font-size: 12px;
-  color: #409eff;
-  margin-top: 4px;
-  background: #ecf5ff;
-  border-left: 3px solid #409eff;
-  padding: 6px 10px;
-  border-radius: 3px;
-}
-.content-limit-tag {
-  font-size: 11px;
-  color: #909399;
-  margin-top: 4px;
-}
+.kuaishou-hint { font-size: 12px; color: var(--warning); margin-top: 4px; background: #fffbeb; border-left: 3px solid var(--warning); padding: 6px 10px; border-radius: var(--r-sm); }
+.over-limit-hint { font-size: 12px; color: var(--danger); margin-top: 4px; background: #fef2f2; border-left: 3px solid var(--danger); padding: 6px 10px; border-radius: var(--r-sm); }
+.limits-hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.min-content-hint { font-size: 12px; color: var(--brand-indigo); margin-top: 4px; background: var(--brand-grad-soft); border-left: 3px solid var(--brand-indigo); padding: 6px 10px; border-radius: var(--r-sm); }
 .empty { padding: 20px 0; }
 </style>

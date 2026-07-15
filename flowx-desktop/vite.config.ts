@@ -3,6 +3,26 @@ import vue from '@vitejs/plugin-vue';
 import electron from 'vite-plugin-electron';
 import renderer from 'vite-plugin-electron-renderer';
 import { resolve } from 'path';
+import type { Plugin } from 'vite';
+
+/**
+ * 消除开发期 MaxListenersExceededWarning：
+ * vite-plugin-electron 在每次主进程/preload 热重启时会向同一个 Vite
+ * 开发服务器（http.Server）重复注册 `close` 监听器（用于关闭时杀掉 Electron），
+ * 多次重启后会超过 Node 默认上限 10 触发报警。该警告非致命，此处仅提高上限消除噪音。
+ */
+function raiseDevServerMaxListeners(): Plugin {
+  return {
+    name: 'raise-dev-server-max-listeners',
+    configureServer(server) {
+      // 返回的函数在 httpServer 监听后执行，此时 server.httpServer 已就绪
+      return () => {
+        server.httpServer?.setMaxListeners(50);
+      };
+    },
+  };
+}
+
 
 // FlowX 桌面端 Vite 配置
 // - 渲染进程: Vue 3 + TS
@@ -24,6 +44,7 @@ export default defineConfig(({ command }) => {
     },
     plugins: [
       vue(),
+      raiseDevServerMaxListeners(),
       electron([
         {
           // 主进程入口

@@ -1449,7 +1449,7 @@ watch(() => route.path, () => {
   background: #f1f3f4;
   padding: 6px 8px 0 8px;
   flex-shrink: 0;
-  border-bottom: 1px solid #e4e7ed;
+  border-bottom: 1px solid var(--line);
   gap: 6px;
 }
 
@@ -1535,7 +1535,7 @@ watch(() => route.path, () => {
   gap: 12px;
   padding: 10px 16px;
   background: #fff;
-  border-bottom: 1px solid #e4e7ed;
+  border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
 
@@ -1567,7 +1567,7 @@ watch(() => route.path, () => {
 .browser-container {
   height: 100%;
   position: relative;
-  background: #f5f7fa;
+  background: var(--surface-2);
   overflow: hidden;
 }
 
@@ -1584,7 +1584,7 @@ watch(() => route.path, () => {
 
 .divider {
   width: 4px;
-  background: #e4e7ed;
+  background: var(--line);
   cursor: col-resize;
   flex-shrink: 0;
   position: relative;
@@ -1593,7 +1593,7 @@ watch(() => route.path, () => {
 
 .divider:hover,
 .divider.dragging {
-  background: #409eff;
+  background: var(--brand-indigo);
 }
 
 .divider-handle {
@@ -1614,7 +1614,7 @@ watch(() => route.path, () => {
 
 .publish-container {
   height: 100%;
-  background: #f5f7fa;
+  background: var(--surface-2);
   overflow: hidden;
   padding: 12px;
   box-sizing: border-box;
@@ -1626,16 +1626,16 @@ watch(() => route.path, () => {
 .nav-divider {
   width: 1px;
   height: 20px;
-  background: #e4e7ed;
+  background: var(--line);
   margin: 0 4px;
 }
 
 .btn-bookmark-active :deep(.el-icon) {
-  color: #e6a23c;
+  color: var(--warning);
 }
 
 .btn-sidebar-active :deep(.el-icon) {
-  color: #409eff;
+  color: var(--brand-indigo);
 }
 
 /* ========== 侧边栏 ========== */
@@ -1686,7 +1686,7 @@ watch(() => route.path, () => {
   display: flex;
   align-items: center;
   padding: 10px 12px;
-  border-bottom: 1px solid #e4e7ed;
+  border-bottom: 1px solid var(--line);
   flex-shrink: 0;
   gap: 8px;
 }
@@ -1712,12 +1712,12 @@ watch(() => route.path, () => {
 }
 
 .sidebar-tab:hover {
-  background: #f5f7fa;
+  background: var(--surface-2);
 }
 
 .sidebar-tab.active {
   background: #ecf5ff;
-  color: #409eff;
+  color: var(--brand-indigo);
   font-weight: 500;
 }
 
@@ -1736,7 +1736,7 @@ watch(() => route.path, () => {
 }
 
 .sidebar-close:hover {
-  background: #f5f7fa;
+  background: var(--surface-2);
   color: #606266;
 }
 
@@ -1784,7 +1784,7 @@ watch(() => route.path, () => {
 }
 
 .list-item:hover {
-  background: #f5f7fa;
+  background: var(--surface-2);
 }
 
 .item-icon {
@@ -1800,12 +1800,12 @@ watch(() => route.path, () => {
 
 .bookmark-icon {
   background: #fdf6ec;
-  color: #e6a23c;
+  color: var(--warning);
 }
 
 .history-icon {
   background: #ecf5ff;
-  color: #409eff;
+  color: var(--brand-indigo);
 }
 
 .item-info {
@@ -1905,7 +1905,7 @@ watch(() => route.path, () => {
 
 /* 选择器模式激活时的浏览器容器边框 */
 .browser-container.selector-active {
-  outline: 2px solid #e6a23c;
+  outline: 2px solid var(--warning);
   outline-offset: -2px;
 }
 
@@ -1927,7 +1927,7 @@ watch(() => route.path, () => {
   align-items: center;
   gap: 6px;
   padding: 6px 14px;
-  background: linear-gradient(135deg, #e6a23c, #f0c78a);
+  background: linear-gradient(135deg, var(--warning), #f0c78a);
   color: #fff;
   font-size: 13px;
   font-weight: 500;
