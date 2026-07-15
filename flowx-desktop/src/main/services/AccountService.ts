@@ -170,6 +170,9 @@ export class AccountService {
     const sess = session.fromPartition(partition);
     await BrowserEnvService.applyEnvironment(sess, cred.envId);
 
+    // 显式注入 cookies（确保登录态正确加载，尤其是微信视频号等对 cookie 敏感的平台）
+    await injectAccountCookies(id, platform.meta.homeUrl);
+
     const win = new BrowserWindow({
       width: 1280, height: 880,
       title: `检测登录态 - ${cred.nickname || id}`,
@@ -793,6 +796,9 @@ export class AccountService {
     const sess = session.fromPartition(partition);
     await BrowserEnvService.applyEnvironment(sess, c.envId);
 
+    // 显式注入 cookies（确保登录态正确加载）
+    await injectAccountCookies(id, platform.meta.homeUrl);
+
     const win = new BrowserWindow({
       width: 1280,
       height: 880,
@@ -1038,7 +1044,10 @@ export class AccountService {
     const { ok, fail, skipped } = await injectAccountCookies(accountId, homeUrl);
 
     // 2. 打开带 tab 栏的创作中心浏览器窗口
-    const winTitle = `创作中心 - ${cred.nickname || cred.platform}`;
+    // 窗口标题格式：平台名称 - 账号昵称 - 平台账号ID（便于区分不同账号的窗口）
+    const platformName = platform.meta.name || cred.platform;
+    const accountIdPart = cred.platformAccountId ? ` - ${cred.platformAccountId}` : '';
+    const winTitle = `${platformName} - ${cred.nickname || '未命名账号'}${accountIdPart}`;
     const creatorWin = getOrCreateCreatorWindow(accountId, homeUrl, winTitle, cred.envId || undefined);
 
     // ✅ 抖音专属：给创作中心窗口加上反崩溃保护

@@ -4,7 +4,7 @@
 export type PlatformType = string;
 
 /** 已知平台 key 列表（仅用于默认 UI 展示，实际支持以注册表为准） */
-export const KNOWN_PLATFORMS: string[] = ['douyin', 'xiaohongshu', 'kuaishou', 'wechat_channels', 'zhihu', 'toutiao'];
+export const KNOWN_PLATFORMS: string[] = ['douyin', 'xiaohongshu', 'kuaishou', 'wechat_channels', 'wechat_official', 'zhihu', 'toutiao'];
 
 /** 平台元信息 */
 export interface PlatformMeta {

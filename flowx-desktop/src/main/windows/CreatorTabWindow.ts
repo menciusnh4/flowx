@@ -402,6 +402,13 @@ export class CreatorTabWindow {
     // 加载 tab 栏页面（使用自定义协议）
     this.win.loadURL(`${TAB_BAR_PROTOCOL}://${TAB_BAR_HOST}/`);
 
+    // 加载完成后设置窗口标题（防止页面 title 覆盖 BrowserWindow title）
+    this.win.webContents.on('did-finish-load', () => {
+      if (windowTitle) {
+        this.win.webContents.executeJavaScript(`document.title = ${JSON.stringify(windowTitle)}`).catch(() => {});
+      }
+    });
+
     // 注册 IPC 处理（全局只注册一次）
     ensureIpcHandlersRegistered();
 
