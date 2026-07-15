@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox, ElInput } from 'element-plus'
 import { useAccountStore } from '../stores/account'
 import { electronApi } from '../utils/electron'
 import type { PublishRequest, PlatformType } from '../../types'
+import MarkdownEditor from './MarkdownEditor.vue'
 
 const props = defineProps<{
   /** 表单初始值（用于草稿加载、内容提取预填充等） */
@@ -53,6 +54,10 @@ const tagsRaw = ref((props.initialValue?.tags || []).join(' '))
 const submitting = ref(false)
 const contentTextareaRef = ref<InstanceType<typeof ElInput> | null>(null)
 
+// ============ Markdown 编辑器 ============
+const contentMode = ref<'text' | 'markdown'>(props.initialValue?.contentMode || 'text')
+const markdownContent = ref(props.initialValue?.markdownContent || '')
+
 // 监听表单变化，向外通知
 function notifyChange() {
   emit('change', {
@@ -60,10 +65,44 @@ function notifyChange() {
     title: title.value,
     mediaFiles: mediaFiles.value,
     content: content.value,
+    markdownContent: markdownContent.value,
+    contentMode: contentMode.value,
     summary: summary.value,
     coverImage: coverImage.value,
     tags: tagsRaw.value.split(/[,，\s]+/).map(t => t.trim().replace(/^#/, '')).filter(t => t.length > 0),
   })
+}
+
+// 切换正文模式（纯文本 / Markdown）
+async function onContentModeChange(newMode: string | number | boolean | undefined) {
+  const mode = newMode as 'text' | 'markdown';
+  if (mode === 'markdown') {
+    // 从纯文本切到 Markdown：将当前内容迁移到 Markdown 编辑器
+    if (content.value && !markdownContent.value) {
+      markdownContent.value = content.value
+    }
+  } else {
+    // 从 Markdown 切到纯文本：去除 Markdown 标记后回填
+    if (markdownContent.value) {
+      let plainText = markdownContent.value
+      // 去除标题标记
+      plainText = plainText.replace(/^#{1,6}\s+/gm, '')
+      // 去除粗体/斜体标记
+      plainText = plainText.replace(/\*\*([^*]+)\*\*/g, '$1')
+      plainText = plainText.replace(/\*([^*]+)\*/g, '$1')
+      // 去除高亮标记
+      plainText = plainText.replace(/==([^=]+)==/g, '$1')
+      // 去除引用标记
+      plainText = plainText.replace(/^>\s?/gm, '')
+      // 去除列表标记
+      plainText = plainText.replace(/^[-*+]\s+/gm, '')
+      plainText = plainText.replace(/^\d+\.\s+/gm, '')
+      // 图片语法转文字
+      plainText = plainText.replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+      content.value = plainText.trim()
+    }
+  }
+  notifyChange()
 }
 
 // ============ 选择的账号 ID ============
@@ -262,7 +301,41 @@ const titlePlaceholder = computed(() => {
   return '请输入视频标题'
 })
 
-const isContentOverLimit = computed(() => content.value.length > platformContentLimit.value.min)
+const isContentOverLimit = computed(() => contentEffectiveLength.value > platformContentLimit.value.min)
+
+// 正文字符数（文章模式排除换行符，图文/视频正常计数；Markdown 模式去除标记符号）
+const contentEffectiveLength = computed(() => {
+  if (contentType.value === 'article') {
+    // 文章发布
+    if (contentMode.value === 'markdown') {
+      // Markdown 模式：去除 Markdown 标记和换行符
+      let text = markdownContent.value
+      // 去除图片语法
+      text = text.replace(/!\[.*?\]\(.*?\)/g, '')
+      // 去除标题标记
+      text = text.replace(/^#{1,6}\s+/gm, '')
+      // 去除粗体/斜体标记
+      text = text.replace(/\*\*([^*]+)\*\*/g, '$1')
+      text = text.replace(/\*([^*]+)\*/g, '$1')
+      text = text.replace(/__([^_]+)__/g, '$1')
+      text = text.replace(/_([^_]+)_/g, '$1')
+      // 去除高亮标记
+      text = text.replace(/==([^=]+)==/g, '$1')
+      // 去除引用标记
+      text = text.replace(/^>\s?/gm, '')
+      // 去除列表标记
+      text = text.replace(/^[-*+]\s+/gm, '')
+      text = text.replace(/^\d+\.\s+/gm, '')
+      // 去除换行符
+      text = text.replace(/[\n\r]/g, '')
+      return text.length
+    }
+    // 纯文本模式：换行符不计入字数
+    return content.value.replace(/[\n\r]/g, '').length
+  }
+  // 图文/视频：正常计数
+  return content.value.length
+})
 
 // 话题标签长度
 const tagsLength = computed(() => {
@@ -287,7 +360,7 @@ const tagsLength = computed(() => {
 
 const isContentWithTagsOverLimit = computed(() => {
   if (getSelectedIds().length === 0) return false
-  const total = content.value.length + tagsLength.value
+  const total = contentEffectiveLength.value + tagsLength.value
   return total > platformContentLimit.value.min
 })
 
@@ -315,7 +388,7 @@ const articleMinContentHint = computed(() => {
   }
   if (minReqs.length === 0) return null
   const parts = minReqs.map((r) => `${platformName(r.platform)}至少${r.min}字`)
-  return `📝 ${parts.join('，')}（当前 ${content.value.length} 字）`
+  return `📝 ${parts.join('，')}（当前 ${contentEffectiveLength.value} 字，换行符不计）`
 })
 
 // 文章摘要最大字数（取所选平台中最小的限制）
@@ -486,9 +559,9 @@ async function submitPublish() {
       const meta = accountStore.platforms.find((p) => p.key === a.platform)
       if (!meta || !meta.articleLimits) continue
       const minContent = meta.articleLimits.minContent
-      if (typeof minContent === 'number' && content.value.length < minContent) {
+      if (typeof minContent === 'number' && contentEffectiveLength.value < minContent) {
         const platformDisplayName = platformName(a.platform)
-        ElMessage.warning(`${platformDisplayName}文章正文至少需要 ${minContent} 字（当前 ${content.value.length} 字）`)
+        ElMessage.warning(`${platformDisplayName}文章正文至少需要 ${minContent} 字（当前 ${contentEffectiveLength.value} 字）`)
         return
       }
     }
@@ -539,7 +612,8 @@ async function submitPublish() {
     if (contentType.value === 'article' && meta.articleLimits) {
       const tMax = meta.articleLimits.title
       const cMax = meta.articleLimits.content
-      const contentLen = content.value.length
+      // 文章发布：使用有效字符数（已排除换行符和 Markdown 标记）
+      const contentLen = contentEffectiveLength.value
       const totalContentLen = contentLen + tagsTotalLen
       if ((typeof tMax === 'number' && title.value.length > tMax) ||
           (typeof cMax === 'number' && totalContentLen > cMax)) {
@@ -596,6 +670,8 @@ async function submitPublish() {
     tags,
     category: '',
     content: content.value,
+    markdownContent: contentType.value === 'article' && contentMode.value === 'markdown' ? markdownContent.value : undefined,
+    contentMode: contentType.value === 'article' ? contentMode.value : undefined,
     summary: summary.value,
     scheduledAt,
   }
@@ -636,9 +712,9 @@ async function submitTestPublish() {
       const meta = accountStore.platforms.find((p) => p.key === a.platform)
       if (!meta || !meta.articleLimits) continue
       const minContent = meta.articleLimits.minContent
-      if (typeof minContent === 'number' && content.value.length < minContent) {
+      if (typeof minContent === 'number' && contentEffectiveLength.value < minContent) {
         const platformDisplayName = platformName(a.platform)
-        ElMessage.warning(`${platformDisplayName}文章正文至少需要 ${minContent} 字（当前 ${content.value.length} 字）`)
+        ElMessage.warning(`${platformDisplayName}文章正文至少需要 ${minContent} 字（当前 ${contentEffectiveLength.value} 字）`)
         return
       }
     }
@@ -660,6 +736,8 @@ async function submitTestPublish() {
     tags,
     category: '',
     content: content.value,
+    markdownContent: contentType.value === 'article' && contentMode.value === 'markdown' ? markdownContent.value : undefined,
+    contentMode: contentType.value === 'article' ? contentMode.value : undefined,
     summary: summary.value,
     testMode: true,
   }
@@ -678,6 +756,8 @@ function fillForm(data: Partial<PublishRequest>) {
   if (data.summary !== undefined) summary.value = data.summary
   if (data.coverImage) coverImage.value = data.coverImage
   if (data.tags) tagsRaw.value = data.tags.join(' ')
+  if (data.contentMode) contentMode.value = data.contentMode
+  if (data.markdownContent !== undefined) markdownContent.value = data.markdownContent
   if (data.accountIds) {
     for (const k of Object.keys(selectedIds)) delete selectedIds[k]
     data.accountIds.forEach((id) => { selectedIds[id] = true })
@@ -692,6 +772,8 @@ function getFormData(): Partial<PublishRequest> {
     title: title.value,
     mediaFiles: [...mediaFiles.value],
     content: content.value,
+    markdownContent: contentType.value === 'article' && contentMode.value === 'markdown' ? markdownContent.value : undefined,
+    contentMode: contentType.value === 'article' ? contentMode.value : undefined,
     summary: summary.value,
     coverImage: coverImage.value,
     tags: tagsRaw.value.split(/[,，\s]+/).map(t => t.trim().replace(/^#/, '')).filter(t => t.length > 0),
@@ -911,13 +993,26 @@ function iconOf(platform?: string): string {
         </el-form-item>
 
         <el-form-item label="描述">
+          <!-- 文章模式：正文模式切换 -->
+          <div v-if="contentType === 'article'" class="content-mode-switch">
+            <el-radio-group v-model="contentMode" size="small" @change="onContentModeChange">
+              <el-radio-button value="text">纯文本</el-radio-button>
+              <el-radio-button value="markdown">Markdown</el-radio-button>
+            </el-radio-group>
+            <span v-if="contentMode === 'markdown'" class="mode-hint">
+              💡 Markdown 模式将生成 .md 文件通过平台文档导入功能上传发布
+            </span>
+          </div>
+
+          <!-- 纯文本模式 -->
           <el-input
+            v-if="contentType !== 'article' || contentMode === 'text'"
             ref="contentTextareaRef"
             v-model="content"
             type="textarea"
             :rows="contentType === 'article' ? 8 : 4"
             :placeholder="contentType === 'article'
-              ? '请输入文章正文（抖音：至少100字，最多8000字；小红书：不限制字数）'
+              ? '请输入文章正文（抖音：最多8000字；小红书：最多10000字；换行符不计入字数）'
               : contentType === 'image'
                 ? '可选：为图文添加描述文案（将作为笔记正文发布，小红书 1000 字/抖音 1000 字/快手 500 字）'
                 : '可选：为视频添加描述文案（快手最多 500 字）'"
@@ -925,14 +1020,27 @@ function iconOf(platform?: string): string {
             show-word-limit
             @input="notifyChange"
           />
+
+          <!-- Markdown 模式（仅文章） -->
+          <MarkdownEditor
+            v-else
+            v-model="markdownContent"
+            :max-length="platformContentLimit.min"
+            :height="380"
+            placeholder="在此输入 Markdown 内容...支持标题、粗体、列表、引用、代码块等"
+            @input="notifyChange"
+          />
+
           <div v-if="kuaishouSelected" class="kuaishou-hint">
             ⚡ 已选快手账号：正文将被限制为 500 字，超出部分将自动截断
           </div>
           <div v-if="isContentWithTagsOverLimit" class="over-limit-hint">
-            ⚠️ 正文+话题共 {{ content.length + tagsLength }} 字，超出所选平台最大限制（{{ platformContentLimit.min }} 字），发布后可能被截断
+            ⚠️ 正文+话题共 {{ contentEffectiveLength + tagsLength }} 字，超出所选平台最大限制（{{ platformContentLimit.min }} 字），发布后可能被截断
+            <span v-if="contentType === 'article'">（换行符不计入字数）</span>
           </div>
           <div v-else-if="isContentOverLimit" class="over-limit-hint">
-            ⚠️ 当前内容（{{ content.length }} 字）超出所选平台最大限制（{{ platformContentLimit.min }} 字），超出部分将在发布时自动截断
+            ⚠️ 当前内容（{{ contentEffectiveLength }} 字）超出所选平台最大限制（{{ platformContentLimit.min }} 字），超出部分将在发布时自动截断
+            <span v-if="contentType === 'article'">（换行符不计入字数）</span>
           </div>
           <div v-if="platformContentLimit.platforms.length > 0" class="limits-hint">
             各平台正文限制：{{ platformContentLimit.platforms.map(p => `${platformName(p.platform)} ${p.limit}字`).join(' / ') }}
@@ -1000,9 +1108,9 @@ function iconOf(platform?: string): string {
               if (contentType === 'article') {
                 const t = meta.articleLimits?.title;
                 const c = meta.articleLimits?.content;
-                if (typeof t === 'number' && typeof c === 'number') return `标题${t}字 / 正文${c}字`;
+                if (typeof t === 'number' && typeof c === 'number') return `标题${t}字 / 正文${c}字（换行不计）`;
                 if (typeof t === 'number') return `标题${t}字 / 正文不限`;
-                if (typeof c === 'number') return `正文最多 ${c} 字`;
+                if (typeof c === 'number') return `正文最多 ${c} 字（换行不计）`;
                 return '字数不限';
               }
               return meta.contentLimits?.content ? `正文最多 ${meta.contentLimits.content} 字` : '';
@@ -1216,6 +1324,17 @@ function iconOf(platform?: string): string {
   font-size: 11px;
   color: #909399;
   margin-top: 4px;
+}
+/* Markdown 模式切换 */
+.content-mode-switch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.mode-hint {
+  font-size: 12px;
+  color: #909399;
 }
 .empty { padding: 20px 0; }
 </style>

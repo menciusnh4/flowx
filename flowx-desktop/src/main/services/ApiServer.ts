@@ -588,6 +588,9 @@ export class ApiServer {
       scheduledAt: body.scheduledAt,
       remark: body.remark || 'API 发布',
       coverImage: processedCoverImage,
+      contentMode: body.contentMode,
+      markdownContent: body.markdownContent,
+      summary: body.summary,
     };
 
     // 提交任务

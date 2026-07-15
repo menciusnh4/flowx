@@ -15,6 +15,9 @@ import {
   cdpInsertTagsWithSpace,
   buildTestModeProbeScript,
   setupTestModeWindow,
+  createMarkdownTempFile,
+  cleanupMarkdownTempFile,
+  uploadFileToInput,
 } from './shared';
 import { registerPlatform } from './registry';
 import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities, ContentType } from '../../../types';
@@ -50,9 +53,9 @@ const TITLE_LIMIT = 20;
 const CONTENT_LIMIT = 1000;
 const MAX_TAGS = 10;
 
-// 🔑 小红书文章（长文）发布平台限制：标题最多 64 字，正文不限，话题最多 10 个
+// 🔑 小红书文章（长文）发布平台限制：标题最多 64 字，正文 10000 字（换行符不计），话题最多 10 个
 const ARTICLE_TITLE_LIMIT = 64;
-// ARTICLE_CONTENT_LIMIT = undefined 表示正文无字数限制
+const ARTICLE_CONTENT_LIMIT = 10000; // 正文 10000 字（换行符不计入字数）
 
 // =====================================================================
 // 页面脚本构造器
@@ -653,6 +656,45 @@ function truncate(text: string, max: number): string {
   if (!text) return '';
   if (text.length <= max) return text;
   return text.slice(0, max);
+}
+
+/**
+ * 按"排除换行符的字符数"截断文本
+ *  - 计算字数时忽略 \n 和 \r
+ *  - 截断时保留换行符（只限制有效字符数）
+ *  - 返回截断后的完整文本（包含换行符）
+ */
+function truncateExcludingNewlines(text: string, max: number): string {
+  if (!text) return '';
+  let effectiveLen = 0;
+  let result = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '\n' || ch === '\r') {
+      result += ch;
+      continue;
+    }
+    if (effectiveLen >= max) break;
+    result += ch;
+    effectiveLen++;
+  }
+  return result;
+}
+
+/**
+ * 将 Markdown 内容清洗为纯文本（仅保留支持的语法对应的文字）
+ */
+function cleanMarkdownToPlain(mdText: string): string {
+  if (!mdText) return '';
+  return mdText
+    .replace(/!\[.*?\]\(.*?\)/g, '') // 去除图片
+    .replace(/^#{1,6}\s+/gm, '') // 去除标题标记
+    .replace(/\*\*([^*]+)\*\*/g, '$1') // 去除粗体
+    .replace(/\*([^*]+)\*/g, '$1') // 去除斜体
+    .replace(/==([^=]+)==/g, '$1') // 去除高亮
+    .replace(/^>\s?/gm, '') // 去除引用
+    .replace(/^[-*+]\s+/gm, '') // 去除无序列表
+    .replace(/^\d+\.\s+/gm, ''); // 去除有序列表
 }
 
 /**
@@ -1421,14 +1463,233 @@ async function publishArticle(
     log('info', 'fill-title', `标题填写结果: ${JSON.stringify(titleRes)}`);
     await sleep(500);
 
-    // 7) 正文（富文本，不限制字数）
+    // 7) 正文
     onProgress(72, '填写正文…');
-    const rawContent = request.content || '';
+    const isMarkdownMode = request.contentMode === 'markdown' && request.markdownContent;
+    let mdFilePath = '';
     const articleTagList = prepareTags(request.tags);
-    log('info', 'fill-content', `文章正文: ${rawContent.length} 字, 标签: ${articleTagList.length} 个`);
-    const contentRes: any = await evalJS(win, buildFillContentScript(rawContent), '文章-填写正文', log).catch(() => null);
-    log('info', 'fill-content', `正文填写结果: ${JSON.stringify(contentRes)}`);
-    await sleep(500);
+
+    if (isMarkdownMode) {
+      // Markdown 模式：生成 .md 文件并通过文档导入上传
+      log('info', 'fill-content', 'Markdown 模式，生成 .md 文件并通过文档导入上传');
+      onProgress(68, '生成 Markdown 文件…');
+
+      try {
+        mdFilePath = createMarkdownTempFile(request.markdownContent || '', 'xhs-article');
+        log('info', 'fill-content', `Markdown 临时文件已生成: ${mdFilePath}`);
+
+        onProgress(70, '点击文档导入…');
+        // 点击文档导入图标按钮（工具栏中的 .menu-item，文档图标 SVG）
+        const clickImportResult: any = await evalJS(
+          win as BrowserWindow,
+          `(function(){
+            // 查找文档导入按钮：.menu-item 中包含文档图标的
+            var items = document.querySelectorAll('.menu-item');
+            for (var i = 0; i < items.length; i++) {
+              var item = items[i];
+              var svg = item.querySelector('svg');
+              if (!svg) continue;
+              // 文档图标特征：包含 path，且 path 的 d 属性包含文档相关特征（如矩形+线条）
+              var paths = svg.querySelectorAll('path');
+              for (var j = 0; j < paths.length; j++) {
+                var d = paths[j].getAttribute('d') || '';
+                // 文档导入图标的特征：包含文件图标 + 箭头
+                if (d.indexOf('M13.4287 1.72845') !== -1 ||  // 文件图标起点
+                    (d.indexOf('import') !== -1) ||
+                    (svg.innerHTML && svg.innerHTML.indexOf('upload') !== -1)) {
+                  item.click();
+                  return { ok: true, selector: '.menu-item[doc-icon]' };
+                }
+              }
+            }
+            // 备选：通过 tooltip 或 aria-label 匹配
+            var allBtns = document.querySelectorAll('.menu-item, button[class*="menu"]');
+            for (var k = 0; k < allBtns.length; k++) {
+              var btn = allBtns[k];
+              var title = btn.getAttribute('title') || btn.getAttribute('aria-label') || '';
+              if (/文档导入|导入文档|import.*doc|doc.*import/i.test(title)) {
+                btn.click();
+                return { ok: true, selector: 'title-match' };
+              }
+            }
+            // 备选：查找所有 menu-item 中 SVG path 数量符合文档图标的（一般有2-3个path）
+            var menuItems = document.querySelectorAll('.menu-item');
+            var candidates = [];
+            for (var m = 0; m < menuItems.length; m++) {
+              var mi = menuItems[m];
+              var svgEl = mi.querySelector('svg');
+              if (svgEl) {
+                var pathCount = svgEl.querySelectorAll('path').length;
+                // 文档图标通常有 2-4 个 path（文件轮廓 + 内部线条 + 导入箭头）
+                if (pathCount >= 2 && pathCount <= 5) {
+                  candidates.push({ el: mi, pathCount: pathCount });
+                }
+              }
+            }
+            // 如果只有一个候选，直接点击
+            if (candidates.length === 1) {
+              candidates[0].el.click();
+              return { ok: true, selector: 'single-candidate' };
+            }
+            // 如果有多个，尝试找包含导入特征的
+            for (var n = 0; n < candidates.length; n++) {
+              var c = candidates[n];
+              var html = c.el.innerHTML || '';
+              // 导入箭头特征：d 属性中有类似箭头向下/向上的路径
+              if (html.indexOf('arrow') !== -1 || html.indexOf('import') !== -1 || html.indexOf('upload') !== -1) {
+                c.el.click();
+                return { ok: true, selector: 'arrow-candidate' };
+              }
+            }
+            // 最后兜底：点击第 7 个 menu-item（文档导入通常在工具栏中间位置）
+            if (menuItems.length >= 5) {
+              // 尝试从右往左数第3个（文档导入通常在格式按钮之后）
+              var idx = Math.max(0, menuItems.length - 4);
+              menuItems[idx].click();
+              return { ok: true, selector: 'fallback-index-' + idx };
+            }
+            return { ok: false, reason: '未找到文档导入按钮', menuItemCount: menuItems.length };
+          })()`,
+          '文章-点击文档导入',
+          log,
+        ).catch(() => null);
+
+        if (!clickImportResult || !clickImportResult.ok) {
+          log('warn', 'fill-content', `点击文档导入按钮失败: ${JSON.stringify(clickImportResult)}，回退到纯文本模式`);
+          // 回退到纯文本填写
+          const originalContent = cleanMarkdownToPlain(request.markdownContent || '');
+          const rawContent = truncateExcludingNewlines(originalContent, ARTICLE_CONTENT_LIMIT);
+          const effectiveLen = originalContent.replace(/[\n\r]/g, '').length;
+          log('info', 'fill-content', `回退纯文本: 有效字符 ${effectiveLen}/${ARTICLE_CONTENT_LIMIT} 字`);
+          const contentRes: any = await evalJS(win, buildFillContentScript(rawContent), '文章-填写正文', log).catch(() => null);
+          log('info', 'fill-content', `正文填写结果: ${JSON.stringify(contentRes)}`);
+        } else {
+          log('info', 'fill-content', `文档导入按钮已点击 (${clickImportResult.selector})，等待弹窗…`);
+          await sleep(1500);
+
+          // 等待导入弹窗出现
+          onProgress(71, '等待导入弹窗…');
+          let modalAppeared = false;
+          const modalDeadline = Date.now() + 5000;
+          while (Date.now() < modalDeadline) {
+            const checkModal: any = await evalJS(
+              win as BrowserWindow,
+              `(function(){ return !!document.querySelector('.import-from-file-modal, .d-modal'); })()`,
+              '文章-检查弹窗',
+              log,
+            ).catch(() => false);
+            if (checkModal) {
+              modalAppeared = true;
+              break;
+            }
+            await sleep(300);
+          }
+
+          if (!modalAppeared) {
+            log('warn', 'fill-content', '导入弹窗未出现，回退到纯文本模式');
+            const originalContent = cleanMarkdownToPlain(request.markdownContent || '');
+            const rawContent = truncateExcludingNewlines(originalContent, ARTICLE_CONTENT_LIMIT);
+            await evalJS(win, buildFillContentScript(rawContent), '文章-填写正文-回退', log).catch(() => null);
+          } else {
+            log('info', 'fill-content', '导入弹窗已出现，点击上传区域…');
+
+            // 点击上传区域，触发文件选择
+            await evalJS(
+              win as BrowserWindow,
+              `(function(){
+                var uploadArea = document.querySelector('.import-from-file-modal .upload-area, .d-modal .upload-area, [class*="upload-area"]');
+                if (uploadArea) {
+                  uploadArea.click();
+                  return { ok: true };
+                }
+                return { ok: false, reason: '未找到上传区域' };
+              })()`,
+              '文章-点击上传区域',
+              log,
+            ).catch(() => null);
+
+            await sleep(800);
+
+            // 等待 file input 出现并上传文件
+            onProgress(73, '上传 Markdown 文件…');
+            const uploadResult = await uploadFileToInput(
+              win as BrowserWindow,
+              mdFilePath,
+              'input[type=file][accept*=".md"], input[type=file][accept*=".markdown"], input[type=file][accept*="docx"], .import-from-file-modal input[type=file], .d-modal input[type=file], body > input[type=file]',
+              log,
+              8000,
+            );
+
+            if (uploadResult) {
+              log('info', 'fill-content', 'Markdown 文件上传成功，等待内容填充…');
+              // 等待内容自动填充到编辑器
+              await sleep(2500);
+              // 关闭弹窗（如果还开着）
+              try {
+                await evalJS(
+                  win as BrowserWindow,
+                  `(function(){
+                    var closeBtn = document.querySelector('.d-modal-close, .import-from-file-modal .d-modal-close');
+                    if (closeBtn) { closeBtn.click(); return { closed: true }; }
+                    return { closed: false };
+                  })()`,
+                  '文章-关闭导入弹窗',
+                  log,
+                ).catch(() => null);
+              } catch {
+                // 忽略关闭失败
+              }
+              await sleep(1000);
+              log('info', 'fill-content', 'Markdown 内容已导入编辑器');
+            } else {
+              log('warn', 'fill-content', 'Markdown 文件上传失败，回退到纯文本模式');
+              // 关闭弹窗
+              try {
+                await evalJS(
+                  win as BrowserWindow,
+                  `(function(){
+                    var closeBtn = document.querySelector('.d-modal-close');
+                    if (closeBtn) closeBtn.click();
+                  })()`,
+                  '文章-关闭弹窗',
+                  log,
+                ).catch(() => null);
+              } catch {}
+              await sleep(500);
+              // 回退到纯文本
+              const originalContent = cleanMarkdownToPlain(request.markdownContent || '');
+              const rawContent = truncateExcludingNewlines(originalContent, ARTICLE_CONTENT_LIMIT);
+              await evalJS(win, buildFillContentScript(rawContent), '文章-填写正文-回退', log).catch(() => null);
+            }
+          }
+        }
+      } catch (mdErr) {
+        log('error', 'fill-content', `Markdown 上传异常: ${mdErr instanceof Error ? mdErr.message : String(mdErr)}，回退到纯文本`);
+        const originalContent = cleanMarkdownToPlain(request.markdownContent || '');
+        const rawContent = truncateExcludingNewlines(originalContent, ARTICLE_CONTENT_LIMIT);
+        await evalJS(win, buildFillContentScript(rawContent), '文章-填写正文-回退', log).catch(() => null);
+      } finally {
+        // 清理临时文件
+        if (mdFilePath) {
+          cleanupMarkdownTempFile(mdFilePath);
+        }
+      }
+    } else {
+      // 纯文本模式：直接填写正文
+      const originalContent = request.content || '';
+      const rawContent = truncateExcludingNewlines(originalContent, ARTICLE_CONTENT_LIMIT);
+      const articleTagList = prepareTags(request.tags);
+      // 计算有效字符数（排除换行）
+      const effectiveLen = originalContent.replace(/[\n\r]/g, '').length;
+      if (effectiveLen > ARTICLE_CONTENT_LIMIT) {
+        log('warn', 'fill-content', `文章正文过长，有效字符 ${effectiveLen} > ${ARTICLE_CONTENT_LIMIT}，已截断（换行符不计入字数）`);
+      } else {
+        log('info', 'fill-content', `文章正文: 有效字符 ${effectiveLen}/${ARTICLE_CONTENT_LIMIT} 字 (含换行共 ${rawContent.length} 字), 标签: ${articleTagList.length} 个`);
+      }
+      const contentRes: any = await evalJS(win, buildFillContentScript(rawContent), '文章-填写正文', log).catch(() => null);
+      log('info', 'fill-content', `正文填写结果: ${JSON.stringify(contentRes)}`);
+      await sleep(500);
+    }
 
     // 注意：文章发布的话题标签不在正文中插入，而是在第三步页面的正文描述框中追加
 
@@ -1866,7 +2127,7 @@ const meta: PlatformMeta = {
   contentTypes: ['video', 'image', 'article'],
   capabilities: { publishVideo: true, publishImage: true, publishArticle: true } as AccountCapabilities,
   contentLimits: { title: TITLE_LIMIT, content: CONTENT_LIMIT },
-  articleLimits: { title: 64, summary: 1000 },
+  articleLimits: { title: 64, content: 10000, summary: 1000 },
   nicknameSelectors: [
     '.account-name',
     '.user-name',

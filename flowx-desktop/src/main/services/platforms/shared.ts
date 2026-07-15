@@ -1,4 +1,7 @@
 import { BrowserWindow, session as electronSession } from 'electron';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import type { PublishLogEntry, PublishItemProgress, PublishRequest, PlatformType, ContentType } from '../../../types';
 import { getAppIcon } from '../../windows/MainWindow';
 import { getStore } from '../../store/SecureStore';
@@ -3940,4 +3943,140 @@ export function buildPublishVerifier(): string {
       return result;
     })();
   `;
+}
+
+// =====================================================================
+// 文件上传工具（通过 CDP 向指定选择器的 input[type=file] 上传文件）
+// =====================================================================
+
+/**
+ * 通过 CDP 向指定 CSS 选择器的 input[type=file] 上传文件
+ * @param win BrowserWindow 实例
+ * @param filePath 文件路径（单文件）
+ * @param selector CSS 选择器，用于定位 input[type=file] 元素
+ * @param log 日志函数
+ * @param timeout 超时时间（毫秒），默认 5000
+ * @returns 是否上传成功
+ */
+export async function uploadFileToInput(
+  win: BrowserWindow,
+  filePath: string,
+  selector: string,
+  log: (level: PublishLogEntry['level'], stage: string, message: string, data?: Record<string, unknown>) => void,
+  timeout: number = 5000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeout;
+  try {
+    try {
+      if (!win.webContents.debugger.isAttached()) {
+        await win.webContents.debugger.attach('1.3');
+      }
+    } catch {
+      // 可能已 attached
+    }
+
+    // 轮询等待 input 元素出现
+    let nodeId: number | undefined;
+    while (Date.now() < deadline) {
+      try {
+        const docRes = await win.webContents.debugger.sendCommand('DOM.getDocument', { depth: -1 });
+        const rootNodeId = docRes.root.nodeId;
+        const queryRes = await win.webContents.debugger.sendCommand('DOM.querySelector', {
+          nodeId: rootNodeId,
+          selector,
+        });
+        if (queryRes && queryRes.nodeId) {
+          nodeId = queryRes.nodeId;
+          break;
+        }
+      } catch {
+        // 继续等待
+      }
+      await sleep(500);
+    }
+
+    if (!nodeId) {
+      log('warn', 'upload-file', `未找到文件 input 元素: ${selector}`);
+      return false;
+    }
+
+    // 设置文件
+    await win.webContents.debugger.sendCommand('DOM.setFileInputFiles', {
+      nodeId,
+      files: [filePath],
+    });
+    log('info', 'upload-file', `文件已注入到 input[${selector}]`);
+
+    // 触发 change 和 input 事件
+    try {
+      const resolveRes = await win.webContents.debugger.sendCommand('DOM.resolveNode', { nodeId });
+      if (resolveRes && resolveRes.object && resolveRes.object.objectId) {
+        const objectId = resolveRes.object.objectId;
+        await win.webContents.debugger.sendCommand('Runtime.callFunctionOn', {
+          objectId,
+          functionDeclaration: `
+            function() {
+              try {
+                this.dispatchEvent(new Event('change', { bubbles: true }));
+                this.dispatchEvent(new Event('input', { bubbles: true }));
+              } catch(e) {}
+            }
+          `,
+        }).catch(() => null);
+        log('info', 'upload-file', 'change/input 事件已派发');
+      }
+    } catch (evtErr) {
+      log('warn', 'upload-file', `事件派发失败: ${(evtErr as Error).message}`);
+    }
+
+    await sleep(800);
+    return true;
+  } catch (e) {
+    log('error', 'upload-file', `上传失败: ${(e as Error).message}`);
+    return false;
+  }
+}
+
+// =====================================================================
+// Markdown 文件工具
+// =====================================================================
+
+/**
+ * 创建 Markdown 临时文件
+ * @param content Markdown 源码内容
+ * @param prefix 文件名前缀（默认 flowx-article）
+ * @returns 临时文件的绝对路径
+ */
+export function createMarkdownTempFile(content: string, prefix: string = 'flowx-article'): string {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix + '-'));
+  const fileName = `${prefix}-${Date.now()}.md`;
+  const filePath = path.join(tmpDir, fileName);
+  fs.writeFileSync(filePath, content, 'utf-8');
+  return filePath;
+}
+
+/**
+ * 清理 Markdown 临时文件（包括所在的临时目录）
+ * @param filePath 临时文件路径
+ */
+export function cleanupMarkdownTempFile(filePath: string): void {
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+    const dirPath = path.dirname(filePath);
+    if (dirPath && dirPath.startsWith(os.tmpdir()) && fs.existsSync(dirPath)) {
+      // 只清理空目录
+      try {
+        const files = fs.readdirSync(dirPath);
+        if (files.length === 0) {
+          fs.rmdirSync(dirPath);
+        }
+      } catch {
+        // 忽略目录清理失败
+      }
+    }
+  } catch {
+    // 清理失败不影响主流程
+  }
 }
