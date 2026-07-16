@@ -58,7 +58,7 @@
         </el-form>
       </div>
 
-      <!-- 接口文档 -->
+      <!-- 接口文档：左目录 + 右详情 -->
       <div class="config-card">
         <div class="config-title">
           接口文档
@@ -67,234 +67,86 @@
           </span>
         </div>
 
-        <div class="api-list">
-          <!-- 健康检查 -->
-          <div class="api-item">
-            <div class="api-header">
-              <span class="method method-get">GET</span>
-              <span class="api-path">/api/health</span>
-              <span class="api-desc">健康检查</span>
-            </div>
-            <div class="api-detail">
-              <div class="detail-section">
-                <div class="detail-label">响应示例：</div>
-                <pre class="code-block">{
-  "status": "ok",
-  "timestamp": 1719999999999
-}</pre>
-              </div>
-            </div>
-          </div>
+        <div class="api-doc">
+          <!-- 左侧目录 -->
+          <aside class="api-nav">
+            <el-input
+              v-model="apiSearch"
+              placeholder="搜索接口、方法、路径…"
+              :prefix-icon="Search"
+              clearable
+              class="api-search"
+            />
+            <nav class="api-nav-list">
+              <template v-for="grp in filteredGroups" :key="grp.name">
+                <div class="api-group">{{ grp.name }}</div>
+                <button
+                  v-for="api in grp.items"
+                  :key="api.id"
+                  type="button"
+                  class="api-link"
+                  :class="{ active: api.id === selectedApiId }"
+                  @click="selectApi(api.id)"
+                >
+                  <span class="method" :class="methodClass(api.method)">{{ api.method }}</span>
+                  <span class="api-link-path">{{ api.path }}</span>
+                </button>
+              </template>
+              <div v-if="filteredGroups.length === 0" class="api-empty">无匹配接口</div>
+            </nav>
+          </aside>
 
-          <!-- 获取账号列表 -->
-          <div class="api-item">
-            <div class="api-header" @click="toggleApi('accounts')">
-              <span class="method method-get">GET</span>
-              <span class="api-path">/api/accounts</span>
-              <span class="api-desc">获取账号列表</span>
-              <el-icon class="expand-icon">{{ expandedApis.includes('accounts') ? 'ArrowUp' : 'ArrowDown' }}</el-icon>
+          <!-- 右侧详情 -->
+          <div class="api-detail" v-if="selectedApi">
+            <div class="api-d-head">
+              <span class="method" :class="methodClass(selectedApi.method)">{{ selectedApi.method }}</span>
+              <code class="api-d-path">{{ selectedApi.path }}</code>
             </div>
-            <div v-show="expandedApis.includes('accounts')" class="api-detail">
-              <div class="detail-section">
-                <div class="detail-label">查询参数：</div>
+            <h3 class="api-d-title">{{ selectedApi.title }}</h3>
+            <p class="api-d-desc">{{ selectedApi.desc }}</p>
+
+            <template v-for="(sec, i) in selectedApi.sections" :key="i">
+              <!-- 请求参数 -->
+              <div class="detail-section" v-if="sec.kind === 'params'">
+                <div class="detail-label">{{ sec.label }}</div>
                 <table class="param-table">
-                  <thead>
-                    <tr><th>参数名</th><th>类型</th><th>必填</th><th>说明</th></tr>
-                  </thead>
+                  <thead><tr><th>参数名</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
                   <tbody>
-                    <tr><td>platform</td><td>string</td><td>否</td><td>按平台过滤，如 douyin、kuaishou、xiaohongshu、zhihu、toutiao</td></tr>
-                    <tr><td>status</td><td>string</td><td>否</td><td>按状态过滤：active / expired / disabled</td></tr>
+                    <tr v-for="p in sec.rows" :key="p.name">
+                      <td><code>{{ p.name }}</code></td>
+                      <td>{{ p.type }}</td>
+                      <td>{{ p.required ? '是' : '否' }}</td>
+                      <td>{{ p.desc }}</td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
-              <div class="detail-section">
-                <div class="detail-label">响应示例：</div>
-                <pre class="code-block">{
-  "code": 0,
-  "message": "success",
-  "data": [
-    {
-      "id": "acc_xxxxxxxx",
-      "platform": "douyin",
-      "nickname": "测试账号",
-      "avatar": "https://...",
-      "userId": "MS4wLjAB...",
-      "platformAccountId": "抖音号",
-      "fansCount": 1000,
-      "followCount": 100,
-      "likeCount": 5000,
-      "status": "active",
-      "remark": "",
-      "categoryIds": [],
-      "categoryNames": [],
-      "envId": "",
-      "capabilities": {
-        "publishVideo": true,
-        "publishImage": true,
-        "publishArticle": false
-      },
-      "authorizedAt": 1719999999999
-    }
-  ],
-  "total": 1
-}</pre>
-              </div>
-            </div>
-          </div>
 
-          <!-- 提交发布任务 -->
-          <div class="api-item">
-            <div class="api-header" @click="toggleApi('publish')">
-              <span class="method method-post">POST</span>
-              <span class="api-path">/api/publish</span>
-              <span class="api-desc">提交一键发布任务</span>
-              <el-icon class="expand-icon">{{ expandedApis.includes('publish') ? 'ArrowUp' : 'ArrowDown' }}</el-icon>
-            </div>
-            <div v-show="expandedApis.includes('publish')" class="api-detail">
-              <div class="detail-section">
-                <div class="detail-label">请求体（JSON）：</div>
-                <table class="param-table">
-                  <thead>
-                    <tr><th>参数名</th><th>类型</th><th>必填</th><th>说明</th></tr>
-                  </thead>
-                  <tbody>
-                    <tr><td>accountIds</td><td>string[]</td><td>是</td><td>目标账号 ID 列表</td></tr>
-                    <tr><td>title</td><td>string</td><td>是</td><td>发布标题</td></tr>
-                    <tr><td>content</td><td>string</td><td>否</td><td>正文/描述内容</td></tr>
-                    <tr><td>mediaFiles</td><td>string[]</td><td>是</td><td>媒体文件路径数组，支持本地文件路径和远程 URL（http/https）</td></tr>
-                    <tr><td>contentType</td><td>string</td><td>是</td><td>内容类型：video / image / article</td></tr>
-                    <tr><td>tags</td><td>string[]</td><td>否</td><td>话题标签列表</td></tr>
-                    <tr><td>scheduledAt</td><td>number</td><td>否</td><td>定时发布时间戳（毫秒），不填则立即发布</td></tr>
-                    <tr><td>remark</td><td>string</td><td>否</td><td>备注/草稿名</td></tr>
-                    <tr><td>coverImage</td><td>string</td><td>否</td><td>封面图路径</td></tr>
-                  </tbody>
-                </table>
+              <!-- 代码块 -->
+              <div class="detail-section" v-else-if="sec.kind === 'code'">
+                <div class="detail-label">{{ sec.label }}</div>
+                <pre class="code-block">{{ sec.code }}</pre>
               </div>
-              <div class="detail-section">
-                <div class="detail-label">请求示例：</div>
-                <pre class="code-block">{
-  "accountIds": ["acc_xxxxxxxx", "acc_yyyyyyyy"],
-  "title": "测试发布标题",
-  "content": "这是发布描述内容",
-  "mediaFiles": ["D:\\videos\\test.mp4", "https://example.com/images/photo.jpg"],
-  "contentType": "video",
-  "tags": ["测试", "日常"],
-  "remark": "API发布测试"
-}</pre>
-              </div>
-              <div class="detail-section">
-                <div class="detail-label">响应示例（成功）：</div>
-                <pre class="code-block">{
-  "code": 0,
-  "message": "发布任务创建成功",
-  "data": {
-    "taskId": "task_abc12345",
-    "accountCount": 2,
-    "skippedAccounts": 0
-  }
-}</pre>
-              </div>
-              <div class="detail-section">
-                <div class="detail-label">响应示例（验证失败）：</div>
-                <pre class="code-block">{
-  "code": 400,
-  "message": "内容验证失败",
-  "errors": [
-    "小红书标题不能超过 20 字，当前 25 字",
-    "抖音正文/描述不能超过 1000 字，当前 1200 字",
-    "账号 \"测试账号\" (抖音) 不支持发布文章"
-  ]
-}</pre>
-              </div>
-              <div class="detail-section">
-                <div class="detail-label">内容验证规则：</div>
-                <ul style="font-size: 13px; color: #606266; line-height: 1.8; margin: 0; padding-left: 20px;">
-                  <li>根据所选账号所属平台，自动校验标题、正文长度限制</li>
-                  <li>文章类型会校验正文最小字数要求</li>
-                  <li>校验账号是否支持发布对应内容类型（视频/图文/文章）</li>
-                  <li>任一平台验证不通过，整个任务不会创建</li>
+
+              <!-- 列表 -->
+              <div class="detail-section" v-else-if="sec.kind === 'list'">
+                <div class="detail-label">{{ sec.label }}</div>
+                <ul class="rule-list">
+                  <li v-for="(item, j) in sec.items" :key="j">{{ item }}</li>
                 </ul>
               </div>
-            </div>
-          </div>
 
-          <!-- 查询任务状态 -->
-          <div class="api-item">
-            <div class="api-header" @click="toggleApi('status')">
-              <span class="method method-get">GET</span>
-              <span class="api-path">/api/publish/:taskId</span>
-              <span class="api-desc">查询发布任务状态</span>
-              <el-icon class="expand-icon">{{ expandedApis.includes('status') ? 'ArrowUp' : 'ArrowDown' }}</el-icon>
-            </div>
-            <div v-show="expandedApis.includes('status')" class="api-detail">
-              <div class="detail-section">
-                <div class="detail-label">路径参数：</div>
-                <table class="param-table">
-                  <thead>
-                    <tr><th>参数名</th><th>类型</th><th>必填</th><th>说明</th></tr>
-                  </thead>
-                  <tbody>
-                    <tr><td>taskId</td><td>string</td><td>是</td><td>发布任务 ID</td></tr>
-                  </tbody>
-                </table>
-              </div>
-              <div class="detail-section">
-                <div class="detail-label">任务状态枚举：</div>
-                <div style="font-size: 13px; color: #606266; line-height: 1.8;">
-                  <el-tag size="small" type="info" style="margin-right: 8px;">queued</el-tag>排队中
-                  <el-tag size="small" type="warning" style="margin: 0 8px 0 16px;">running</el-tag>发布中
-                  <el-tag size="small" type="success" style="margin: 0 8px 0 16px;">success</el-tag>成功
-                  <el-tag size="small" type="danger" style="margin: 0 8px 0 16px;">failed</el-tag>失败
-                  <el-tag size="small" type="info" style="margin: 0 8px 0 16px;">cancelled</el-tag>已取消
-                  <el-tag size="small" type="warning" effect="plain" style="margin: 0 8px 0 16px;">scheduled</el-tag>待发布
+              <!-- 标签组 -->
+              <div class="detail-section" v-else-if="sec.kind === 'tags'">
+                <div class="detail-label">{{ sec.label }}</div>
+                <div class="tag-row">
+                  <template v-for="(t, j) in sec.tags" :key="j">
+                    <el-tag size="small" :type="t.type" :effect="t.plain ? 'plain' : 'light'">{{ t.text }}</el-tag>
+                    <span class="tag-note">{{ t.note }}</span>
+                  </template>
                 </div>
               </div>
-              <div class="detail-section">
-                <div class="detail-label">响应示例：</div>
-                <pre class="code-block">{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "taskId": "task_abc12345",
-    "status": "running",
-    "overallProgress": 50,
-    "title": "测试发布标题",
-    "contentType": "video",
-    "createdAt": 1719999999999,
-    "updatedAt": 1719999999999,
-    "errorMessage": "",
-    "totalAccounts": 2,
-    "successCount": 1,
-    "failedCount": 0,
-    "runningCount": 1,
-    "pendingCount": 0,
-    "cancelledCount": 0,
-    "items": [
-      {
-        "accountId": "acc_xxxxxxxx",
-        "platform": "douyin",
-        "status": "success",
-        "progress": 100,
-        "message": "",
-        "resultUrl": "https://www.douyin.com/video/...",
-        "startedAt": 1719999999999,
-        "finishedAt": 1719999999999
-      },
-      {
-        "accountId": "acc_yyyyyyyy",
-        "platform": "kuaishou",
-        "status": "running",
-        "progress": 30,
-        "message": "正在上传视频...",
-        "resultUrl": "",
-        "startedAt": 1719999999999,
-        "finishedAt": null
-      }
-    ]
-  }
-}</pre>
-              </div>
-            </div>
+            </template>
           </div>
         </div>
       </div>
@@ -315,9 +167,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
-import { ArrowUp, ArrowDown } from '@element-plus/icons-vue';
+import { Search } from '@element-plus/icons-vue';
 import { electronApi } from '../utils/electron';
 
 const config = ref({
@@ -328,15 +180,179 @@ const config = ref({
 
 const apiRunning = ref(false);
 const saving = ref(false);
-const expandedApis = ref<string[]>(['accounts', 'publish', 'status']);
 
-function toggleApi(key: string) {
-  const idx = expandedApis.value.indexOf(key);
-  if (idx === -1) {
-    expandedApis.value.push(key);
-  } else {
-    expandedApis.value.splice(idx, 1);
+/* ============ 接口文档：数据驱动（目录 + 搜索 + 详情） ============ */
+interface ApiParam { name: string; type: string; required: boolean; desc: string; }
+type TagType = 'info' | 'success' | 'warning' | 'danger';
+interface ApiTag { text: string; type: TagType; plain?: boolean; note: string; }
+type ApiSection =
+  | { kind: 'params'; label: string; rows: ApiParam[] }
+  | { kind: 'code'; label: string; code: string }
+  | { kind: 'list'; label: string; items: string[] }
+  | { kind: 'tags'; label: string; tags: ApiTag[] };
+interface ApiDoc {
+  id: string;
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  path: string;
+  group: string;
+  title: string;
+  desc: string;
+  sections: ApiSection[];
+}
+
+const apiDocs: ApiDoc[] = [
+  {
+    id: 'health',
+    method: 'GET',
+    path: '/api/health',
+    group: '系统',
+    title: '健康检查',
+    desc: '返回服务运行状态，常用于健康检查与探针，无需鉴权。',
+    sections: [
+      {
+        kind: 'code',
+        label: '响应示例：',
+        code: '{\n  "status": "ok",\n  "timestamp": 1719999999999\n}',
+      },
+    ],
+  },
+  {
+    id: 'accounts',
+    method: 'GET',
+    path: '/api/accounts',
+    group: '账号',
+    title: '获取账号列表',
+    desc: '返回当前已授权且健康的平台账号列表，支持按平台与状态筛选。',
+    sections: [
+      {
+        kind: 'params',
+        label: '查询参数：',
+        rows: [
+          { name: 'platform', type: 'string', required: false, desc: '按平台过滤，如 douyin、kuaishou、xiaohongshu、zhihu、toutiao' },
+          { name: 'status', type: 'string', required: false, desc: '按状态过滤：active / expired / disabled' },
+        ],
+      },
+      {
+        kind: 'code',
+        label: '响应示例：',
+        code: '{\n  "code": 0,\n  "message": "success",\n  "data": [\n    {\n      "id": "acc_xxxxxxxx",\n      "platform": "douyin",\n      "nickname": "测试账号",\n      "avatar": "https://...",\n      "userId": "MS4wLjAB...",\n      "platformAccountId": "抖音号",\n      "fansCount": 1000,\n      "followCount": 100,\n      "likeCount": 5000,\n      "status": "active",\n      "remark": "",\n      "categoryIds": [],\n      "categoryNames": [],\n      "envId": "",\n      "capabilities": {\n        "publishVideo": true,\n        "publishImage": true,\n        "publishArticle": false\n      },\n      "authorizedAt": 1719999999999\n    }\n  ],\n  "total": 1\n}',
+      },
+    ],
+  },
+  {
+    id: 'publish',
+    method: 'POST',
+    path: '/api/publish',
+    group: '发布',
+    title: '提交一键发布任务',
+    desc: '提交一条发布任务，支持视频 / 图文 / 文章三种内容类型，可指定目标账号。',
+    sections: [
+      {
+        kind: 'params',
+        label: '请求体（JSON）：',
+        rows: [
+          { name: 'accountIds', type: 'string[]', required: true, desc: '目标账号 ID 列表' },
+          { name: 'title', type: 'string', required: true, desc: '发布标题' },
+          { name: 'content', type: 'string', required: false, desc: '正文/描述内容' },
+          { name: 'mediaFiles', type: 'string[]', required: true, desc: '媒体文件路径数组，支持本地文件路径和远程 URL（http/https）' },
+          { name: 'contentType', type: 'string', required: true, desc: '内容类型：video / image / article' },
+          { name: 'tags', type: 'string[]', required: false, desc: '话题标签列表' },
+          { name: 'scheduledAt', type: 'number', required: false, desc: '定时发布时间戳（毫秒），不填则立即发布' },
+          { name: 'remark', type: 'string', required: false, desc: '备注/草稿名' },
+          { name: 'coverImage', type: 'string', required: false, desc: '封面图路径' },
+        ],
+      },
+      {
+        kind: 'code',
+        label: '请求示例：',
+        code: '{\n  "accountIds": ["acc_xxxxxxxx", "acc_yyyyyyyy"],\n  "title": "测试发布标题",\n  "content": "这是发布描述内容",\n  "mediaFiles": ["D:\\\\videos\\\\test.mp4", "https://example.com/images/photo.jpg"],\n  "contentType": "video",\n  "tags": ["测试", "日常"],\n  "remark": "API发布测试"\n}',
+      },
+      {
+        kind: 'code',
+        label: '响应示例（成功）：',
+        code: '{\n  "code": 0,\n  "message": "发布任务创建成功",\n  "data": {\n    "taskId": "task_abc12345",\n    "accountCount": 2,\n    "skippedAccounts": 0\n  }\n}',
+      },
+      {
+        kind: 'code',
+        label: '响应示例（验证失败）：',
+        code: '{\n  "code": 400,\n  "message": "内容验证失败",\n  "errors": [\n    "小红书标题不能超过 20 字，当前 25 字",\n    "抖音正文/描述不能超过 1000 字，当前 1200 字",\n    "账号 \\"测试账号\\" (抖音) 不支持发布文章"\n  ]\n}',
+      },
+      {
+        kind: 'list',
+        label: '内容验证规则：',
+        items: [
+          '根据所选账号所属平台，自动校验标题、正文长度限制',
+          '文章类型会校验正文最小字数要求',
+          '校验账号是否支持发布对应内容类型（视频/图文/文章）',
+          '任一平台验证不通过，整个任务不会创建',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'status',
+    method: 'GET',
+    path: '/api/publish/:taskId',
+    group: '发布',
+    title: '查询发布任务状态',
+    desc: '返回指定发布任务的进度与各账号的执行结果。',
+    sections: [
+      {
+        kind: 'params',
+        label: '路径参数：',
+        rows: [
+          { name: 'taskId', type: 'string', required: true, desc: '发布任务 ID' },
+        ],
+      },
+      {
+        kind: 'tags',
+        label: '任务状态枚举：',
+        tags: [
+          { text: 'queued', type: 'info', note: '排队中' },
+          { text: 'running', type: 'warning', note: '发布中' },
+          { text: 'success', type: 'success', note: '成功' },
+          { text: 'failed', type: 'danger', note: '失败' },
+          { text: 'cancelled', type: 'info', note: '已取消' },
+          { text: 'scheduled', type: 'info', plain: true, note: '待发布' },
+        ],
+      },
+      {
+        kind: 'code',
+        label: '响应示例：',
+        code: '{\n  "code": 0,\n  "message": "success",\n  "data": {\n    "taskId": "task_abc12345",\n    "status": "running",\n    "overallProgress": 50,\n    "title": "测试发布标题",\n    "contentType": "video",\n    "createdAt": 1719999999999,\n    "updatedAt": 1719999999999,\n    "errorMessage": "",\n    "totalAccounts": 2,\n    "successCount": 1,\n    "failedCount": 0,\n    "runningCount": 1,\n    "pendingCount": 0,\n    "cancelledCount": 0,\n    "items": [\n      {\n        "accountId": "acc_xxxxxxxx",\n        "platform": "douyin",\n        "status": "success",\n        "progress": 100,\n        "message": "",\n        "resultUrl": "https://www.douyin.com/video/...",\n        "startedAt": 1719999999999,\n        "finishedAt": 1719999999999\n      },\n      {\n        "accountId": "acc_yyyyyyyy",\n        "platform": "kuaishou",\n        "status": "running",\n        "progress": 30,\n        "message": "正在上传视频...",\n        "resultUrl": "",\n        "startedAt": 1719999999999,\n        "finishedAt": null\n      }\n    ]\n  }\n}',
+      },
+    ],
+  },
+];
+
+const apiSearch = ref('');
+const selectedApiId = ref(apiDocs[0].id);
+
+const selectedApi = computed(() => apiDocs.find(d => d.id === selectedApiId.value) || apiDocs[0]);
+
+const filteredGroups = computed(() => {
+  const kw = apiSearch.value.trim().toLowerCase();
+  const groups: { name: string; items: ApiDoc[] }[] = [];
+  for (const d of apiDocs) {
+    if (kw && !`${d.method} ${d.path} ${d.title} ${d.desc}`.toLowerCase().includes(kw)) continue;
+    let g = groups.find(x => x.name === d.group);
+    if (!g) { g = { name: d.group, items: [] }; groups.push(g); }
+    g.items.push(d);
   }
+  return groups;
+});
+
+function methodClass(m: string) {
+  return {
+    'method-get': m === 'GET',
+    'method-post': m === 'POST',
+    'method-put': m === 'PUT',
+    'method-delete': m === 'DELETE',
+  };
+}
+
+function selectApi(id: string) {
+  selectedApiId.value = id;
 }
 
 async function loadConfig() {
@@ -430,28 +446,113 @@ onMounted(() => {
   padding-bottom: 12px;
   border-bottom: 1px solid var(--line);
 }
-.api-list {
+
+/* ===== 接口文档：两栏（目录 + 详情） ===== */
+.api-doc {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 16px;
   margin-top: 16px;
+  align-items: start;
+}
+.api-nav {
+  position: sticky;
+  top: 12px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+  max-height: calc(100vh - 120px);
+  overflow: auto;
+  min-width: 0;
 }
-.api-item {
+.api-search {
+  width: 100%;
+}
+.api-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
-  overflow: hidden;
 }
-.api-header {
+.api-group {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  text-transform: uppercase;
+  padding: 10px 8px 4px;
+}
+.api-link {
   display: flex;
   align-items: center;
-  padding: 12px 16px;
-  background: var(--surface-2);
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
   cursor: pointer;
+  text-align: left;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12.5px;
+  color: var(--slate);
+  transition: all 150ms ease;
+}
+.api-link:hover {
+  background: #eef1fb;
+  color: var(--ink);
+}
+.api-link.active {
+  background: var(--brand-indigo);
+  color: #fff;
+}
+.api-link-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.api-empty {
+  padding: 12px 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.api-detail {
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  min-width: 0;
+}
+.api-d-head {
+  display: flex;
+  align-items: center;
   gap: 12px;
+  margin-bottom: 12px;
 }
-.api-header:hover {
-  background: #f1f3fb;
+.api-d-path {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
 }
+.api-d-title {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: var(--font-display);
+  color: var(--ink);
+  margin: 0 0 6px;
+}
+.api-d-desc {
+  font-size: 13px;
+  color: var(--slate);
+  line-height: 1.7;
+  margin: 0 0 8px;
+}
+
 .method {
   display: inline-block;
   padding: 2px 8px;
@@ -465,27 +566,7 @@ onMounted(() => {
 .method-post { background: var(--brand-indigo); }
 .method-put { background: var(--warning); }
 .method-delete { background: var(--danger); }
-.api-path {
-  font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 13px;
-  color: var(--ink);
-  font-weight: 500;
-}
-.api-desc {
-  flex: 1;
-  font-size: 13px;
-  color: var(--slate);
-  margin-left: 8px;
-}
-.expand-icon {
-  color: var(--muted);
-  flex-shrink: 0;
-}
-.api-detail {
-  padding: 16px;
-  border-top: 1px solid var(--line);
-  background: var(--surface);
-}
+
 .detail-section {
   margin-bottom: 16px;
 }
@@ -517,6 +598,11 @@ onMounted(() => {
 .param-table td {
   color: var(--ink);
 }
+.param-table code {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12.5px;
+  color: var(--brand-indigo);
+}
 .code-block {
   background: #282c34;
   color: #abb2bf;
@@ -529,11 +615,35 @@ onMounted(() => {
   margin: 0;
   white-space: pre;
 }
+.rule-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.8;
+}
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 4px;
+}
+.tag-note {
+  font-size: 13px;
+  color: #606266;
+  margin-right: 12px;
+}
+
 .notice-list {
   margin: 12px 0 0 0;
   padding-left: 20px;
   font-size: 13px;
   color: var(--slate);
   line-height: 2;
+}
+
+@media (max-width: 860px) {
+  .api-doc { grid-template-columns: 1fr; }
+  .api-nav { position: static; max-height: none; }
 }
 </style>

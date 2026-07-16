@@ -63,6 +63,13 @@
   --el-border-radius-base: 10px;
   --el-border-radius-small: 8px;
   --el-font-family: var(--font-sans);
+
+  /* Element Plus 语义色对齐 FlowX 调色板，全应用统一 */
+  --el-color-success: #10b981;
+  --el-color-warning: #f59e0b;
+  --el-color-danger: #f43f5e;
+  --el-color-error: #f43f5e;
+  --el-color-info: #8b91a7;
 }
 
 /* ============================================================
@@ -134,22 +141,44 @@ body {
 
 .sidebar-logo {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 6px 10px 16px;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 10px 18px;
+}
+.sidebar-logo .logo-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 20px;
+  color: #fff;
+  background: var(--brand-grad);
+  box-shadow: var(--shadow-md);
+}
+.sidebar-logo .logo-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 .sidebar-logo .name {
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 800;
   letter-spacing: -0.02em;
   background: var(--brand-grad);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  line-height: 1.1;
 }
 .sidebar-logo small {
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--faint);
   font-weight: 600;
 }
@@ -278,6 +307,13 @@ body {
   background: var(--line-strong);
   flex-shrink: 0;
 }
+.nav-sub-item .ic {
+  width: 20px;
+  display: inline-flex;
+  justify-content: center;
+  font-size: 15px;
+  flex-shrink: 0;
+}
 .nav-sub-item:hover {
   background: rgba(99, 102, 241, 0.06);
   color: var(--brand-indigo);
@@ -294,13 +330,40 @@ body {
 .sidebar-foot {
   margin-top: auto;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 12px 10px;
   border-top: 1px solid var(--line);
-  font-size: 12px;
+}
+.sidebar-foot .side-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 13px;
+  background: rgba(99, 102, 241, 0.07);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink);
+}
+.sidebar-foot .side-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--brand-grad);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.sidebar-foot .side-ver {
+  font-size: 11px;
   color: var(--faint);
   font-weight: 600;
+  text-align: center;
 }
 
 /* ---------- 内容区 ---------- */

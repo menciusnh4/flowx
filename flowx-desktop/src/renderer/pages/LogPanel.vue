@@ -22,19 +22,29 @@
           <div class="overview-item">
             <div class="overview-label">主日志</div>
             <div class="overview-value">{{ formatSize(logInfo.mainSize) }}</div>
-            <div class="overview-path" :title="logInfo.mainPath">{{ logInfo.mainPath }}</div>
+            <div class="overview-path" :title="logInfo.mainPath || '-'" @click="copyPath(logInfo.mainPath)">
+              <span class="path-text">{{ logInfo.mainPath || '-' }}</span>
+              <el-icon v-if="logInfo.mainPath" class="path-copy"><CopyDocument /></el-icon>
+            </div>
           </div>
           <div class="overview-item">
             <div class="overview-label">发布日志</div>
             <div class="overview-value">{{ formatSize(logInfo.publishSize) }}</div>
-            <div class="overview-path" :title="logInfo.publishPath">{{ logInfo.publishPath }}</div>
+            <div class="overview-path" :title="logInfo.publishPath || '-'" @click="copyPath(logInfo.publishPath)">
+              <span class="path-text">{{ logInfo.publishPath || '-' }}</span>
+              <el-icon v-if="logInfo.publishPath" class="path-copy"><CopyDocument /></el-icon>
+            </div>
           </div>
           <div class="overview-item">
             <div class="overview-label">日志目录</div>
-            <div class="overview-value" style="cursor: pointer; color: #409eff;" @click="openLogDir">
-              {{ logInfo.logsDir ? '点击打开' : '-' }}
+            <div class="overview-value overview-value--link" @click="openLogDir">
+              <el-icon><FolderOpened /></el-icon>
+              <span>{{ logInfo.logsDir ? '点击打开' : '-' }}</span>
             </div>
-            <div class="overview-path" :title="logInfo.logsDir">{{ logInfo.logsDir }}</div>
+            <div class="overview-path" :title="logInfo.logsDir || '-'" @click="copyPath(logInfo.logsDir)">
+              <span class="path-text">{{ logInfo.logsDir || '-' }}</span>
+              <el-icon v-if="logInfo.logsDir" class="path-copy"><CopyDocument /></el-icon>
+            </div>
           </div>
         </div>
       </div>
@@ -95,12 +105,15 @@
         </div>
 
         <!-- 日志内容 -->
-        <div class="log-content" ref="logContentRef">
+        <div class="log-content">
           <div v-if="loading" class="log-loading-wrap">
             <el-icon class="is-loading" :size="32"><Loading /></el-icon>
             <div style="margin-top: 12px; color: #909399;">加载中...</div>
           </div>
-          <pre v-else class="log-text">{{ filteredContent || '（暂无日志）' }}</pre>
+          <div v-else class="log-text" ref="logTextRef">
+            <div v-for="(line, i) in logLines" :key="i" class="log-line" :class="'lvl-' + line.level">{{ line.text }}</div>
+            <div v-if="logLines.length === 0" class="log-empty">（暂无日志）</div>
+          </div>
         </div>
       </div>
 
@@ -122,7 +135,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Refresh, Download, FolderOpened, Delete, Loading } from '@element-plus/icons-vue';
+import { Refresh, Download, FolderOpened, Delete, Loading, CopyDocument } from '@element-plus/icons-vue';
 import { electronApi } from '../utils/electron';
 
 const activeTab = ref<'publish' | 'main'>('publish');
@@ -130,7 +143,7 @@ const lineLimit = ref(500);
 const searchKeyword = ref('');
 const loading = ref(true);
 const rawContent = ref('');
-const logContentRef = ref<HTMLElement | null>(null);
+const logTextRef = ref<HTMLElement | null>(null);
 const selectedDate = ref<string>('');
 const logFileList = ref<{ date: string; path: string; size: number }[]>([]);
 
@@ -142,13 +155,23 @@ const logInfo = ref({
   publishPath: '',
 });
 
-const filteredContent = computed(() => {
-  if (!searchKeyword.value) return rawContent.value;
-  const kw = searchKeyword.value.toLowerCase();
+type LogLevel = 'info' | 'warn' | 'error';
+
+/** 按关键字判定日志级别（对齐原型配色规则） */
+function detectLevel(line: string): LogLevel {
+  const up = line.toUpperCase();
+  if (/\bERROR\b|\bFATAL\b|\bCRITICAL\b/.test(up)) return 'error';
+  if (/\bWARN\b|\bWARNING\b/.test(up)) return 'warn';
+  return 'info';
+}
+
+/** 逐行解析 + 搜索过滤，每行带级别用于着色 */
+const logLines = computed<{ text: string; level: LogLevel }[]>(() => {
+  const kw = searchKeyword.value.trim().toLowerCase();
   return rawContent.value
     .split('\n')
-    .filter(line => line.toLowerCase().includes(kw))
-    .join('\n');
+    .filter(line => !kw || line.toLowerCase().includes(kw))
+    .map(line => ({ text: line, level: detectLevel(line) }));
 });
 
 function formatSize(bytes: number): string {
@@ -203,11 +226,8 @@ async function loadLogs() {
 }
 
 function scrollToBottom() {
-  if (logContentRef.value) {
-    const pre = logContentRef.value.querySelector('.log-text');
-    if (pre) {
-      pre.scrollTop = pre.scrollHeight;
-    }
+  if (logTextRef.value) {
+    logTextRef.value.scrollTop = logTextRef.value.scrollHeight;
   }
 }
 
@@ -234,6 +254,16 @@ async function openLogDir() {
     await electronApi.openLogDirectory();
   } catch (e) {
     ElMessage.error('打开日志目录失败');
+  }
+}
+
+async function copyPath(path: string) {
+  if (!path) return;
+  try {
+    await navigator.clipboard.writeText(path);
+    ElMessage.success('路径已复制');
+  } catch {
+    ElMessage.error('复制失败');
   }
 }
 
@@ -344,10 +374,13 @@ onMounted(async () => {
   gap: 16px;
 }
 .overview-item {
+  min-width: 0; /* 关键：允许 grid 轨道收缩，避免长路径撑破布局 */
   padding: 16px;
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
+  display: flex;
+  flex-direction: column;
 }
 .overview-label {
   font-size: 13px;
@@ -361,12 +394,53 @@ onMounted(async () => {
   margin-bottom: 8px;
   font-family: var(--font-display);
 }
+.overview-value--link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  color: var(--brand-indigo);
+  cursor: pointer;
+  transition: opacity var(--transition-fast, 150ms ease);
+}
+.overview-value--link:hover {
+  opacity: 0.75;
+}
 .overview-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0; /* 关键：让内部 ellipsis 生效 */
+  margin-top: auto;
+  padding: 6px 8px;
   font-size: 12px;
-  color: var(--faint);
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  color: var(--slate);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm, 6px);
+  cursor: pointer;
+  transition: border-color var(--transition-fast, 150ms ease), color var(--transition-fast, 150ms ease);
+}
+.overview-path:hover {
+  border-color: var(--brand-indigo);
+  color: var(--ink);
+}
+.overview-path:hover .path-copy {
+  color: var(--brand-indigo);
+}
+.path-text {
+  flex: 1;
+  min-width: 0; /* 关键：flex 子项收缩，配合 ellipsis 截断长路径 */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.path-copy {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--faint);
+  transition: color var(--transition-fast, 150ms ease);
 }
 .log-toolbar {
   display: flex;
@@ -416,6 +490,18 @@ onMounted(async () => {
   white-space: pre-wrap;
   word-break: break-all;
 }
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+/* 日志级别配色（对齐原型：info 绿 / warn 黄 / error 红） */
+.log-text .lvl-info { color: #6a9955; }
+.log-text .lvl-warn { color: #e5c07b; }
+.log-text .lvl-error { color: #f48771; }
+.log-empty {
+  color: #6a6a6a;
+  font-style: italic;
+}
 .log-text::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -436,5 +522,10 @@ onMounted(async () => {
 }
 .notice-list li {
   margin-bottom: 4px;
+}
+@media (max-width: 900px) {
+  .log-overview {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

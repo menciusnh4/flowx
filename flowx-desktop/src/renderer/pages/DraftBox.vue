@@ -25,6 +25,20 @@ const filteredDrafts = computed(() => {
   return draftStore.drafts.filter(d => d.contentType === activeTab.value)
 })
 
+// 概览指标：按类型统计草稿数（驱动顶部概览卡，与账号页结构一致）
+const overview = computed(() => {
+  const all = draftStore.drafts.length
+  const video = draftStore.drafts.filter(d => d.contentType === 'video').length
+  const image = draftStore.drafts.filter(d => d.contentType === 'image').length
+  const article = draftStore.drafts.filter(d => d.contentType === 'article').length
+  return [
+    { icon: '📝', label: '全部草稿', value: all, tint: 'rgba(99,102,241,.12)' },
+    { icon: '🎬', label: '视频', value: video, tint: 'rgba(244,63,94,.12)' },
+    { icon: '🖼️', label: '图文', value: image, tint: 'rgba(56,189,248,.14)' },
+    { icon: '📄', label: '文章', value: article, tint: 'rgba(16,185,129,.12)' },
+  ]
+})
+
 function formatTime(ts: number): string {
   const d = new Date(ts)
   const y = d.getFullYear()
@@ -97,22 +111,33 @@ function newDraft() {
 
 <template>
   <div class="draft-box-page">
-    <!-- 头部：草稿计数 + 新建 -->
-    <div class="db-header">
-      <div class="db-stats">
-        <span class="db-stat"><i class="sdot indigo"></i><b>{{ draftStore.drafts.length }}</b> 条草稿</span>
+    <!-- 概览指标：按类型统计草稿数 -->
+    <section class="overview">
+      <div class="ov-card" v-for="m in overview" :key="m.label">
+        <div class="ov-ic" :style="{ background: m.tint }">{{ m.icon }}</div>
+        <div class="ov-meta">
+          <div class="ov-value">{{ m.value }}</div>
+          <div class="ov-label">{{ m.label }}</div>
+        </div>
       </div>
-      <button class="btn primary" @click="newDraft">＋ 新建</button>
-    </div>
+    </section>
 
-    <!-- 类型筛选（原型 pill） -->
-    <div class="db-filters">
-      <button class="pill" :class="{ active: activeTab === 'all' }" @click="activeTab = 'all'">全部</button>
-      <button class="pill" :class="{ active: activeTab === 'video' }" @click="activeTab = 'video'">视频</button>
-      <button class="pill" :class="{ active: activeTab === 'image' }" @click="activeTab = 'image'">图文</button>
-      <button class="pill" :class="{ active: activeTab === 'article' }" @click="activeTab = 'article'">文章</button>
-    </div>
+    <!-- 工具条面板：类型筛选 + 新建 -->
+    <section class="toolbar panel">
+      <div class="tb-left">
+        <div class="pills">
+          <button class="pill" :class="{ active: activeTab === 'all' }" @click="activeTab = 'all'">全部</button>
+          <button class="pill" :class="{ active: activeTab === 'video' }" @click="activeTab = 'video'">视频</button>
+          <button class="pill" :class="{ active: activeTab === 'image' }" @click="activeTab = 'image'">图文</button>
+          <button class="pill" :class="{ active: activeTab === 'article' }" @click="activeTab = 'article'">文章</button>
+        </div>
+      </div>
+      <div class="tb-right">
+        <button class="btn primary" @click="newDraft">＋ 新建</button>
+      </div>
+    </section>
 
+    <!-- 草稿网格 -->
     <div v-loading="loading" class="draft-grid">
       <div v-if="!loading && filteredDrafts.length === 0" class="empty">
         <div class="eic">📭</div>
@@ -149,41 +174,73 @@ function newDraft() {
   flex-direction: column;
   box-sizing: border-box;
 }
-/* 头部 */
-.db-header {
+
+/* 概览指标（与账号页同构，提供板块感） */
+.overview {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.ov-card {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 16px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-xs);
+  transition: box-shadow var(--t), transform var(--t) var(--ease);
+}
+.ov-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+.ov-ic {
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 21px;
+  flex-shrink: 0;
+}
+.ov-value {
+  font-family: var(--font-display);
+  font-size: 25px;
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--ink);
+}
+.ov-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* 工具条 */
+.toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-.db-stats {
-  display: flex;
-  align-items: center;
   gap: 16px;
   flex-wrap: wrap;
+  padding: 14px 16px;
 }
-.db-stat {
-  display: inline-flex;
+.tb-left {
+  display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  color: var(--muted);
-  font-weight: 500;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
-.db-stat b {
-  color: var(--ink);
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 13px;
+.tb-right {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
-.sdot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.sdot.indigo { background: var(--brand-indigo); }
 
 /* 通用按钮（对齐原型 .btn） */
 .btn {
@@ -231,12 +288,12 @@ function newDraft() {
   color: var(--danger);
   background: rgba(244, 63, 94, 0.05);
 }
+
 /* 筛选 pill */
-.db-filters {
+.pills {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 16px;
 }
 .pill {
   padding: 7px 14px;
@@ -260,6 +317,7 @@ function newDraft() {
   color: #fff;
   box-shadow: var(--shadow-sm);
 }
+
 /* 网格 */
 .draft-grid {
   flex: 1;
@@ -270,6 +328,7 @@ function newDraft() {
   align-content: start;
   padding-bottom: 8px;
 }
+
 /* 卡片 */
 .dcard {
   background: var(--surface);
@@ -351,6 +410,7 @@ function newDraft() {
   border-top: 1px solid var(--line);
   justify-content: flex-end;
 }
+
 /* 空状态 */
 .empty {
   grid-column: 1 / -1;
@@ -362,5 +422,19 @@ function newDraft() {
   font-size: 46px;
   margin-bottom: 12px;
   opacity: 0.6;
+}
+
+@media (max-width: 1100px) {
+  .overview {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .overview {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .draft-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
