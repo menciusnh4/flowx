@@ -1,4 +1,4 @@
-import { BrowserWindow, WebContentsView, session, ipcMain, protocol } from 'electron';
+import { BrowserWindow, WebContentsView, session, ipcMain, protocol, Menu, MenuItem } from 'electron';
 import path from 'path';
 import { BrowserEnvService } from '../services/BrowserEnvService';
 import { getAppIcon } from './MainWindow';
@@ -509,6 +509,87 @@ export class CreatorTabWindow {
         this.createTab(newUrl, '新标签页');
       }
       return { action: 'deny' };
+    });
+
+    // 右键菜单：支持检查元素
+    view.webContents.on('context-menu', (e, params) => {
+      if (this.disposed || this.win.isDestroyed() || view.webContents.isDestroyed()) return;
+      const { x, y } = params;
+      const wc = view.webContents;
+      const menu = new Menu();
+
+      menu.append(new MenuItem({
+        label: '刷新',
+        click: () => {
+          if (!wc.isDestroyed()) wc.reload();
+        },
+      }));
+
+      menu.append(new MenuItem({
+        label: '在新标签页中打开链接',
+        visible: !!params.linkURL,
+        click: () => {
+          if (params.linkURL) {
+            this.createTab(params.linkURL, '新标签页');
+          }
+        },
+      }));
+
+      menu.append(new MenuItem({ type: 'separator' }));
+
+      menu.append(new MenuItem({
+        label: '复制',
+        visible: params.editFlags.canCopy,
+        click: () => {
+          if (!wc.isDestroyed()) wc.copy();
+        },
+      }));
+
+      menu.append(new MenuItem({
+        label: '粘贴',
+        visible: params.editFlags.canPaste,
+        click: () => {
+          if (!wc.isDestroyed()) wc.paste();
+        },
+      }));
+
+      menu.append(new MenuItem({ type: 'separator' }));
+
+      menu.append(new MenuItem({
+        label: '检查元素',
+        click: () => {
+          if (!wc.isDevToolsOpened()) {
+            wc.openDevTools({ mode: 'detach' });
+          }
+          wc.inspectElement(Math.round(x), Math.round(y));
+        },
+      }));
+
+      menu.popup({ window: this.win });
+    });
+
+    // F12 / Ctrl+Shift+I 快捷键：打开/关闭 DevTools
+    view.webContents.on('before-input-event', (event, input) => {
+      if (this.disposed || this.win.isDestroyed() || view.webContents.isDestroyed()) return;
+      const wc = view.webContents;
+      // F12 快捷键
+      if (input.key === 'F12' && input.type === 'keyDown') {
+        event.preventDefault();
+        if (wc.isDevToolsOpened()) {
+          wc.closeDevTools();
+        } else {
+          wc.openDevTools({ mode: 'detach' });
+        }
+      }
+      // Ctrl+Shift+I 也打开 DevTools
+      if (input.key === 'I' && input.control && input.shift && input.type === 'keyDown') {
+        event.preventDefault();
+        if (wc.isDevToolsOpened()) {
+          wc.closeDevTools();
+        } else {
+          wc.openDevTools({ mode: 'detach' });
+        }
+      }
     });
 
     this.tabs.push(tab);
