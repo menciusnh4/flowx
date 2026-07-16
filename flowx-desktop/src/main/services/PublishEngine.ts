@@ -2,6 +2,7 @@ import { app, shell } from 'electron';
 import { getStore } from '../store/SecureStore';
 import { logger, writePublishLog, getPublishLogPath, getMainLogPath, queryPublishLogs, clearPublishLogs } from '../utils/logger';
 import { AccountService, injectAccountCookies } from './AccountService';
+import { ComplianceService } from './compliance/ComplianceService';
 import { getPlatform } from './platforms';
 import type {
   PublishItemProgress,
@@ -597,6 +598,33 @@ class PublishEngineClass {
     item.startedAt = Date.now();
     this.persist();
     this.notifyStatus(task);
+
+    // ===== P0 合规预检日志埋点（仅提示，绝不阻断发布流程） =====
+    try {
+      if (ComplianceService.getSettings().promptEnabled) {
+        const result = ComplianceService.scanText(item.platform, {
+          title: task.request.title,
+          content: task.request.content,
+          tags: task.request.tags,
+          summary: task.request.summary,
+        });
+        if (result.matches.length > 0) {
+          writePublishLog({
+            ts: Date.now(),
+            level: result.level === 'high' ? 'warn' : 'info',
+            taskId,
+            accountId,
+            platform: item.platform,
+            stage: 'compliance',
+            message: `合规预检命中 ${result.matches.length} 处（最高等级=${result.level}）`,
+            data: { matches: result.matches.map((m) => ({ term: m.term, level: m.level, field: m.field })) },
+          });
+        }
+      }
+    } catch (err) {
+      // fail-open：合规异常不得影响发布
+      logger.warn('[Compliance] 预检异常，跳过埋点', err);
+    }
 
     writePublishLog({
       ts: Date.now(),

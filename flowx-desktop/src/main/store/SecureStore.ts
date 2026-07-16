@@ -24,6 +24,7 @@ interface StoreSchema {
   browserBookmarks: BrowserBookmark[];
   browserBookmarkFolders: BrowserBookmarkFolder[];
   browserHistory: BrowserHistoryItem[];
+  compliance?: { promptEnabled: boolean };
 }
 
 let store: Store<StoreSchema> | null = null;

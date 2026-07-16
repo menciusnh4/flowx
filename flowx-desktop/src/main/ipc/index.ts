@@ -7,6 +7,7 @@ import { registerApiServerIpc } from './apiServer';
 import { registerBrowserIpc } from './browser';
 import { registerDraftIpc } from './draft';
 import { registerBrowserHistoryIpc } from './browserHistory';
+import { registerComplianceIpc } from './compliance';
 import { logger } from '../utils/logger';
 
 // 注册所有 IPC 监听
@@ -19,6 +20,7 @@ export function registerAllIpc(): void {
   registerBrowserIpc();
   registerDraftIpc();
   registerBrowserHistoryIpc();
+  registerComplianceIpc();
   logger.info('[IPC] 所有通道已注册');
 }
 

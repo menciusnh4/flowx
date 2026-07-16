@@ -24,6 +24,9 @@ import type {
   BrowserHistoryItem,
   ExtractedContent,
   ExtractedImage,
+  ComplianceScanRequest,
+  ComplianceResult,
+  ComplianceSettings,
 } from '../types';
 
 // Preload 脚本：通过 contextBridge 暴露安全 API
@@ -381,6 +384,14 @@ contextBridge.exposeInMainWorld('electron', {
     updateEnvironment: (id: string, patch: Partial<Omit<BrowserEnvironment, 'id' | 'createdAt'>>): Promise<BrowserEnvironment | null> => invoke('env:updateEnvironment', id, patch),
     deleteEnvironment: (id: string): Promise<boolean> => invoke('env:deleteEnvironment', id),
   },
+
+  // ========== 发布合规预检（P0） ==========
+  compliance: {
+    scan: (req: ComplianceScanRequest): Promise<ComplianceResult> => invoke('compliance:scan', req),
+    getSettings: (): Promise<ComplianceSettings> => invoke('compliance:getSettings'),
+    setSettings: (patch: { promptEnabled?: boolean }): Promise<ComplianceSettings> =>
+      invoke('compliance:setSettings', patch),
+  },
 });
 
 // 便于在 Vue 组件中做类型推断
@@ -473,6 +484,11 @@ declare global {
         createEnvironment: (data: Omit<BrowserEnvironment, 'id' | 'createdAt'>) => Promise<BrowserEnvironment>;
         updateEnvironment: (id: string, patch: Partial<Omit<BrowserEnvironment, 'id' | 'createdAt'>>) => Promise<BrowserEnvironment | null>;
         deleteEnvironment: (id: string) => Promise<boolean>;
+      };
+      compliance: {
+        scan: (req: ComplianceScanRequest) => Promise<ComplianceResult>;
+        getSettings: () => Promise<ComplianceSettings>;
+        setSettings: (patch: { promptEnabled?: boolean }) => Promise<ComplianceSettings>;
       };
     };
   }

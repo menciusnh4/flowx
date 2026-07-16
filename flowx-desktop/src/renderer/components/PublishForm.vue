@@ -2,8 +2,14 @@
 import { ref, computed, reactive, onMounted, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox, ElInput } from 'element-plus'
 import { useAccountStore } from '../stores/account'
+import { getPlatformIcon } from '../utils/platformIcons'
 import { electronApi } from '../utils/electron'
 import type { PublishRequest, PlatformType } from '../../types'
+import { useCompliance } from '../composables/useCompliance'
+import ComplianceBadge from './ComplianceBadge.vue'
+import ComplianceDetailPanel from './ComplianceDetailPanel.vue'
+import ComplianceNoticeModal from './ComplianceNoticeModal.vue'
+import type { ComplianceSettings } from '../../types/compliance'
 
 const props = defineProps<{
   /** 表单初始值（用于草稿加载、内容提取预填充等） */
@@ -70,6 +76,70 @@ const tagsRaw = ref((props.initialValue?.tags || []).join(' '))
 const submitting = ref(false)
 const contentTextareaRef = ref<InstanceType<typeof ElInput> | null>(null)
 
+// ===== P0 发布合规预检（仅提示，不阻断） =====
+const titleInputRef = ref<InstanceType<typeof ElInput> | null>(null)
+const tagsInputRef = ref<InstanceType<typeof ElInput> | null>(null)
+const summaryTextareaRef = ref<InstanceType<typeof ElInput> | null>(null)
+const promptOn = ref(true)
+const complianceSettings = ref<ComplianceSettings>({ promptEnabled: true })
+const noticeRef = ref<InstanceType<typeof ComplianceNoticeModal> | null>(null)
+
+// 选择的账号 ID（提前到 useCompliance 之前声明，避免 platforms() 在 setup 阶段读取 selectedIds 触发 TDZ）
+const selectedIds = reactive<Record<string, boolean>>({})
+
+const compliance = useCompliance({
+  fields: () => ({
+    title: title.value,
+    content: content.value,
+    tags: tagsRaw.value.split(/[,，\s]+/).map((t) => t.trim().replace(/^#/, '')).filter((t) => t.length > 0),
+    summary: summary.value,
+  }),
+  platforms: () => {
+    const set = new Set<string>()
+    for (const id of getSelectedIds()) {
+      const a = accountStore.accounts.find((x) => x.id === id)
+      if (a) set.add(a.platform)
+    }
+    return [...set]
+  },
+  enabled: () => complianceSettings.value.promptEnabled,
+})
+
+/** 聚焦某字段（点击角标 / 面板命中时调用） */
+function locateField(field: string) {
+  nextTick(() => {
+    if (field === 'title') titleInputRef.value?.focus()
+    else if (field === 'content') contentTextareaRef.value?.focus()
+    else if (field === 'tags') tagsInputRef.value?.focus()
+    else if (field === 'summary') summaryTextareaRef.value?.focus()
+  })
+}
+
+/** 提示开关切换（关闭需二次确认防误关） */
+async function onPromptToggle(val: boolean) {
+  if (!val) {
+    const ok = await showConfirm('关闭后不再提示违禁词，可能增加账号处罚风险。确定关闭？', '关闭合规提示')
+    if (!ok) { promptOn.value = true; return }
+  }
+  complianceSettings.value = await electronApi.compliance.setSettings({ promptEnabled: val })
+  promptOn.value = val
+}
+
+/** 合规状态条副标题用的平台名（对齐原型 compliance-prototype.html） */
+const PLAT_CN: Record<string, string> = {
+  douyin: '抖音', kuaishou: '快手', xiaohongshu: '小红书', bilibili: '哔哩哔哩',
+  wechat_channels: '微信视频号', video: '视频号', zhihu: '知乎', toutiao: '今日头条',
+}
+const compliancePlatformLabel = computed(() => {
+  const set = new Set<string>()
+  for (const id of getSelectedIds()) {
+    const a = accountStore.accounts.find((x) => x.id === id)
+    if (a) set.add(a.platform)
+  }
+  const list = [...set].map((p) => PLAT_CN[p] || p)
+  return list.length ? list.join(' / ') : '未选择账号'
+})
+
 // 监听表单变化，向外通知
 function notifyChange() {
   emit('change', {
@@ -84,7 +154,6 @@ function notifyChange() {
 }
 
 // ============ 选择的账号 ID ============
-const selectedIds = reactive<Record<string, boolean>>({})
 
 function toggleAccount(id: string) {
   selectedIds[id] = !selectedIds[id]
@@ -153,6 +222,13 @@ onMounted(async () => {
     }
     if (accountStore.categories.length === 0) {
       await accountStore.loadCategories()
+    }
+    // 加载合规提示设置
+    try {
+      complianceSettings.value = await electronApi.compliance.getSettings()
+      promptOn.value = complianceSettings.value.promptEnabled
+    } catch (e) {
+      console.warn('[PublishForm] 加载合规设置失败', e)
     }
     // 如果有初始选中的账号
     if (props.initialValue?.accountIds) {
@@ -604,6 +680,12 @@ async function submitPublish() {
     .map((t) => t.trim().replace(/^#/, ''))
     .filter((t) => t.length > 0)
 
+  // 发布前合规提示（仅提示，不阻断）
+  if (compliance.result.value.hasAny && complianceSettings.value.promptEnabled) {
+    const cont = await noticeRef.value?.show(compliance.result.value)
+    if (cont === false) return // 用户选"去修改"，中止本次提交
+  }
+
   const req: PublishRequest = {
     contentType: contentType.value,
     accountIds,
@@ -841,14 +923,6 @@ function platformName(p?: string): string {
   return map[p] || p
 }
 
-function iconOf(platform?: string): string {
-  const map: Record<string, string> = {
-    douyin: '🎵', kuaishou: '⚡', xiaohongshu: '📕', bilibili: '📺', wechat_channels: '🎬',
-    zhihu: '💡', toutiao: '📰',
-  }
-  return map[platform ?? ''] || '🔘'
-}
-
 // ============ 原型视觉辅助 ============
 /** 切换发布类型（顺带清理类型不兼容的账号选中，与 watch 一致） */
 function setType(t: 'video' | 'image' | 'article') {
@@ -856,19 +930,6 @@ function setType(t: 'video' | 'image' | 'article') {
   notifyChange()
 }
 
-/** 平台品牌色，用于账号选择卡片的彩色图标底 */
-function platColor(p?: string): string {
-  const map: Record<string, string> = {
-    douyin: '#161823',
-    kuaishou: '#FF4906',
-    xiaohongshu: '#FF2442',
-    bilibili: '#FB7299',
-    wechat_channels: '#07C160',
-    zhihu: '#0084FF',
-    toutiao: '#FF4500',
-  }
-  return map[p ?? ''] || '#6366F1'
-}
 </script>
 
 <template>
@@ -881,6 +942,31 @@ function platColor(p?: string): string {
           <span class="tb-ic">{{ typeMeta.icon }}</span>
           <span class="tb-label">{{ typeMeta.label }}</span>
         </div>
+        <!-- 合规预检头部：标题 + 提示开关（对齐原型 mode-switch） -->
+        <div class="comp-head-row">
+          <span class="comp-head-label">🔒 发布前合规预检</span>
+          <div class="mode-switch">
+            <button type="button" class="ms" :class="{ active: promptOn }" @click="onPromptToggle(true)">🔔 提示开</button>
+            <button type="button" class="ms" :class="{ active: !promptOn }" @click="onPromptToggle(false)">🔕 提示关</button>
+          </div>
+        </div>
+
+        <ComplianceDetailPanel
+          :result="compliance.result.value"
+          :enabled="promptOn"
+          :scanning="compliance.scanning.value"
+          :platform-label="compliancePlatformLabel"
+          @locate="locateField"
+        />
+
+        <!-- 图例 + 本地检测说明（提升可见性，对齐原型） -->
+        <div class="comp-legend">
+          <span class="lg"><i class="dot high"></i>高危 · 显著提示，仍可发布</span>
+          <span class="lg"><i class="dot mid"></i>中危 · 建议修改</span>
+          <span class="lg"><i class="dot low"></i>低危 · 提示</span>
+        </div>
+        <div class="local-note"><span class="lk">🔒</span> 全部检测在本机完成，词库随版内置、不上传任何数据</div>
+
         <!-- ① 内容类型 -->
         <div class="type-tabs" v-if="!controlled">
           <button type="button" class="t-tab" :class="{ active: contentType === 'video' }" @click="setType('video')">🎬 视频</button>
@@ -890,13 +976,13 @@ function platColor(p?: string): string {
 
         <!-- 标题 -->
         <div class="field">
-          <label>标题<span class="counter">{{ title.length }} / {{ titleMaxLength }}</span></label>
-          <el-input v-model="title" :placeholder="titlePlaceholder" :maxlength="titleMaxLength" @input="notifyChange" />
+          <label>标题<ComplianceBadge :level="compliance.badges.value.title?.level" :count="compliance.badges.value.title?.count" @click="locateField('title')" /><span class="counter">{{ title.length }} / {{ titleMaxLength }}</span></label>
+          <el-input ref="titleInputRef" v-model="title" :placeholder="titlePlaceholder" :maxlength="titleMaxLength" @input="notifyChange" />
         </div>
 
         <!-- 正文 / 描述 -->
         <div class="field">
-          <label>{{ contentType === 'article' ? '正文' : '正文 / 描述' }}<span class="counter">{{ content.length }} / {{ platformContentLimit.min }}</span></label>
+          <label>{{ contentType === 'article' ? '正文' : '正文 / 描述' }}<ComplianceBadge :level="compliance.badges.value.content?.level" :count="compliance.badges.value.content?.count" @click="locateField('content')" /><span class="counter">{{ content.length }} / {{ platformContentLimit.min }}</span></label>
           <el-input
             ref="contentTextareaRef"
             v-model="content"
@@ -919,8 +1005,8 @@ function platColor(p?: string): string {
 
         <!-- 话题 -->
         <div class="field">
-          <label>话题标签</label>
-          <el-input v-model="tagsRaw" placeholder="多个话题用空格或逗号分隔，例如：美食探店 上海生活" @input="notifyChange" />
+          <label>话题标签<ComplianceBadge :level="compliance.badges.value.tags?.level" :count="compliance.badges.value.tags?.count" @click="locateField('tags')" /></label>
+          <el-input ref="tagsInputRef" v-model="tagsRaw" placeholder="多个话题用空格或逗号分隔，例如：美食探店 上海生活" @input="notifyChange" />
         </div>
 
         <!-- 素材（视频 / 图文） -->
@@ -983,8 +1069,8 @@ function platColor(p?: string): string {
 
         <!-- 摘要（文章） -->
         <div class="field" v-if="contentType === 'article'">
-          <label>摘要<span class="counter">{{ summary.length }} / {{ articleSummaryMaxLength }}</span></label>
-          <el-input v-model="summary" type="textarea" :rows="2" placeholder="可选：文章摘要/简介（抖音300字/小红书1000字）" :maxlength="articleSummaryMaxLength" @input="notifyChange" />
+          <label>摘要<ComplianceBadge :level="compliance.badges.value.summary?.level" :count="compliance.badges.value.summary?.count" @click="locateField('summary')" /><span class="counter">{{ summary.length }} / {{ articleSummaryMaxLength }}</span></label>
+          <el-input ref="summaryTextareaRef" v-model="summary" type="textarea" :rows="2" placeholder="可选：文章摘要/简介（抖音300字/小红书1000字）" :maxlength="articleSummaryMaxLength" @input="notifyChange" />
         </div>
 
         <!-- 发布时间 -->
@@ -1033,10 +1119,17 @@ function platColor(p?: string): string {
               :class="{ on: !!selectedIds[a.id] }"
               @click="toggleAccount(a.id)"
             >
-              <div class="pd" :style="{ background: platColor(a.platform) }">{{ iconOf(a.platform) }}</div>
+              <div class="ava" :style="{ background: a.avatar ? 'transparent' : 'var(--brand-indigo)' }">
+                <img v-if="a.avatar" :src="a.avatar" class="ava-img" :alt="a.nickname" />
+                <span v-else>{{ (a.nickname || 'U').slice(0, 1) }}</span>
+              </div>
               <div class="pinfo">
                 <div class="pn">{{ a.nickname }}</div>
-                <div class="pf">{{ platformName(a.platform) }} · {{ a.id }}</div>
+                <div class="pf">
+                  <img v-if="getPlatformIcon(a.platform)" :src="getPlatformIcon(a.platform)" class="pf-plogo" :alt="platformName(a.platform)" />
+                  <span>{{ platformName(a.platform) }}</span>
+                  <span class="pf-id">· {{ a.id }}</span>
+                </div>
               </div>
               <div v-if="selectedIds[a.id]" class="check">✓</div>
             </div>
@@ -1059,6 +1152,7 @@ function platColor(p?: string): string {
       </div>
     </div>
   </div>
+  <ComplianceNoticeModal ref="noticeRef" />
 </template>
 
 <style scoped>
@@ -1227,10 +1321,13 @@ function platColor(p?: string): string {
 }
 .pick:hover { border-color: var(--brand-indigo); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
 .pick.on { border-color: var(--brand-indigo); background: var(--brand-grad-soft); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12); }
-.pd { width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; color: #fff; flex-shrink: 0; }
+.ava { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; background: var(--brand-indigo); color: #fff; font-weight: 800; font-size: 14px; }
+.ava-img { width: 100%; height: 100%; object-fit: cover; }
 .pinfo { min-width: 0; }
 .pn { font-size: 13px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pf { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pf { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pf-plogo { width: 14px; height: 14px; object-fit: contain; border-radius: 4px; flex-shrink: 0; }
+.pf-id { opacity: 0.7; }
 .check { position: absolute; top: 8px; right: 10px; width: 18px; height: 18px; border-radius: 50%; background: var(--brand-indigo); color: #fff; font-size: 11px; display: flex; align-items: center; justify-content: center; font-weight: 800; }
 
 /* 发布时间 */
@@ -1257,4 +1354,27 @@ function platColor(p?: string): string {
 .limits-hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
 .min-content-hint { font-size: 12px; color: var(--brand-indigo); margin-top: 4px; background: var(--brand-grad-soft); border-left: 3px solid var(--brand-indigo); padding: 6px 10px; border-radius: var(--r-sm); }
 .empty { padding: 20px 0; }
+
+/* ===== 合规预检头部（对齐原型 compliance-prototype.html）===== */
+.comp-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.comp-head-label { font-size: 13px; font-weight: 800; color: var(--ink); display: inline-flex; align-items: center; gap: 6px; }
+.mode-switch { display: inline-flex; align-items: center; gap: 0; background: #f1f5f9; border-radius: 11px; padding: 3px; }
+.mode-switch .ms {
+  height: 32px; padding: 0 14px; border-radius: 9px; font-size: 12.5px; font-weight: 700;
+  color: var(--slate); background: transparent; border: none; cursor: pointer; transition: all 0.2s;
+}
+.mode-switch .ms.active { background: #fff; color: var(--brand-indigo, #6366f1); box-shadow: var(--shadow-sm); }
+.mode-switch .ms.armed { background: rgba(244, 63, 94, 0.14); color: #e11d48; }
+
+/* 图例 */
+.comp-legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 2px 0 8px; font-size: 11.5px; color: var(--muted); font-weight: 600; }
+.comp-legend .lg { display: flex; align-items: center; gap: 6px; }
+.comp-legend .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.comp-legend .dot.high { background: #f43f5e; }
+.comp-legend .dot.mid { background: #f59e0b; }
+.comp-legend .dot.low { background: #3b82f6; }
+
+/* 本地检测说明 */
+.local-note { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 14px; }
+.local-note .lk { font-size: 13px; }
 </style>

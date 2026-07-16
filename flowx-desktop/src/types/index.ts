@@ -1,5 +1,8 @@
 // 全局类型定义 - 主进程与渲染进程共享
 
+// 发布合规预检（P0）类型
+export * from './compliance';
+
 /** 支持的平台（由注册时校验） */
 export type PlatformType = string;
 

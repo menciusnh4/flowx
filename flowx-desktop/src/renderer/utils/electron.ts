@@ -26,6 +26,7 @@ import type {
   ExtractedContent,
   ExtractedImage,
 } from '../../types';
+import type { ComplianceScanRequest, ComplianceResult, ComplianceSettings } from '../../types/compliance';
 
 type StatusCb = (evt: unknown) => void;
 
@@ -401,6 +402,19 @@ export const electronApi = {
     removeLoadingUpdatedListener(cb: (data: { viewId: string; isLoading: boolean; canGoBack?: boolean; canGoForward?: boolean }) => void): void {
       const e = getElectronOrThrow() as { browser?: { removeLoadingUpdatedListener: (cb: never) => void } };
       e.browser?.removeLoadingUpdatedListener?.(cb as never);
+    },
+  },
+
+  // 发布合规预检（P0）
+  compliance: {
+    async scan(req: ComplianceScanRequest): Promise<ComplianceResult> {
+      return invokeElectron('compliance.scan', 'compliance:scan', req);
+    },
+    async getSettings(): Promise<ComplianceSettings> {
+      return invokeElectron('compliance.getSettings', 'compliance:getSettings');
+    },
+    async setSettings(patch: { promptEnabled?: boolean }): Promise<ComplianceSettings> {
+      return invokeElectron('compliance.setSettings', 'compliance:setSettings', patch);
     },
   },
 
