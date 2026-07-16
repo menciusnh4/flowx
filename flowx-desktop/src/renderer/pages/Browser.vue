@@ -752,6 +752,20 @@ async function handlePublishSubmit(req: PublishRequest) {
   }
 }
 
+// 测试发布提交
+async function handleTestSubmit(req: PublishRequest) {
+  try {
+    const { usePublishStore } = await import('../stores/publish')
+    const publishStore = usePublishStore()
+    publishStore.ensureListener()
+    const taskId = await publishStore.submit(req)
+    ElMessage.success(`测试任务已提交：${taskId}`)
+  } catch (e) {
+    console.error('[Browser.vue] test submit error', e)
+    ElMessage.error(`测试失败：${e instanceof Error ? e.message : String(e)}`)
+  }
+}
+
 /**
  * 将提取结果填充到发布表单（支持替换/追加模式）
  * @param result 提取结果（images 为 ExtractedImage[]）
@@ -1295,6 +1309,7 @@ watch(() => route.path, () => {
         <PublishForm
           ref="publishFormRef"
           @submit="handlePublishSubmit"
+          @test-submit="handleTestSubmit"
           @modal-show="handleModalShow"
           @modal-hide="handleModalHide"
         >
