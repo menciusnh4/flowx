@@ -2,7 +2,7 @@ import type { BrowserWindow } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { PlatformAdapter, ExtractedAccountInfo, LoginCheckResult, ProgressCallback } from './types';
-import { sleep, makePublishLogger, makePublishWindow, attachNavigationTracker, evalJS, makeFailedResult, uploadViaCDP, waitForUploadComplete, buildPageStructureProbe, cdpInsertTagsWithSpace, cdpFillContentWithNewlines, buildTestModeProbeScript, setupTestModeWindow } from './shared';
+import { sleep, makePublishLogger, makePublishWindow, attachNavigationTracker, evalJS, makeFailedResult, uploadViaCDP, waitForUploadComplete, buildPageStructureProbe, cdpInsertTagsWithSpace, cdpFillContentWithNewlines, buildTestModeProbeScript, setupTestModeWindow, createMarkdownTempFile, cleanupMarkdownTempFile, uploadFileToInput } from './shared';
 import { registerPlatform } from './registry';
 import type { PlatformMeta, PublishRequest, PublishItemProgress, AccountCapabilities, ContentType } from '../../../types';
 
@@ -22,6 +22,35 @@ function truncate(text: string, max: number): string {
   if (!text) return '';
   if (text.length <= max) return text;
   return text.slice(0, max - 1).trimEnd() + '\u2026';
+}
+
+/**
+ * 按"排除换行符的字符数"截断文本
+ *  - 计算字数时忽略 \n 和 \r
+ *  - 截断时保留换行符（只限制有效字符数）
+ *  - 返回截断后的完整文本（包含换行符）
+ */
+function truncateExcludingNewlines(text: string, max: number): string {
+  if (!text) return '';
+  let effectiveLen = 0;
+  let result = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '\n' || ch === '\r') {
+      result += ch;
+      continue;
+    }
+    if (effectiveLen >= max) {
+      // 到达限制，添加省略号
+      if (!result.endsWith('\u2026')) {
+        result = result.trimEnd() + '\u2026';
+      }
+      break;
+    }
+    result += ch;
+    effectiveLen++;
+  }
+  return result;
 }
 
 function buildContentText(content: string | undefined, tags: string[] | undefined): string {
@@ -4200,31 +4229,335 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
       log('info', 'login', '已登录，URL: ' + win.webContents.getURL().slice(0, 100));
     }
 
-    // 检测文章发布引导页，如果有"我要发文"按钮则点击进入编辑器
+    // 检测文章发布引导页，如果有"我要发文"/"一键导入"按钮则处理
     onProgress(18, '检测文章发布引导页…');
-    const landingScript = buildDetectArticleLandingScript();
-    const landingResult: any = await evalJS(win, landingScript, 'article-landing', log).catch(function () { return null; });
-    if (landingResult && landingResult.hasLanding) {
-      if (landingResult.clicked) {
+    const isMarkdownMode = request.contentMode === 'markdown' && request.markdownContent;
+    let markdownUploaded = false; // 追踪 Markdown 是否已成功上传
+    let mdFilePath = ''; // Markdown 临时文件路径
+
+    // 先检测是否在引导页（只检测不点击）
+    const detectLandingOnly = `(function () {
+      try {
+        // 查找所有 semi-button-content span
+        var spans = document.querySelectorAll('span.semi-button-content');
+        var hasFaWen = false;
+        var hasImport = false;
+        for (var i = 0; i < spans.length; i++) {
+          var span = spans[i];
+          var txt = (span.innerText || span.textContent || '').trim();
+          if (txt === '我要发文' || txt.indexOf('我要发文') !== -1) hasFaWen = true;
+          if (txt === '一键导入' || txt.indexOf('一键导入') !== -1) hasImport = true;
+        }
+        // 也检查标题
+        var titleEl = document.querySelector('[class*="container-drag-title"]');
+        var isLanding = !!(titleEl && /大作文章|我要发文/.test(titleEl.innerText || ''));
+        if (hasFaWen) isLanding = true;
+        return { hasLanding: isLanding, hasFaWen: hasFaWen, hasImport: hasImport };
+      } catch (e) {
+        return { hasLanding: false, hasFaWen: false, hasImport: false, error: String(e) };
+      }
+    })();`;
+    const landingResult: any = await evalJS(win, detectLandingOnly, 'article-landing', log).catch(function () { return null; });
+
+    if (landingResult && landingResult.hasLanding && isMarkdownMode) {
+      // Markdown 模式：尝试点击"一键导入"按钮
+      log('info', 'article-landing', 'Markdown模式，检测到引导页，尝试点击"一键导入"按钮…');
+      onProgress(20, '点击一键导入…');
+
+      const clickImportResult: any = await evalJS(
+        win as BrowserWindow,
+        `(function(){
+          // 查找"一键导入"按钮
+          var btns = document.querySelectorAll('.semi-button, button');
+          for (var i = 0; i < btns.length; i++) {
+            var btn = btns[i];
+            var txt = (btn.innerText || btn.textContent || '').trim();
+            if (txt === '一键导入' || txt.indexOf('一键导入') !== -1) {
+              btn.click();
+              return { ok: true, text: txt };
+            }
+          }
+          // 备选：通过 class 查找
+          var importBtns = document.querySelectorAll('[class*="import"], [class*="drag-btn"]');
+          for (var j = 0; j < importBtns.length; j++) {
+            var ib = importBtns[j];
+            var ibTxt = (ib.innerText || ib.textContent || '').trim();
+            if (ibTxt === '一键导入' || ibTxt.indexOf('一键导入') !== -1) {
+              ib.click();
+              return { ok: true, text: ibTxt, selector: 'class-match' };
+            }
+          }
+          return { ok: false, reason: '未找到一键导入按钮' };
+        })()`,
+        'article-click-import',
+        log,
+      ).catch(() => null);
+
+      if (clickImportResult && clickImportResult.ok) {
+        log('info', 'article-landing', '已点击"一键导入"按钮，等待弹窗…');
+        await sleep(1500);
+
+        try {
+          mdFilePath = createMarkdownTempFile(request.markdownContent || '', 'douyin-article');
+          log('info', 'article-landing', `Markdown 临时文件已生成: ${mdFilePath}`);
+
+          onProgress(25, '上传 Markdown 文件…');
+          // 上传文件到弹窗中的 file input
+          const uploadResult = await uploadFileToInput(
+            win as BrowserWindow,
+            mdFilePath,
+            'input[type=file][accept*=".md"], input[type=file][accept*=".markdown"], .dy-creator-content-modal-body-wrapper input[type=file], .file-upload-section input[type=file], [class*="modal"] input[type=file]',
+            log,
+            10000,
+          );
+
+          if (uploadResult) {
+            log('info', 'article-landing', 'Markdown 文件上传成功，等待跳转编辑器…');
+            markdownUploaded = true;
+            // 等待页面跳转到编辑器
+            await tracker.waitForStable(2000, 15000);
+            await sleep(2000);
+            log('info', 'article-landing', '编辑器页面加载完成，URL: ' + win.webContents.getURL().slice(0, 100));
+          } else {
+            log('warn', 'article-landing', 'Markdown 文件上传失败，回退到我要发文+纯文本模式');
+            // 关闭弹窗
+            try {
+              await evalJS(
+                win as BrowserWindow,
+                `(function(){
+                  var closeBtn = document.querySelector('.modal-close, [class*="modal-close"]');
+                  if (closeBtn) closeBtn.click();
+                })()`,
+                'article-close-modal',
+                log,
+              ).catch(() => null);
+            } catch {}
+            await sleep(500);
+            // 点击"我要发文"
+            await evalJS(
+              win as BrowserWindow,
+              `(function(){
+                var spans = document.querySelectorAll('span.semi-button-content');
+                for (var i = 0; i < spans.length; i++) {
+                  var span = spans[i];
+                  var txt = (span.innerText || span.textContent || '').trim();
+                  if (txt === '我要发文' || txt.indexOf('我要发文') !== -1) {
+                    var btn = span.closest ? span.closest('button') : null;
+                    if (!btn) {
+                      var p = span.parentElement;
+                      while (p && p.tagName !== 'BUTTON' && p.tagName !== 'BODY') { p = p.parentElement; }
+                      if (p && p.tagName === 'BUTTON') btn = p;
+                    }
+                    if (btn) { btn.click(); return { ok: true }; }
+                  }
+                }
+                return { ok: false };
+              })()`,
+              'article-landing-fallback',
+              log,
+            ).catch(() => null);
+            await tracker.waitForStable(1500, 15000);
+            await sleep(2000);
+          }
+        } finally {
+          if (mdFilePath) {
+            cleanupMarkdownTempFile(mdFilePath);
+            mdFilePath = '';
+          }
+        }
+      } else {
+        log('warn', 'article-landing', '未找到一键导入按钮，走正常我要发文流程');
+        // 点击"我要发文"按钮进入编辑器
+        const clickFaWenResult: any = await evalJS(
+          win as BrowserWindow,
+          `(function(){
+            var spans = document.querySelectorAll('span.semi-button-content');
+            for (var i = 0; i < spans.length; i++) {
+              var span = spans[i];
+              var txt = (span.innerText || span.textContent || '').trim();
+              if (txt === '我要发文' || txt.indexOf('我要发文') !== -1) {
+                var btn = span.closest ? span.closest('button') : null;
+                if (!btn) {
+                  var p = span.parentElement;
+                  while (p && p.tagName !== 'BUTTON' && p.tagName !== 'BODY') { p = p.parentElement; }
+                  if (p && p.tagName === 'BUTTON') btn = p;
+                }
+                if (btn) { btn.click(); return { ok: true, text: txt }; }
+              }
+            }
+            return { ok: false, reason: '未找到我要发文按钮' };
+          })()`,
+          'article-click-fawen',
+          log,
+        ).catch(() => null);
+        if (clickFaWenResult && clickFaWenResult.ok) {
+          log('info', 'article-landing', '已点击"我要发文"按钮，等待编辑器加载…');
+          onProgress(22, '已点击"我要发文"，等待编辑器加载…');
+          await tracker.waitForStable(1500, 15000);
+          await sleep(2000);
+          log('info', 'article-landing', '编辑器页面加载完成，URL: ' + win.webContents.getURL().slice(0, 100));
+        }
+      }
+    } else if (landingResult && landingResult.hasLanding) {
+      // 纯文本模式：点击"我要发文"进入编辑器
+      const clickFaWenResult2: any = await evalJS(
+        win as BrowserWindow,
+        `(function(){
+          var spans = document.querySelectorAll('span.semi-button-content');
+          for (var i = 0; i < spans.length; i++) {
+            var span = spans[i];
+            var txt = (span.innerText || span.textContent || '').trim();
+            if (txt === '我要发文' || txt.indexOf('我要发文') !== -1) {
+              var btn = span.closest ? span.closest('button') : null;
+              if (!btn) {
+                var p = span.parentElement;
+                while (p && p.tagName !== 'BUTTON' && p.tagName !== 'BODY') { p = p.parentElement; }
+                if (p && p.tagName === 'BUTTON') btn = p;
+              }
+              if (btn) { btn.click(); return { ok: true, text: txt }; }
+            }
+          }
+          return { ok: false, reason: '未找到我要发文按钮' };
+        })()`,
+        'article-click-fawen-text',
+        log,
+      ).catch(() => null);
+      if (clickFaWenResult2 && clickFaWenResult2.ok) {
         log('info', 'article-landing', '检测到引导页，已点击"我要发文"按钮，等待编辑器加载…');
         onProgress(22, '已点击"我要发文"，等待编辑器加载…');
         await tracker.waitForStable(1500, 15000);
         await sleep(2000);
         log('info', 'article-landing', '编辑器页面加载完成，URL: ' + win.webContents.getURL().slice(0, 100));
       } else {
-        log('warn', 'article-landing', '检测到引导页但点击失败: ' + (landingResult.reason || '未知'));
+        log('warn', 'article-landing', '检测到引导页但点击失败: ' + (clickFaWenResult2?.reason || '未知'));
         // 即使点击失败也继续尝试，也许页面结构不同
       }
     } else {
       log('info', 'article-landing', '未检测到引导页，直接进入编辑器');
+      // Markdown 模式：尝试在编辑器页面查找文档导入入口
+      if (isMarkdownMode && !markdownUploaded) {
+        log('info', 'article-editor-import', 'Markdown模式，在编辑器页面查找导入入口…');
+        onProgress(22, '查找文档导入入口…');
+        await sleep(1000);
+
+        // 尝试查找并点击编辑器中的导入/文档按钮
+        const clickEditorImportResult: any = await evalJS(
+          win as BrowserWindow,
+          `(function(){
+            // 尝试多种方式查找导入按钮
+            var selectors = [
+              '[class*="import"]',
+              '[class*="upload-doc"]',
+              '[class*="document-import"]',
+              'button[aria-label*="导入"]',
+              'button[title*="导入"]',
+            ];
+            for (var si = 0; si < selectors.length; si++) {
+              var els = document.querySelectorAll(selectors[si]);
+              for (var ei = 0; ei < els.length; ei++) {
+                var el = els[ei];
+                var txt = (el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim();
+                if (txt && (txt.indexOf('导入') !== -1 || txt.indexOf('文档') !== -1)) {
+                  el.click();
+                  return { ok: true, selector: selectors[si], text: txt };
+                }
+              }
+            }
+            // 备选：查找工具栏中的图标按钮，通过 tooltip/aria-label 识别
+            var toolBtns = document.querySelectorAll('[class*="toolbar"] button, [class*="ToolBar"] button, [class*="menu-item"]');
+            for (var ti = 0; ti < toolBtns.length; ti++) {
+              var btn = toolBtns[ti];
+              var label = (btn.getAttribute('aria-label') || btn.getAttribute('title') || btn.getAttribute('data-tip') || '').trim();
+              if (label.indexOf('导入') !== -1 || label.indexOf('文档') !== -1) {
+                btn.click();
+                return { ok: true, source: 'toolbar', label: label };
+              }
+            }
+            return { ok: false, reason: '未在编辑器中找到导入按钮' };
+          })()`,
+          'article-editor-click-import',
+          log,
+        ).catch(() => null);
+
+        if (clickEditorImportResult && clickEditorImportResult.ok) {
+          log('info', 'article-editor-import', '已点击编辑器导入按钮，等待弹窗…');
+          await sleep(1500);
+
+          try {
+            mdFilePath = createMarkdownTempFile(request.markdownContent || '', 'douyin-article');
+            log('info', 'article-editor-import', `Markdown 临时文件已生成: ${mdFilePath}`);
+
+            onProgress(25, '上传 Markdown 文件…');
+            const editorUploadResult = await uploadFileToInput(
+              win as BrowserWindow,
+              mdFilePath,
+              'input[type=file][accept*=".md"], input[type=file][accept*=".markdown"], .dy-creator-content-modal-body-wrapper input[type=file], .file-upload-section input[type=file], [class*="modal"] input[type=file], [class*="import"] input[type=file]',
+              log,
+              10000,
+            );
+
+            if (editorUploadResult) {
+              log('info', 'article-editor-import', 'Markdown 文件上传成功');
+              markdownUploaded = true;
+              await sleep(2000);
+            } else {
+              log('warn', 'article-editor-import', 'Markdown 文件上传失败，回退到纯文本模式');
+              // 尝试关闭弹窗
+              try {
+                await evalJS(
+                  win as BrowserWindow,
+                  `(function(){
+                    var closeBtn = document.querySelector('.modal-close, [class*="modal-close"], .semi-modal-close');
+                    if (closeBtn) closeBtn.click();
+                  })()`,
+                  'article-close-modal',
+                  log,
+                ).catch(() => null);
+              } catch {}
+              await sleep(500);
+            }
+          } finally {
+            if (mdFilePath) {
+              cleanupMarkdownTempFile(mdFilePath);
+              mdFilePath = '';
+            }
+          }
+        } else {
+          log('warn', 'article-editor-import', '编辑器中未找到导入入口，回退到纯文本模式');
+        }
+      }
     }
 
     // 先填写标题和正文，再上传封面（避免填写时页面滚动导致封面区域位置变化）
     const titleText = truncate((request.title || '').trim(), ARTICLE_TITLE_MAX);
-    const rawContent = truncate((request.content || '').trim(), ARTICLE_CONTENT_MAX);
+    let originalContent = (request.content || '').trim();
+    // 文章正文字数限制：换行符不计入字数
+    let rawContent = truncateExcludingNewlines(originalContent, ARTICLE_CONTENT_MAX);
     const articleTagList = prepareTags(request.tags, ARTICLE_TAG_MAX);
+    // 计算有效字符数（排除换行）
+    let effectiveContentLen = originalContent.replace(/[\n\r]/g, '').length;
     log('info', 'fill', '文章标题: ' + (titleText || '').slice(0, 40) + ' (限' + ARTICLE_TITLE_MAX + '字)');
-    log('info', 'fill', '文章正文: ' + rawContent.length + '字 (限' + ARTICLE_CONTENT_MAX + '字), 标签: ' + articleTagList.length + '个');
+    log('info', 'fill', '文章正文: 有效字符 ' + Math.min(effectiveContentLen, ARTICLE_CONTENT_MAX) + '/' + ARTICLE_CONTENT_MAX + ' 字 (含换行共 ' + rawContent.length + ' 字, 换行符不计入限制), 标签: ' + articleTagList.length + '个');
+    if (isMarkdownMode && markdownUploaded) {
+      log('info', 'fill', 'Markdown 模式：正文已通过文件导入，跳过手动填写正文');
+    } else if (isMarkdownMode && !markdownUploaded) {
+      log('info', 'fill', 'Markdown 模式：文件导入失败，回退到纯文本填写');
+      // 将 Markdown 内容作为纯文本处理
+      const mdContent = request.markdownContent || '';
+      const plainText = mdContent
+        .replace(/!\[.*?\]\(.*?\)/g, '') // 去除图片
+        .replace(/^#{1,6}\s+/gm, '') // 去除标题标记
+        .replace(/\*\*([^*]+)\*\*/g, '$1') // 去除粗体
+        .replace(/\*([^*]+)\*/g, '$1') // 去除斜体
+        .replace(/==([^=]+)==/g, '$1') // 去除高亮
+        .replace(/^>\s?/gm, '') // 去除引用
+        .replace(/^[-*+]\s+/gm, '') // 去除无序列表
+        .replace(/^\d+\.\s+/gm, ''); // 去除有序列表
+      originalContent = plainText.trim();
+      rawContent = truncateExcludingNewlines(originalContent, ARTICLE_CONTENT_MAX);
+      effectiveContentLen = originalContent.replace(/[\n\r]/g, '').length;
+      log('info', 'fill', '回退纯文本: 有效字符 ' + Math.min(effectiveContentLen, ARTICLE_CONTENT_MAX) + '/' + ARTICLE_CONTENT_MAX + ' 字');
+    }
 
     onProgress(25, '填写标题…');
     if (titleText) {
@@ -4237,7 +4570,8 @@ async function publishArticle(accountId: string, request: PublishRequest, onProg
 
     onProgress(35, '填写正文…');
     let contentResult: any = null;
-    if (rawContent || articleTagList.length > 0) {
+    // Markdown 模式下且已成功上传，则跳过正文填写
+    if (!(isMarkdownMode && markdownUploaded) && (rawContent || articleTagList.length > 0)) {
       if (rawContent) {
         // 有正文：先探测编辑器类型，再选择合适的填写方式
         const probeScript = `(function(){

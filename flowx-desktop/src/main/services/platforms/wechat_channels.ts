@@ -1,4 +1,5 @@
 import type { BrowserWindow } from 'electron';
+import { session } from 'electron';
 import type { PlatformAdapter, ExtractedAccountInfo, LoginCheckResult, ProgressCallback } from './types';
 import {
   sleep,
@@ -140,9 +141,30 @@ function buildDetectLoggedInScript(loginKeywords: string[]): string {
       var hasUid = !!document.querySelector('.finder-uniq-id');
       
       var isLoginPage = /login.html/i.test(url) || (/login|signin/i.test(url) && url.indexOf('platform') === -1);
-      var loggedIn = !isLoginPage && (url.indexOf('platform') !== -1 || hasNick || hasUid || matched.length >= 1);
       
-      return { loggedIn: loggedIn, matched: matched, title: document.title, url: url, hasNick: hasNick, hasUid: hasUid };
+      // 方式一：通过登录凭证 cookie 判断（隐藏窗口下 iframe 不加载时也能检测）
+      var cookieStr = document.cookie || "";
+      var hasLoginCookie = false;
+      var loginCookieNames = ['wxv_loginticket', 'wxv_appid', 'finder_login_ticket', 'wxv_openid', 'wxv_unionid'];
+      for (var j = 0; j < loginCookieNames.length; j++) {
+        if (cookieStr.indexOf(loginCookieNames[j] + '=') !== -1
+            && cookieStr.indexOf(loginCookieNames[j] + '=;') === -1
+            && cookieStr.indexOf(loginCookieNames[j] + '=""') === -1) {
+          // 进一步确认 cookie 值非空
+          var re = new RegExp('(?:^|; )' + loginCookieNames[j].replace(/[\\.\\-\\+\\*\\?\\^\\$\\{\\}\\(\\)\\|\\[\\]\\\\]/g, '\\\\$&') + '=([^;]*)');
+          var m = cookieStr.match(re);
+          if (m && m[1] && m[1].trim()) {
+            hasLoginCookie = true;
+            break;
+          }
+        }
+      }
+      
+      // 登录判定：DOM检测通过 或 存在登录凭证cookie
+      var domLoggedIn = !isLoginPage && (url.indexOf('platform') !== -1 || hasNick || hasUid || matched.length >= 1);
+      var loggedIn = domLoggedIn || hasLoginCookie;
+      
+      return { loggedIn: loggedIn, matched: matched, title: document.title, url: url, hasNick: hasNick, hasUid: hasUid, hasLoginCookie: hasLoginCookie, domLoggedIn: domLoggedIn };
     })()
   `;
 }
@@ -740,16 +762,37 @@ const WechatChannelsAdapter: PlatformAdapter = {
 
   async detectLoggedIn(win: BrowserWindow): Promise<LoginCheckResult> {
     try {
-      const info: any = await safeExecuteJavaScript(
-        win,
-        buildDetectLoggedInScript(LOGIN_KEYWORDS)
+      // 第一步：通过 cookie 判断登录态（可读取 httpOnly cookie，隐藏窗口下也有效）
+      // 微信视频号登录后会设置登录凭证 cookie，如 wxv_loginticket、wxv_appid 等
+      const sess = win.webContents.session;
+      const cookies = await sess.cookies.get({ domain: '.weixin.qq.com' });
+      const loginCookieNames = ['wxv_loginticket', 'wxv_appid', 'finder_login_ticket', 'wxv_openid', 'wxv_unionid'];
+      const hasLoginCookie = cookies.some(
+        (c) => loginCookieNames.includes(c.name) && c.value && c.value.trim()
       );
-      if (!info) return { loggedIn: false, url: '', title: '' };
+
+      // 第二步：DOM 检测（页面完全加载时更准确，但隐藏窗口下 iframe 可能不加载）
+      let domLoggedIn = false;
+      let info: any = null;
+      try {
+        info = await safeExecuteJavaScript(
+          win,
+          buildDetectLoggedInScript(LOGIN_KEYWORDS)
+        );
+        if (info) {
+          domLoggedIn = !!info.domLoggedIn;
+        }
+      } catch {
+        // DOM 检测失败不影响 cookie 检测结果
+      }
+
+      const loggedIn = hasLoginCookie || domLoggedIn;
+
       return {
-        loggedIn: info.loggedIn,
-        url: info.url || '',
-        title: info.title || '',
-        matchedKeywords: info.matched,
+        loggedIn,
+        url: info?.url || '',
+        title: info?.title || '',
+        matchedKeywords: info?.matched || [],
       };
     } catch {
       return { loggedIn: false, url: '', title: '' };

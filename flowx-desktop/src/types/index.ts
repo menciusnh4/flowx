@@ -7,7 +7,7 @@ export * from './compliance';
 export type PlatformType = string;
 
 /** 已知平台 key 列表（仅用于默认 UI 展示，实际支持以注册表为准） */
-export const KNOWN_PLATFORMS: string[] = ['douyin', 'xiaohongshu', 'kuaishou', 'wechat_channels', 'zhihu', 'toutiao'];
+export const KNOWN_PLATFORMS: string[] = ['douyin', 'xiaohongshu', 'kuaishou', 'wechat_channels', 'wechat_official', 'zhihu', 'toutiao'];
 
 /** 平台元信息 */
 export interface PlatformMeta {
@@ -182,6 +182,17 @@ export interface PublishRequest {
   summary?: string;
   /** 测试模式：不真的点击发布按钮，仅验证表单填写是否正常 */
   testMode?: boolean;
+  /**
+   * 正文输入模式（仅文章发布时使用）
+   * - 'text': 纯文本（默认），直接填写到编辑器
+   * - 'markdown': Markdown 模式，生成 .md 文件后通过平台文档导入功能上传
+   */
+  contentMode?: 'text' | 'markdown';
+  /**
+   * Markdown 源码（contentMode === 'markdown' 时使用）
+   * 发布时将生成 .md 临时文件，通过平台的文档导入功能上传
+   */
+  markdownContent?: string;
 }
 
 /** 发布任务状态 */

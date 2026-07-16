@@ -170,6 +170,9 @@ export class AccountService {
     const sess = session.fromPartition(partition);
     await BrowserEnvService.applyEnvironment(sess, cred.envId);
 
+    // 显式注入 cookies（确保登录态正确加载，尤其是微信视频号等对 cookie 敏感的平台）
+    await injectAccountCookies(id, platform.meta.homeUrl);
+
     const win = new BrowserWindow({
       width: 1280, height: 880,
       title: `检测登录态 - ${cred.nickname || id}`,
@@ -792,6 +795,9 @@ export class AccountService {
     const partition = `persist:account_${c.id}`;
     const sess = session.fromPartition(partition);
     await BrowserEnvService.applyEnvironment(sess, c.envId);
+
+    // 显式注入 cookies（确保登录态正确加载）
+    await injectAccountCookies(id, platform.meta.homeUrl);
 
     const win = new BrowserWindow({
       width: 1280,

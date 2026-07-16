@@ -10,6 +10,7 @@ import ComplianceBadge from './ComplianceBadge.vue'
 import ComplianceDetailPanel from './ComplianceDetailPanel.vue'
 import ComplianceNoticeModal from './ComplianceNoticeModal.vue'
 import type { ComplianceSettings } from '../../types/compliance'
+import MarkdownEditor from './MarkdownEditor.vue'
 
 const props = defineProps<{
   /** 表单初始值（用于草稿加载、内容提取预填充等） */
@@ -140,6 +141,34 @@ const compliancePlatformLabel = computed(() => {
   return list.length ? list.join(' / ') : '未选择账号'
 })
 
+// ============ Markdown 编辑器（origin/main 新增） ============
+const contentMode = ref<'text' | 'markdown'>(props.initialValue?.contentMode || 'text')
+const markdownContent = ref(props.initialValue?.markdownContent || '')
+
+/** 正文模式切换：纯文本 ⇄ Markdown（迁移内容，origin/main 逻辑） */
+async function onContentModeChange(newMode: string | number | boolean | undefined) {
+  const mode = newMode as 'text' | 'markdown'
+  if (mode === 'markdown') {
+    if (content.value && !markdownContent.value) {
+      markdownContent.value = content.value
+    }
+  } else {
+    if (markdownContent.value) {
+      let plainText = markdownContent.value
+      plainText = plainText.replace(/^#{1,6}\s+/gm, '')
+      plainText = plainText.replace(/\*\*([^*]+)\*\*/g, '$1')
+      plainText = plainText.replace(/\*([^*]+)\*/g, '$1')
+      plainText = plainText.replace(/==([^=]+)==/g, '$1')
+      plainText = plainText.replace(/^>\s?/gm, '')
+      plainText = plainText.replace(/^[-*+]\s+/gm, '')
+      plainText = plainText.replace(/^\d+\.\s+/gm, '')
+      plainText = plainText.replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+      content.value = plainText.trim()
+    }
+  }
+  notifyChange()
+}
+
 // 监听表单变化，向外通知
 function notifyChange() {
   emit('change', {
@@ -150,6 +179,8 @@ function notifyChange() {
     summary: summary.value,
     coverImage: coverImage.value,
     tags: tagsRaw.value.split(/[,，\s]+/).map(t => t.trim().replace(/^#/, '')).filter(t => t.length > 0),
+    contentMode: contentType.value === 'article' ? contentMode.value : undefined,
+    markdownContent: contentType.value === 'article' && contentMode.value === 'markdown' ? markdownContent.value : undefined,
   })
 }
 
@@ -695,6 +726,8 @@ async function submitPublish() {
     tags,
     category: '',
     content: content.value,
+    markdownContent: contentType.value === 'article' && contentMode.value === 'markdown' ? markdownContent.value : undefined,
+    contentMode: contentType.value === 'article' ? contentMode.value : undefined,
     summary: summary.value,
     scheduledAt,
   }
@@ -759,6 +792,8 @@ async function submitTestPublish() {
     tags,
     category: '',
     content: content.value,
+    markdownContent: contentType.value === 'article' && contentMode.value === 'markdown' ? markdownContent.value : undefined,
+    contentMode: contentType.value === 'article' ? contentMode.value : undefined,
     summary: summary.value,
     testMode: true,
   }
@@ -983,7 +1018,21 @@ function setType(t: 'video' | 'image' | 'article') {
         <!-- 正文 / 描述 -->
         <div class="field">
           <label>{{ contentType === 'article' ? '正文' : '正文 / 描述' }}<ComplianceBadge :level="compliance.badges.value.content?.level" :count="compliance.badges.value.content?.count" @click="locateField('content')" /><span class="counter">{{ content.length }} / {{ platformContentLimit.min }}</span></label>
+
+          <!-- 文章模式：正文模式切换（Markdown 编辑器，origin/main 新增） -->
+          <div v-if="contentType === 'article'" class="content-mode-switch">
+            <el-radio-group v-model="contentMode" size="small" @change="onContentModeChange">
+              <el-radio-button value="text">纯文本</el-radio-button>
+              <el-radio-button value="markdown">Markdown</el-radio-button>
+            </el-radio-group>
+            <span v-if="contentMode === 'markdown'" class="mode-hint">
+              💡 Markdown 模式将生成 .md 文件通过平台文档导入功能上传发布
+            </span>
+          </div>
+
+          <!-- 纯文本模式 -->
           <el-input
+            v-if="contentType !== 'article' || contentMode === 'text'"
             ref="contentTextareaRef"
             v-model="content"
             type="textarea"
@@ -994,6 +1043,15 @@ function setType(t: 'video' | 'image' | 'article') {
                 ? '可选：为图文添加描述文案（将作为笔记正文发布，小红书 1000 字/抖音 1000 字/快手 500 字）'
                 : '可选：为视频添加描述文案（快手最多 500 字）'"
             :maxlength="platformContentLimit.min"
+            @input="notifyChange"
+          />
+          <!-- Markdown 模式（仅文章） -->
+          <MarkdownEditor
+            v-else
+            v-model="markdownContent"
+            :max-length="platformContentLimit.min"
+            :height="380"
+            placeholder="在此输入 Markdown 内容...支持标题、粗体、列表、引用、代码块等"
             @input="notifyChange"
           />
           <div v-if="kuaishouSelected" class="kuaishou-hint">⚡ 已选快手账号：正文将被限制为 500 字，超出部分将自动截断</div>
@@ -1353,6 +1411,12 @@ function setType(t: 'video' | 'image' | 'article') {
 .over-limit-hint { font-size: 12px; color: var(--danger); margin-top: 4px; background: #fef2f2; border-left: 3px solid var(--danger); padding: 6px 10px; border-radius: var(--r-sm); }
 .limits-hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
 .min-content-hint { font-size: 12px; color: var(--brand-indigo); margin-top: 4px; background: var(--brand-grad-soft); border-left: 3px solid var(--brand-indigo); padding: 6px 10px; border-radius: var(--r-sm); }
+
+/* Markdown 模式切换（origin/main 新增，配色对齐 redesign token） */
+.content-limit-tag { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.content-mode-switch { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.mode-hint { font-size: 12px; color: var(--muted); }
+
 .empty { padding: 20px 0; }
 
 /* ===== 合规预检头部（对齐原型 compliance-prototype.html）===== */
