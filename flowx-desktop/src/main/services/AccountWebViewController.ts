@@ -166,22 +166,45 @@ export class AccountWebViewController {
       return { action: 'deny' };
     });
 
-    // 右键菜单：检查元素（直接 inspect 点击位置）+ 刷新
+    // 右键菜单：检查元素（直接 inspect 点击位置）+ 刷新 + 复制/粘贴 + 打开链接
     // 创作中心是独立 webContents，主窗口 DevTools 看不到它的 DOM，必须从本视图打开 DevTools。
     view.webContents.on('context-menu', (_e, params) => {
+      const wc = view.webContents;
+      if (this.disposed || wc.isDestroyed()) return;
       const menu = new Menu();
+      menu.append(new MenuItem({ label: '刷新', click: () => { if (!wc.isDestroyed()) wc.reload(); } }));
+      menu.append(
+        new MenuItem({
+          label: '在新标签页中打开链接',
+          visible: !!params.linkURL,
+          click: () => { if (params.linkURL) this.createTab(params.linkURL, '新标签页'); },
+        }),
+      );
+      menu.append(new MenuItem({ type: 'separator' }));
+      menu.append(
+        new MenuItem({
+          label: '复制',
+          visible: params.editFlags.canCopy,
+          click: () => { if (!wc.isDestroyed()) wc.copy(); },
+        }),
+      );
+      menu.append(
+        new MenuItem({
+          label: '粘贴',
+          visible: params.editFlags.canPaste,
+          click: () => { if (!wc.isDestroyed()) wc.paste(); },
+        }),
+      );
+      menu.append(new MenuItem({ type: 'separator' }));
       menu.append(
         new MenuItem({
           label: '检查元素',
           click: () => {
-            const wc = view.webContents;
             if (!wc.isDevToolsOpened()) wc.openDevTools({ mode: 'detach' });
             wc.inspectElement(params.x, params.y);
           },
         }),
       );
-      menu.append(new MenuItem({ type: 'separator' }));
-      menu.append(new MenuItem({ label: '刷新', click: () => view.webContents.reload() }));
       menu.popup();
     });
 

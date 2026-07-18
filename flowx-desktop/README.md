@@ -238,7 +238,7 @@ Vue 响应式更新 → 进度面板刷新
 
 - 📊 数据中心 / 统计分析（发布量 / 平台分布 / 趋势）
 - ✍️ 内容创作模块（草稿管理 / 内容模板）
-- 🌐 更多平台（B 站、微信公众号、知乎、视频号等）
+- 🌐 更多平台（B 站、微信公众号、今日头条等）
 - 🔗 更多网站内容提取适配规则
 - ⚡ 提取结果缓存 / 预提取优化
 - 🔄 自动更新（electron-updater，需要配置私有发布地址）
@@ -260,8 +260,9 @@ Vue 响应式更新 → 进度面板刷新
 - **抖音文章发布技术文档**：[`docs/抖音文章发布技术文档.md`](./docs/抖音文章发布技术文档.md)（封面上传 / 话题弹窗 / 摘要字段）
 - **文章发布 Markdown 编辑器**：[`docs/文章发布Markdown编辑器优化方案.md`](./docs/文章发布Markdown编辑器优化方案.md)（Markdown 编辑 / 分栏预览 / 平台文件上传）
 - **微信视频号图文技术文档**：[`docs/微信视频图文技术文档.md`](./docs/微信视频图文技术文档.md)（微前端 iframe / CDP 物理点击）
+- **知乎视频发布技术文档**：[`docs/知乎视频发布技术文档.md`](./docs/知乎视频发布技术文档.md)（Draft.js / 视频标记 Modal / React 受控组件）
 - **抖音发布稳定性修复方案**：[`docs/抖音发布稳定性修复方案.md`](./docs/抖音发布稳定性修复方案.md)
-- **platforms/ 目录**：[`src/main/services/platforms/`](./src/main/services/platforms/)（三个平台独立实现 + shared.ts 共享工具）
+- **platforms/ 目录**：[`src/main/services/platforms/`](./src/main/services/platforms/)（多平台独立实现 + shared.ts 共享工具）
 - **PlatformDispatcher.ts**：[`src/main/services/platforms/PlatformDispatcher.ts`](./src/main/services/platforms/PlatformDispatcher.ts)（工厂方法分发器）
 - **PublishEngine.ts**：[`src/main/services/PublishEngine.ts`](./src/main/services/PublishEngine.ts)
 - **AccountService.ts**：[`src/main/services/AccountService.ts`](./src/main/services/AccountService.ts)
