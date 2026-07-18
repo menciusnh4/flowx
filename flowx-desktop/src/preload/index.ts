@@ -140,6 +140,7 @@ contextBridge.exposeInMainWorld('electron', {
   system: {
     openExternal: (url: string): Promise<boolean> => invoke('system:openExternal', url),
     getInfo: (): Promise<SystemInfo> => invoke('system:getInfo'),
+    readChangelog: (): Promise<string> => invoke('system:readChangelog'),
     openFileDialog: (
       options?: { mode?: 'file' | 'files'; filters?: Electron.FileFilter[] },
     ): Promise<{ canceled: boolean; filePaths: string[] }> =>

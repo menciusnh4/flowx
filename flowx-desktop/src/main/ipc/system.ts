@@ -69,6 +69,19 @@ export function registerSystemIpc(): void {
   // 自动更新（骨架实现，真实环境需要配置 electron-updater feed）
   safeInvoke('update:check', (): UpdateInfo => ({ available: false }));
 
+  // 读取 CHANGELOG.md 内容（用于关于对话框）
+  safeInvoke('system:readChangelog', (): string => {
+    try {
+      const changelogPath = path.join(app.getAppPath(), 'CHANGELOG.md');
+      if (fs.existsSync(changelogPath)) {
+        return fs.readFileSync(changelogPath, 'utf-8');
+      }
+      return '';
+    } catch {
+      return '';
+    }
+  });
+
   // --- 日志管理 ---
 
   // 读取主日志文件内容（最后 N 行，支持指定日期）

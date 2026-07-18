@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute } from 'vue-router'
 import { electronApi } from '../utils/electron'
 import { useEnvStore } from '../stores/env'
+import { useUiStore } from '../stores/ui'
 import PublishForm from '../components/PublishForm.vue'
 import SiteRuleEditor from '../components/SiteRuleEditor.vue'
 import BrowserRulePanel from '../components/BrowserRulePanel.vue'
@@ -11,6 +12,7 @@ import type { BrowserEnvironment, PublishRequest, BrowserBookmark, BrowserHistor
 
 const route = useRoute()
 const envStore = useEnvStore()
+const uiStore = useUiStore()
 
 // 发布表单 ref
 const publishFormRef = ref<InstanceType<typeof PublishForm> | null>(null)
@@ -401,48 +403,50 @@ function setLayoutMode(mode: 'browser-only' | 'split' | 'publish-only') {
   })
 }
 
-// 布局下拉显示/隐藏时，控制 WebContentsView 可见性
-// 因为 WebContentsView 是原生控件，层级永远在 HTML 之上，会挡住 dropdown 菜单
+// 布局下拉显示/隐藏时，更新全局弹层计数
 function handleLayoutDropdownVisible(visible: boolean) {
   layoutDropdownVisible.value = visible
-  if (!activeTabId.value) return
   if (visible) {
-    hideBrowserView()
+    uiStore.pushOverlay('browser-layout-dropdown')
   } else {
-    // 下拉关闭后延迟恢复，等待下拉动画完成
-    setTimeout(() => showBrowserView(), 200)
+    uiStore.popOverlay('browser-layout-dropdown')
   }
 }
 
-// 环境选择下拉显示/隐藏时同样控制（防止被 WebContentsView 遮挡）
+// 环境选择下拉显示/隐藏时，更新全局弹层计数
 function handleEnvDropdownVisible(visible: boolean) {
-  if (!activeTabId.value) return
   if (visible) {
-    hideBrowserView()
+    uiStore.pushOverlay('browser-env-dropdown')
   } else {
-    setTimeout(() => showBrowserView(), 200)
+    uiStore.popOverlay('browser-env-dropdown')
   }
 }
 
-// 弹窗显示/隐藏时控制 WebContentsView
-// 用计数器支持嵌套弹窗
-let modalCount = 0
+// 弹窗显示/隐藏时，更新全局弹层计数
 function handleModalShow() {
-  modalCount++
-  if (modalCount === 1) hideBrowserView()
+  uiStore.pushOverlay('browser-modal')
 }
 function handleModalHide() {
-  modalCount--
-  if (modalCount <= 0) {
-    modalCount = 0
-    // 弹窗关闭后延迟恢复，等待弹窗动画完成，再多次尝试确保恢复
+  uiStore.popOverlay('browser-modal')
+}
+
+// 监听全局弹层计数变化，控制 WebContentsView 显隐
+// 因为 WebContentsView 是原生控件，层级永远在 HTML 之上，会挡住所有 HTML 弹层
+watch(() => uiStore.overlayCount, (count, oldCount) => {
+  if (!activeTabId.value) return
+  if (count > 0 && oldCount === 0) {
+    // 从 0 变到有弹层 → 隐藏浏览器视图
+    hideBrowserView()
+  } else if (count === 0 && oldCount > 0) {
+    // 从有弹层变到 0 → 恢复浏览器视图（延迟等待动画完成）
     setTimeout(() => {
       showBrowserView()
+      // 多次尝试确保恢复（防止动画期间尺寸变化）
       setTimeout(() => showBrowserView(), 100)
       setTimeout(() => showBrowserView(), 300)
     }, 200)
   }
-}
+})
 
 let browserHidden = false
 function hideBrowserView() {
@@ -452,8 +456,8 @@ function hideBrowserView() {
 }
 function showBrowserView() {
   if (!activeTabId.value || !browserHidden) return
-  // 如果下拉菜单还开着或还有弹窗，不恢复
-  if (layoutDropdownVisible.value || modalCount > 0) return
+  // 只要还有任何弹层激活，就不恢复
+  if (uiStore.overlayCount > 0) return
   browserHidden = false
   nextTick(() => {
     updateViewBounds()

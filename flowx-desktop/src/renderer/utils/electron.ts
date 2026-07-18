@@ -173,6 +173,9 @@ export const electronApi = {
   async getSystemInfo(): Promise<SystemInfo> {
     return invokeElectron('system.getInfo', 'system:getInfo');
   },
+  async readChangelog(): Promise<string> {
+    return invokeElectron('system.readChangelog', 'system:readChangelog');
+  },
   async openFileDialog(opts?: { mode?: 'file' | 'files'; filters?: Electron.FileFilter[] }): Promise<{ canceled: boolean; filePaths: string[] }> {
     return invokeElectron('system.openFileDialog', 'system:openFileDialog', opts);
   },
