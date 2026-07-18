@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
-import { useWorkspaceStore, ROUTE_META, SYSTEM_ROUTES } from '../stores/workspace';
+import { useWorkspaceStore, ROUTE_META, SYSTEM_ROUTES, type WorkspaceTab } from '../stores/workspace';
 
 const store = useWorkspaceStore();
 const search = ref('');
@@ -52,17 +52,76 @@ const addableRoutes = computed(() =>
   })),
 );
 
-function activate(id: string) {
-  store.activate(id);
-  nextTick(() => {
-    updateOverflow();
-    ensureVisible(id);
-  });
+// ============ 右键上下文菜单（类 Chrome） ============
+interface CtxState {
+  visible: boolean;
+  x: number;
+  y: number;
+  tabId: string;
 }
-async function close(id: string, e: MouseEvent) {
+const ctx = ref<CtxState>({ visible: false, x: 0, y: 0, tabId: '' });
+const ctxTab = computed(() => store.tabs.find((t) => t.id === ctx.value.tabId) ?? null);
+const ctxIndex = computed(() => store.tabs.findIndex((t) => t.id === ctx.value.tabId));
+
+// 各菜单项可用性（不可关闭 tab / 无可关目标时禁用，与 Chrome 一致）
+const canClose = computed(() => ctxTab.value?.closable !== false);
+const canCloseOthers = computed(() =>
+  store.tabs.some((t) => t.id !== ctx.value.tabId && t.closable !== false),
+);
+const canCloseRight = computed(() =>
+  ctxIndex.value >= 0 && store.tabs.some((t, i) => i > ctxIndex.value && t.closable !== false),
+);
+const canCloseAll = computed(() => store.tabs.some((t) => t.closable !== false));
+
+function onCtxMenu(e: MouseEvent, id: string) {
+  e.preventDefault();
   e.stopPropagation();
+  const MENU_W = 184;
+  const MENU_H = 172;
+  const node = e.currentTarget as HTMLElement;
+  const rect = node.getBoundingClientRect();
+  // 菜单左缘对齐"当前点击的任务选项卡"左缘（rect.left），垂直仍贴其底部
+  let x = rect.left;
+  let y = rect.bottom + 4;
+  // 仅做视口边界夹取，防止菜单溢出屏幕
+  if (x < 8) x = 8;
+  if (x + MENU_W > window.innerWidth) x = window.innerWidth - MENU_W - 8;
+  if (y + MENU_H > window.innerHeight) y = rect.top - MENU_H - 4; // 下方空间不足则上翻到标签上方
+  ctx.value = { visible: true, x, y, tabId: id };
+}
+function closeCtx() {
+  if (ctx.value.visible) ctx.value = { ...ctx.value, visible: false };
+}
+function onDocPointer(e: MouseEvent) {
+  if (!ctx.value.visible) return;
+  const menuEl = document.getElementById('ws-ctx-menu');
+  if (menuEl && !menuEl.contains(e.target as Node)) closeCtx();
+}
+
+/** 未保存内容二次确认：批量关闭前若有脏 tab 提示一次 */
+async function confirmDirty(targets: WorkspaceTab[], title: string): Promise<boolean> {
+  const dirtyN = targets.filter((t) => t.dirty).length;
+  if (dirtyN === 0) return true;
+  try {
+    await ElMessageBox.confirm(
+      `有 ${dirtyN} 个页面含未保存内容，关闭后将丢失。确定继续吗？`,
+      title,
+      {
+        confirmButtonText: '关闭',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 单个关闭（含未保存内容二次确认），× 按钮与「关闭」菜单项共用 */
+async function requestClose(id: string) {
   const t = store.tabs.find((x) => x.id === id);
-  // M4：有未保存内容（如发布页已填但未提交）时，关闭前二次确认
   if (t && t.dirty && t.closable !== false) {
     try {
       await ElMessageBox.confirm(
@@ -76,11 +135,54 @@ async function close(id: string, e: MouseEvent) {
         },
       );
     } catch {
-      return; // 取消：不关闭
+      return;
     }
   }
   store.close(id);
   nextTick(updateOverflow);
+}
+
+// —— 菜单动作 ——
+async function ctxClose() {
+  const id = ctx.value.tabId;
+  closeCtx();
+  await requestClose(id);
+}
+async function ctxCloseOthers() {
+  const id = ctx.value.tabId;
+  const targets = store.tabs.filter((t) => t.id !== id && t.closable !== false);
+  closeCtx();
+  if (!(await confirmDirty(targets, '关闭其他标签页'))) return;
+  store.closeOthers(id);
+  nextTick(updateOverflow);
+}
+async function ctxCloseRight() {
+  const id = ctx.value.tabId;
+  const idx = ctxIndex.value;
+  const targets = store.tabs.filter((t, i) => i > idx && t.closable !== false);
+  closeCtx();
+  if (!(await confirmDirty(targets, '关闭右侧标签页'))) return;
+  store.closeRight(id);
+  nextTick(updateOverflow);
+}
+async function ctxCloseAll() {
+  const targets = store.tabs.filter((t) => t.closable !== false);
+  closeCtx();
+  if (!(await confirmDirty(targets, '关闭所有标签页'))) return;
+  store.closeAll();
+  nextTick(updateOverflow);
+}
+
+function activate(id: string) {
+  store.activate(id);
+  nextTick(() => {
+    updateOverflow();
+    ensureVisible(id);
+  });
+}
+async function close(id: string, e: MouseEvent) {
+  e.stopPropagation();
+  await requestClose(id);
 }
 function addRoute(route: string) {
   addOpen.value = false;
@@ -99,8 +201,12 @@ function onWheel(e: WheelEvent) {
 onMounted(() => {
   updateOverflow();
   window.addEventListener('resize', updateOverflow);
+  window.addEventListener('click', onDocPointer);
 });
-onBeforeUnmount(() => window.removeEventListener('resize', updateOverflow));
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateOverflow);
+  window.removeEventListener('click', onDocPointer);
+});
 
 // 标签增删后重算溢出（nextTick 等 DOM 渲染完成）
 watch(
@@ -129,6 +235,7 @@ watch(
           :data-id="t.id"
           :class="{ active: t.id === activeId }"
           @click="activate(t.id)"
+          @contextmenu.prevent="onCtxMenu($event, t.id)"
           :title="t.title"
         >
           <span class="ws-tab-ic">{{ t.icon }}</span>
@@ -182,6 +289,24 @@ watch(
         <i class="r"></i><i class="y"></i><i class="g"></i>
       </div>
     </div>
+
+    <!-- 右键上下文菜单（类 Chrome）：Teleport 到 body，脱离顶栏 backdrop-filter 包含块，fixed 精确相对视口定位 -->
+    <Teleport to="body">
+      <div
+        v-if="ctx.visible"
+        id="ws-ctx-menu"
+        class="ws-ctx-menu"
+        :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }"
+        role="menu"
+        @click.stop
+        @contextmenu.prevent.stop
+      >
+        <button class="ws-ctx-item" :disabled="!canClose" role="menuitem" @click="ctxClose">关闭</button>
+        <button class="ws-ctx-item" :disabled="!canCloseOthers" role="menuitem" @click="ctxCloseOthers">关闭其他标签页</button>
+        <button class="ws-ctx-item" :disabled="!canCloseRight" role="menuitem" @click="ctxCloseRight">关闭右侧标签页</button>
+        <button class="ws-ctx-item" :disabled="!canCloseAll" role="menuitem" @click="ctxCloseAll">关闭所有标签页</button>
+      </div>
+    </Teleport>
   </header>
 </template>
 
@@ -411,6 +536,46 @@ watch(
 }
 .win-dots .g {
   background: #28c840;
+}
+
+/* —— 右键上下文菜单 —— */
+.ws-ctx-menu {
+  position: fixed;
+  /* 必须高于浏览器任务选项卡的高层遮罩（Browser.vue .sidebar-mask z-index:9999），否则右键菜单会被浏览器内容盖住 */
+  z-index: 99999;
+  min-width: 168px;
+  padding: 6px;
+  background: var(--surface-strong, #fff);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md, 12px);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgba(15, 23, 42, 0.18));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ws-ctx-item {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2, #1e293b);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.ws-ctx-item:hover:not(:disabled) {
+  background: var(--brand-grad-soft, rgba(99, 102, 241, 0.1));
+  color: var(--brand-indigo, #6366f1);
+}
+.ws-ctx-item:disabled {
+  color: var(--faint, #94a3b8);
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 /* 窄屏：搜索栏收窄，保持与标签区的美观距离 */

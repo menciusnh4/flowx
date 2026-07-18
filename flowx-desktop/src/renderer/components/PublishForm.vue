@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, reactive, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox, ElInput } from 'element-plus'
 import { useAccountStore } from '../stores/account'
 import { getPlatformIcon } from '../utils/platformIcons'
@@ -999,6 +999,118 @@ function addImages(imagePaths: string[]): void {
   }
 }
 
+// ============ 拖拽上传 ============
+// 拖拽高亮态：按区域记录嵌套 dragenter/dragleave 深度，避免经过子元素时闪烁
+type DragZone = 'media' | 'cover' | 'articleCover'
+const dragDepth: Record<DragZone, number> = { media: 0, cover: 0, articleCover: 0 }
+const dragZone = ref<DragZone | ''>('')
+
+function onDragEnter(zone: DragZone, e: DragEvent) {
+  e.preventDefault()
+  dragDepth[zone]++
+  dragZone.value = zone
+}
+function onDragOver(e: DragEvent) {
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+}
+function onDragLeave(zone: DragZone, e: DragEvent) {
+  e.preventDefault()
+  dragDepth[zone] = Math.max(0, dragDepth[zone] - 1)
+  if (dragDepth[zone] === 0 && dragZone.value === zone) {
+    const anyActive = (Object.values(dragDepth) as number[]).some((v) => v > 0)
+    if (!anyActive) dragZone.value = ''
+  }
+}
+
+/** 从拖放事件抽取真实文件路径（Electron 渲染层拖入的 File 带 .path） */
+function getDroppedPaths(e: DragEvent): string[] {
+  const files = e.dataTransfer?.files
+  if (!files || files.length === 0) return []
+  const paths: string[] = []
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i] as File & { path?: string }
+    if (f.path) paths.push(f.path)
+  }
+  return paths
+}
+
+/** 按扩展名过滤；exts 为 null 表示不过滤 */
+function filterByExt(
+  paths: string[],
+  exts: string[] | null,
+): { valid: string[]; invalid: number } {
+  if (!exts) return { valid: paths, invalid: 0 }
+  const valid: string[] = []
+  let invalid = 0
+  for (const p of paths) {
+    const ext = p.split('.').pop()?.toLowerCase() || ''
+    if (exts.includes(ext)) valid.push(p)
+    else invalid++
+  }
+  return { valid, invalid }
+}
+
+function onDropMedia(e: DragEvent) {
+  e.preventDefault()
+  dragDepth.media = 0
+  dragZone.value = ''
+  const paths = getDroppedPaths(e)
+  if (paths.length === 0) {
+    ElMessage.warning('拖入的内容不是本地文件')
+    return
+  }
+  const exts =
+    contentType.value === 'image' ? IMAGE_EXTENSIONS
+    : contentType.value === 'video' ? VIDEO_EXTENSIONS
+    : null
+  const { valid, invalid } = filterByExt(paths, exts)
+  if (invalid > 0) ElMessage.warning(`已过滤 ${invalid} 个不支持的文件格式`)
+  if (valid.length === 0) return
+  addImages(valid)
+  ElMessage.success(`已添加 ${valid.length} 个文件`)
+}
+
+function onDropCover(e: DragEvent) {
+  e.preventDefault()
+  dragDepth.cover = 0
+  dragZone.value = ''
+  const paths = getDroppedPaths(e)
+  const { valid } = filterByExt(paths, IMAGE_EXTENSIONS)
+  if (valid.length === 0) {
+    ElMessage.warning('请拖入图片文件作为封面')
+    return
+  }
+  coverImage.value = valid[0]
+  notifyChange()
+  ElMessage.success('封面已设置')
+}
+
+function onDropArticleCover(e: DragEvent) {
+  e.preventDefault()
+  dragDepth.articleCover = 0
+  dragZone.value = ''
+  const paths = getDroppedPaths(e)
+  const { valid, invalid } = filterByExt(paths, IMAGE_EXTENSIONS)
+  if (invalid > 0) ElMessage.warning(`已过滤 ${invalid} 个非图片文件`)
+  if (valid.length === 0) return
+  addImages(valid)
+  ElMessage.success(`已添加 ${valid.length} 张图片`)
+}
+
+// 全局阻止把文件拖到非落点区域时 Electron 跳去打开文件
+function preventFileNavigation(e: DragEvent) {
+  e.preventDefault()
+}
+onMounted(() => {
+  window.addEventListener('dragover', preventFileNavigation)
+  window.addEventListener('drop', preventFileNavigation)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('dragover', preventFileNavigation)
+  window.removeEventListener('drop', preventFileNavigation)
+})
+
 /**
  * 插入图片占位文本（在光标处插入 [图片] 标记）
  */
@@ -1166,7 +1278,12 @@ function setType(t: 'video' | 'image' | 'article') {
         <!-- 素材（视频 / 图文） -->
         <div class="field" v-if="contentType !== 'article'">
           <label>素材文件</label>
-          <div class="dropzone" @click="pickMediaFiles">
+          <div class="dropzone" :class="{ 'is-drag': dragZone === 'media' }"
+               @click="pickMediaFiles"
+               @dragenter.prevent="onDragEnter('media', $event)"
+               @dragover.prevent="onDragOver($event)"
+               @dragleave.prevent="onDragLeave('media', $event)"
+               @drop.prevent="onDropMedia($event)">
             <div class="dz-ico">📎</div>
             <div>
               <div class="dz-main">点击或拖拽上传{{ contentType === 'video' ? '视频' : '图片' }}</div>
@@ -1185,7 +1302,12 @@ function setType(t: 'video' | 'image' | 'article') {
         <!-- 封面（视频） -->
         <div class="field" v-if="contentType === 'video'">
           <label>封面图</label>
-          <div class="dropzone" @click="pickCover">
+          <div class="dropzone" :class="{ 'is-drag': dragZone === 'cover' }"
+               @click="pickCover"
+               @dragenter.prevent="onDragEnter('cover', $event)"
+               @dragover.prevent="onDragOver($event)"
+               @dragleave.prevent="onDragLeave('cover', $event)"
+               @drop.prevent="onDropCover($event)">
             <div class="dz-ico">🖼️</div>
             <div>
               <div class="dz-main">上传封面</div>
@@ -1198,7 +1320,12 @@ function setType(t: 'video' | 'image' | 'article') {
         <!-- 封面（文章：取图片首张） -->
         <div class="field" v-if="contentType === 'article'">
           <label>封面图片</label>
-          <div class="dropzone" @click="pickArticleCover">
+          <div class="dropzone" :class="{ 'is-drag': dragZone === 'articleCover' }"
+               @click="pickArticleCover"
+               @dragenter.prevent="onDragEnter('articleCover', $event)"
+               @dragover.prevent="onDragOver($event)"
+               @dragleave.prevent="onDragLeave('articleCover', $event)"
+               @drop.prevent="onDropArticleCover($event)">
             <div class="dz-ico">🖼️</div>
             <div>
               <div class="dz-main">选择封面图片</div>
@@ -1277,8 +1404,14 @@ function setType(t: 'video' | 'image' | 'article') {
           </div>
         </div>
         <div class="pick-actions">
-          <button type="button" class="link-btn" @click="selectAll">全选可见</button>
-          <button type="button" class="link-btn" @click="clearSelection">清空</button>
+          <button type="button" class="act-btn act-select" @click="selectAll">
+            <svg class="act-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.5 3.5L13 4.5" /></svg>
+            全选可见
+          </button>
+          <button type="button" class="act-btn act-clear" @click="clearSelection">
+            <svg class="act-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M6 6l4 4M10 6l-4 4" /></svg>
+            清空
+          </button>
           <span class="hint">已选 {{ getSelectedIds().length }} / {{ visibleAccounts.length }}</span>
         </div>
 
@@ -1432,6 +1565,7 @@ function setType(t: 'video' | 'image' | 'article') {
   background: var(--surface-2);
 }
 .dropzone:hover { border-color: var(--brand-indigo); background: var(--brand-grad-soft); }
+.dropzone.is-drag { border-color: var(--brand-indigo); background: var(--brand-grad-soft); box-shadow: 0 0 0 3px rgba(99,102,241,.18); transform: translateY(-1px); }
 .dz-ico {
   font-size: 22px;
   width: 40px;
@@ -1500,9 +1634,28 @@ function setType(t: 'video' | 'image' | 'article') {
 }
 .pf-pill.active .pf-count,
 .pill.active .pf-count { background: rgba(255, 255, 255, 0.28); color: #fff; }
-.pick-actions { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
-.link-btn { background: none; border: none; color: var(--brand-indigo); font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 0; font-family: inherit; }
-.link-btn:hover { text-decoration: underline; }
+.pick-actions { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.act-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--slate);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: all var(--t-fast) var(--ease);
+}
+.act-btn .act-ico { width: 14px; height: 14px; flex-shrink: 0; }
+.act-select:hover { background: var(--brand-grad-soft); border-color: var(--brand-indigo); color: var(--brand-indigo); }
+.act-clear:hover { background: rgba(239, 68, 68, 0.06); border-color: #fca5a5; color: #dc2626; }
+.act-btn:active { transform: translateY(1px); }
 .hint { color: var(--muted); font-size: 12px; margin-left: auto; }
 .pick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; padding-right: 2px; }
 .pick {

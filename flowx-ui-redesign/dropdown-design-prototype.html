@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>账号管理 · 筛选下拉设计 · FlowX</title>
+<style>
+  :root{
+    /* —— 取自 flowx-desktop 设计系统（styles.css）—— */
+    --brand-indigo:#6366f1;
+    --brand-sky:#38bdf8;
+    --brand-grad:linear-gradient(135deg,#6366f1 0%,#38bdf8 100%);
+    --brand-grad-soft:linear-gradient(135deg,rgba(99,102,241,.14),rgba(56,189,248,.06));
+    --bg:#f6f7fc; --surface:#fff; --surface-2:#fbfcfe;
+    --line:#eceef5; --line-strong:#e2e5ef;
+    --ink:#1f2433; --slate:#4b5165; --muted:#8b91a7; --faint:#aeb4c7;
+    --success:#10b981; --danger:#f43f5e;
+    --r-sm:10px; --r-md:14px; --r-pill:999px;
+    --shadow-sm:0 1px 2px rgba(31,36,51,.04),0 2px 6px rgba(79,70,229,.05);
+    --shadow-lg:0 14px 36px rgba(79,70,229,.12),0 4px 10px rgba(31,36,51,.05);
+    --ease:cubic-bezier(.16,1,.3,1); --t-fast:.15s;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; padding:48px 24px; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  .stage{max-width:960px; margin:0 auto;}
+  .page-title{font-size:20px; font-weight:700; letter-spacing:-.2px; margin:0 0 4px;}
+  .page-sub{font-size:13px; color:var(--muted); margin:0 0 28px; line-height:1.6;}
+  .panel-demo{
+    background:var(--surface); border:1px solid var(--line);
+    border-radius:18px; padding:20px 22px; box-shadow:var(--shadow-sm);
+  }
+
+  /* ============ 工具条 ============ */
+  .toolbar{display:flex; align-items:center; gap:12px; flex-wrap:wrap;}
+  .tb-left{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  .tb-spacer{flex:1 1 auto;}
+  .tb-search{
+    display:inline-flex; align-items:center; gap:7px; height:36px; padding:0 14px;
+    width:228px; max-width:38vw; border-radius:var(--r-pill);
+    border:1px solid var(--line-strong); background:var(--surface-2); color:var(--muted);
+    font-size:13px;
+  }
+  .tb-search svg{width:15px; height:15px; flex:0 0 auto;}
+  .hc-tag{
+    display:inline-flex; align-items:center; height:30px; padding:0 12px;
+    border-radius:var(--r-pill); font-size:12px; font-weight:600;
+    color:var(--success); background:rgba(16,185,129,.10); border:1px solid rgba(16,185,129,.25);
+  }
+
+  /* ============ 下拉触发器 ============ */
+  .dd{position:relative; display:inline-block;}
+  .dd-trigger{
+    display:inline-flex; align-items:center; gap:8px; height:36px; padding:0 14px;
+    border-radius:var(--r-pill); border:1px solid var(--line-strong);
+    background:var(--surface); color:var(--slate); font-size:13px; font-weight:600;
+    cursor:pointer; font-family:inherit; transition:all var(--t-fast) var(--ease);
+    white-space:nowrap;
+  }
+  .dd-trigger:hover{border-color:var(--brand-indigo); color:var(--ink); box-shadow:0 0 0 3px rgba(99,102,241,.12);}
+  .dd-trigger:focus-visible{outline:2px solid var(--brand-indigo); outline-offset:2px;}
+  .dd-trigger[aria-expanded="true"]{border-color:var(--brand-indigo); color:var(--brand-indigo); background:var(--brand-grad-soft);}
+  .dd-trigger .chev{width:14px; height:14px; transition:transform var(--t-fast) var(--ease); flex:0 0 auto;}
+  .dd-trigger[aria-expanded="true"] .chev{transform:rotate(180deg);}
+  .dd-trigger .dot{width:6px; height:6px; border-radius:50%; background:var(--brand-indigo);}
+  /* 已选数量角标 */
+  .dd-trigger .badge{
+    display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; padding:0 5px;
+    border-radius:9px; background:var(--brand-indigo); color:#fff; font-size:11px; font-weight:700; line-height:1;
+  }
+
+  /* ============ 下拉面板 ============ */
+  .dd-panel{
+    position:absolute; top:calc(100% + 8px); left:0; z-index:50;
+    min-width:264px; max-width:320px; background:var(--surface);
+    border:1px solid var(--line); border-radius:var(--r-md);
+    box-shadow:var(--shadow-lg); padding:6px;
+    opacity:0; transform:translateY(-6px) scale(.985); transform-origin:top left;
+    pointer-events:none; transition:opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+  }
+  .dd-panel.open{opacity:1; transform:translateY(0) scale(1); pointer-events:auto;}
+  .dd-panel.right{left:auto; right:0; transform-origin:top right;}
+
+  /* 面板内搜索 */
+  .dd-search{
+    display:flex; align-items:center; gap:7px; height:34px; padding:0 10px; margin:2px 2px 6px;
+    border:1px solid var(--line-strong); border-radius:var(--r-sm); background:var(--surface-2); color:var(--muted);
+  }
+  .dd-search svg{width:14px; height:14px; flex:0 0 auto;}
+  .dd-search input{border:0; outline:0; background:transparent; font-size:13px; color:var(--ink); width:100%; font-family:inherit;}
+  .dd-search input::placeholder{color:var(--faint);}
+
+  /* 选项列表（超量滚动） */
+  .dd-list{max-height:264px; overflow-y:auto; padding-right:2px;}
+  .dd-list::-webkit-scrollbar{width:6px;}
+  .dd-list::-webkit-scrollbar-thumb{background:var(--line-strong); border-radius:3px;}
+  .dd-list::-webkit-scrollbar-track{background:transparent;}
+
+  .dd-opt{
+    display:flex; align-items:center; gap:10px; height:38px; padding:0 10px;
+    border-radius:var(--r-sm); cursor:pointer; font-size:13.5px; color:var(--ink);
+    transition:background var(--t-fast) var(--ease); user-select:none;
+  }
+  .dd-opt:hover{background:var(--surface-2);}
+  .dd-opt .label{flex:1 1 auto; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .dd-opt .opt-count{
+    font-size:11px; font-weight:700; line-height:1; padding:2px 7px; border-radius:10px;
+    background:var(--line); color:var(--slate); flex:0 0 auto;
+  }
+  /* 选中态 */
+  .dd-opt.selected{background:var(--brand-grad-soft); color:var(--brand-indigo); font-weight:600;}
+  .dd-opt.selected .opt-count{background:rgba(99,102,241,.18); color:var(--brand-indigo);}
+
+  /* 勾选框 / 单选圆 */
+  .mark{
+    width:18px; height:18px; flex:0 0 auto; border-radius:6px; border:1.5px solid var(--line-strong);
+    display:inline-flex; align-items:center; justify-content:center; transition:all var(--t-fast) var(--ease);
+  }
+  .mark.radio{border-radius:50%;}
+  .mark svg{width:12px; height:12px; opacity:0; transform:scale(.6); transition:all var(--t-fast) var(--ease);}
+  .dd-opt.selected .mark{background:var(--brand-indigo); border-color:var(--brand-indigo);}
+  .dd-opt.selected .mark svg{opacity:1; transform:scale(1); color:#fff;}
+
+  /* 平台 logo 方块 */
+  .pf-logo{
+    width:20px; height:20px; flex:0 0 auto; border-radius:6px; display:inline-flex; align-items:center; justify-content:center;
+    font-size:11px; font-weight:700; color:#fff;
+  }
+
+  /* 面板底部操作 */
+  .dd-foot{
+    display:flex; align-items:center; gap:8px; margin-top:6px; padding:9px 8px 4px;
+    border-top:1px solid var(--line);
+  }
+  .dd-foot .foot-text{flex:1 1 auto; font-size:12px; color:var(--muted);}
+  .dd-foot .ghost{
+    height:28px; padding:0 12px; border-radius:var(--r-pill); border:1px solid var(--line-strong);
+    background:var(--surface); color:var(--slate); font-size:12px; font-weight:600; cursor:pointer;
+    font-family:inherit; transition:all var(--t-fast) var(--ease);
+  }
+  .dd-foot .ghost:hover{border-color:var(--brand-indigo); color:var(--brand-indigo); background:var(--brand-grad-soft);}
+
+  .hint{margin-top:18px; font-size:12px; color:var(--muted); line-height:1.7;}
+  .hint b{color:var(--slate);}
+</style>
+</head>
+<body>
+<div class="stage">
+  <h1 class="page-title">账号管理 · 筛选下拉设计</h1>
+  <p class="page-sub">将「分类 / 平台」平铺 chip 改为下拉筛选，超量不再溢出。沿用工程现有设计 token（靛蓝 #6366f1 · 天蓝渐变 · 柔光阴影）。点击触发器可展开/收起，面板默认展开以便预览效果。</p>
+
+  <div class="panel-demo">
+    <div class="toolbar">
+      <div class="tb-left">
+        <!-- 分类：单选下拉 -->
+        <div class="dd" data-mode="single" data-name="category">
+          <button class="dd-trigger" aria-expanded="false" aria-haspopup="listbox">
+            <span class="dd-label">全部分类</span>
+            <svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="dd-panel" role="listbox">
+            <div class="dd-list">
+              <div class="dd-opt selected" data-value=""><span class="mark radio"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="label">全部分类</span></div>
+              <div class="dd-opt" data-value="unclassified"><span class="mark radio"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="label">未分类</span><span class="opt-count">3</span></div>
+              <div class="dd-opt" data-value="beauty"><span class="mark radio"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="label">美妆</span><span class="opt-count">9</span></div>
+              <div class="dd-opt" data-value="digital"><span class="mark radio"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="label">数码</span><span class="opt-count">7</span></div>
+              <div class="dd-opt" data-value="food"><span class="mark radio"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="label">美食</span><span class="opt-count">5</span></div>
+              <div class="dd-opt" data-value="travel"><span class="mark radio"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="label">旅行</span><span class="opt-count">4</span></div>
+              <div class="dd-opt" data-value="fitness"><span class="mark radio"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="label">健身</span><span class="opt-count">3</span></div>
+              <div class="dd-opt" data-value="baby"><span class="mark radio"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="label">母婴</span><span class="opt-count">2</span></div>
+              <div class="dd-opt" data-value="edu"><span class="mark radio"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="label">教育</span><span class="opt-count">6</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 平台：多选下拉 -->
+        <div class="dd open" data-mode="multi" data-name="platform">
+          <button class="dd-trigger" aria-expanded="true" aria-haspopup="listbox">
+            <span class="dd-label">平台</span>
+            <span class="badge">3</span>
+            <svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="dd-panel" role="listbox">
+            <div class="dd-search">
+              <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              <input type="text" placeholder="搜索平台" />
+            </div>
+            <div class="dd-list">
+              <div class="dd-opt selected" data-value="douyin"><span class="pf-logo" style="background:#fe2c55">抖</span><span class="label">抖音</span><span class="opt-count">12</span><span class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+              <div class="dd-opt selected" data-value="xhs"><span class="pf-logo" style="background:#ff2442">红</span><span class="label">小红书</span><span class="opt-count">8</span><span class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+              <div class="dd-opt selected" data-value="zhihu"><span class="pf-logo" style="background:#0084ff">知</span><span class="label">知乎</span><span class="opt-count">5</span><span class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+              <div class="dd-opt" data-value="kuaishou"><span class="pf-logo" style="background:#fe3666">快</span><span class="label">快手</span><span class="opt-count">3</span><span class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+              <div class="dd-opt" data-value="wxoa"><span class="pf-logo" style="background:#07c160">微</span><span class="label">微信公众号</span><span class="opt-count">6</span><span class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+              <div class="dd-opt" data-value="wxchannels"><span class="pf-logo" style="background:#07c160">视</span><span class="label">微信视频号</span><span class="opt-count">2</span><span class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+              <div class="dd-opt" data-value="bilibili"><span class="pf-logo" style="background:#fb7299">B</span><span class="label">B站</span><span class="opt-count">4</span><span class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+            </div>
+            <div class="dd-foot">
+              <span class="foot-text">已选 <b class="sel-count">3</b> / 7</span>
+              <button class="ghost act-all">全选</button>
+              <button class="ghost act-clear">清空</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tb-spacer"></div>
+
+      <div class="tb-search">
+        <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span>搜索昵称 / 账号 / 平台</span>
+      </div>
+      <span class="hc-tag">定时检测 30 分钟</span>
+    </div>
+  </div>
+
+  <p class="hint">
+    <b>设计要点</b>：① 触发器 hover 显示靛蓝描边 + 柔光环，选中态填充天蓝渐变底；② 面板用 14px 圆角 + 靛蓝偏移柔光阴影，开合带 160ms 位移淡入；③ 多选平台带面板内搜索、勾选框、计数角标与「全选/清空」底部操作；④ 选项超 6 条自动内部滚动（细滚动条）；⑤ 已选数量以胶囊角标呈现在触发器上，未选时显示中性文案。
+  </p>
+</div>
+
+<script>
+  document.querySelectorAll('.dd').forEach(dd=>{
+    const trigger = dd.querySelector('.dd-trigger');
+    const panel = dd.querySelector('.dd-panel');
+    const mode = dd.dataset.mode;
+    const label = trigger.querySelector('.dd-label');
+    const badge = trigger.querySelector('.badge');
+    const opts = [...dd.querySelectorAll('.dd-opt')];
+
+    const setOpen = (open)=>{
+      dd.classList.toggle('open', open);
+      trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+
+    trigger.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const willOpen = !dd.classList.contains('open');
+      document.querySelectorAll('.dd.open').forEach(o=>{ if(o!==dd) o.classList.remove('open'), o.querySelector('.dd-trigger').setAttribute('aria-expanded','false'); });
+      setOpen(willOpen);
+    });
+
+    opts.forEach(opt=>{
+      opt.addEventListener('click', ()=>{
+        if(mode==='single'){
+          opts.forEach(o=>o.classList.remove('selected'));
+          opt.classList.add('selected');
+          label.textContent = opt.querySelector('.label').textContent;
+          setOpen(false);
+        } else {
+          opt.classList.toggle('selected');
+          const n = dd.querySelectorAll('.dd-opt.selected').length;
+          if(badge){ badge.textContent = n; badge.style.display = n>0 ? '' : 'none'; }
+          if(n===0){ label.textContent='平台'; trigger.classList.remove('has-sel'); }
+          else { label.textContent='平台'; trigger.classList.add('has-sel'); }
+          const fc = dd.querySelector('.sel-count'); if(fc) fc.textContent = n;
+        }
+      });
+    });
+
+    const all = dd.querySelector('.act-all'), clear = dd.querySelector('.act-clear');
+    if(all) all.addEventListener('click', ()=>{
+      opts.forEach(o=>o.classList.add('selected'));
+      if(badge){ badge.textContent = opts.length; badge.style.display=''; }
+      const fc = dd.querySelector('.sel-count'); if(fc) fc.textContent = opts.length;
+    });
+    if(clear) clear.addEventListener('click', ()=>{
+      opts.forEach(o=>o.classList.remove('selected'));
+      if(badge){ badge.style.display='none'; }
+      const fc = dd.querySelector('.sel-count'); if(fc) fc.textContent = 0;
+    });
+
+    panel.querySelector('.dd-search input')?.addEventListener('input', (e)=>{
+      const q = e.target.value.trim().toLowerCase();
+      opts.forEach(o=>{
+        const t = o.querySelector('.label').textContent.toLowerCase();
+        o.style.display = t.includes(q) ? '' : 'none';
+      });
+    });
+  });
+
+  document.addEventListener('click', ()=>{
+    document.querySelectorAll('.dd.open').forEach(dd=>{
+      dd.classList.remove('open');
+      dd.querySelector('.dd-trigger').setAttribute('aria-expanded','false');
+    });
+  });
+  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') document.querySelectorAll('.dd.open').forEach(dd=>{ dd.classList.remove('open'); dd.querySelector('.dd-trigger').setAttribute('aria-expanded','false'); }); });
+</script>
+</body>
+</html>

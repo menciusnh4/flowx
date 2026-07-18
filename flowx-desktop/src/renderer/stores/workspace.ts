@@ -151,6 +151,37 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
+    /** 关闭其他标签页：保留目标 tab + 所有不可关闭 tab（仪表盘） */
+    closeOthers(exceptId: string) {
+      const target = this.tabs.find((t) => t.id === exceptId);
+      if (!target) return;
+      this.tabs = this.tabs.filter((t) => t.id === exceptId || t.closable === false);
+      this.activeId = exceptId;
+    },
+
+    /** 关闭右侧标签页：保留目标及其左侧 + 不可关闭 tab */
+    closeRight(fromId: string) {
+      const idx = this.tabs.findIndex((t) => t.id === fromId);
+      if (idx === -1) return;
+      this.tabs = this.tabs.filter((t, i) => i <= idx || t.closable === false);
+      if (!this.tabs.some((t) => t.id === this.activeId)) {
+        this.activeId = fromId;
+      }
+    },
+
+    /** 关闭所有标签页：保留不可关闭 tab（仪表盘），全部可关则回退到仪表盘 */
+    closeAll() {
+      const keep = this.tabs.filter((t) => t.closable === false);
+      if (keep.length > 0) {
+        this.tabs = keep;
+        if (!keep.some((t) => t.id === this.activeId)) {
+          this.activeId = keep[keep.length - 1].id;
+        }
+      } else {
+        this.openSystemTab('/dashboard');
+      }
+    },
+
     /** 启动默认：无 tab 时开仪表盘 */
     ensureDefault() {
       if (this.tabs.length === 0) this.openSystemTab('/dashboard');

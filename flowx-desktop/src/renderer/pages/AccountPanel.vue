@@ -14,55 +14,81 @@
     <!-- 工具条：分类筛选 + 搜索 + 操作 -->
     <section class="toolbar panel">
       <div class="tb-left">
-        <div class="filter-rows">
-          <div class="pills">
-            <button class="pill" :class="{ active: filterCategoryId === '' }" @click="setCat('')">全部分类</button>
-            <button class="pill" :class="{ active: filterCategoryId === 'unclassified' }" @click="setCat('unclassified')">
-              <span>未分类</span>
-              <span class="pf-count">{{ unclassifiedCount }}</span>
-            </button>
-            <button
-              class="pill"
-              v-for="c in accountStore.categories"
-              :key="c.id"
-              :class="{ active: filterCategoryId === c.id }"
-              @click="setCat(c.id)"
-            >
-              <span>{{ c.name }}</span>
-              <span class="pf-count">{{ categoryCounts[c.id] }}</span>
-            </button>
-          </div>
-          <div class="pills pf-row">
-            <button class="pill" :class="{ active: filterPlatform.length === 0 }" @click="filterPlatform = []">全部平台</button>
-            <button
-              class="pill pf-pill"
-              v-for="p in availablePlatforms"
-              :key="p.key"
-              :class="{ active: filterPlatform.includes(p.key) }"
-              @click="togglePlatformFilter(p.key)"
-            >
-              <img v-if="getPlatformIcon(p.key)" :src="getPlatformIcon(p.key)" class="pf-ico" :alt="p.name" />
-              <span>{{ p.name }}</span>
-              <span class="pf-count">{{ p.count }}</span>
-            </button>
+        <!-- 分类：多选下拉（与平台一致：多选 / 搜索 / 全选 / 清空） -->
+        <div class="dd" :class="{ open: openMenu === 'category' }">
+          <button class="dd-trigger" type="button" :aria-expanded="openMenu === 'category'" @click="toggleMenu('category')">
+            <span class="dd-label">{{ categoryTriggerLabel }}</span>
+            <span class="badge" v-if="filterCategoryIds.length">{{ filterCategoryIds.length }}</span>
+            <svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="dd-panel">
+            <div class="dd-search">
+              <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              <input type="text" v-model="categorySearchText" placeholder="搜索分类" />
+            </div>
+            <div class="dd-list">
+              <div class="dd-opt" v-for="c in filteredCategoryOptions" :key="c.id" :class="{ selected: filterCategoryIds.includes(c.id) }" @click="toggleCategoryFilter(c.id)">
+                <span class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                <span class="label">{{ c.name }}</span>
+                <span class="opt-count">{{ c.count }}</span>
+              </div>
+              <div v-if="filteredCategoryOptions.length === 0" class="dd-empty">无匹配分类</div>
+            </div>
+            <div class="dd-foot">
+              <span class="foot-text">已选 <b>{{ filterCategoryIds.length }}</b> / {{ allCategoryOptionCount }}</span>
+              <button class="ghost" type="button" @click="selectAllCategories">全选</button>
+              <button class="ghost" type="button" @click="clearCategories">清空</button>
+            </div>
           </div>
         </div>
-        <el-input
-          v-model="searchText"
-          class="tb-search"
-          placeholder="搜索昵称 / 账号 / 平台"
-          clearable
-          :prefix-icon="Search"
-        />
-        <el-tag
-          v-if="accountStore.healthCheckConfig"
-          size="small"
-          :type="accountStore.healthCheckConfig.enabled ? 'success' : 'info'"
-          effect="plain"
-          class="hc-tag"
-        >
-          {{ accountStore.healthCheckConfig.enabled ? `定时检测 ${Math.round(accountStore.healthCheckConfig.intervalMs / 60000)} 分钟` : '定时检测已关闭' }}
-        </el-tag>
+
+        <!-- 平台：多选下拉 -->
+        <div class="dd" :class="{ open: openMenu === 'platform' }">
+          <button class="dd-trigger" type="button" :aria-expanded="openMenu === 'platform'" @click="toggleMenu('platform')">
+            <span class="dd-label">{{ filterPlatform.length ? '平台' : '全部平台' }}</span>
+            <span class="badge" v-if="filterPlatform.length">{{ filterPlatform.length }}</span>
+            <svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="dd-panel">
+            <div class="dd-search">
+              <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              <input type="text" v-model="platformSearchText" placeholder="搜索平台" />
+            </div>
+            <div class="dd-list">
+              <div class="dd-opt" v-for="p in filteredPlatformOptions" :key="p.key" :class="{ selected: filterPlatform.includes(p.key) }" @click="togglePlatformFilter(p.key)">
+                <img v-if="getPlatformIcon(p.key)" :src="getPlatformIcon(p.key)" class="pf-logo" :alt="p.name" />
+                <span class="label">{{ p.name }}</span>
+                <span class="opt-count">{{ p.count }}</span>
+                <span class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              </div>
+              <div v-if="filteredPlatformOptions.length === 0" class="dd-empty">无匹配平台</div>
+            </div>
+            <div class="dd-foot">
+              <span class="foot-text">已选 <b>{{ filterPlatform.length }}</b> / {{ availablePlatforms.length }}</span>
+              <button class="ghost" type="button" @click="selectAllPlatforms">全选</button>
+              <button class="ghost" type="button" @click="clearPlatforms">清空</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="tb-tools">
+          <el-input
+            v-model="searchText"
+            class="tb-search"
+            placeholder="搜索昵称 / 账号 / 平台"
+            clearable
+            :prefix-icon="Search"
+          />
+          <el-tag
+            v-if="accountStore.healthCheckConfig"
+            size="small"
+            :type="accountStore.healthCheckConfig.enabled ? 'success' : 'info'"
+            effect="plain"
+            class="hc-tag"
+          >
+            {{ accountStore.healthCheckConfig.enabled ? `定时检测 ${Math.round(accountStore.healthCheckConfig.intervalMs / 60000)} 分钟` : '定时检测已关闭' }}
+          </el-tag>
+        </div>
       </div>
 
       <div class="tb-right">
@@ -229,8 +255,8 @@
       </div>
 
       <div v-if="filteredAccounts.length === 0 && !accountStore.loading" class="empty-hint">
-        {{ filterCategoryId || searchText || filterPlatform.length ? '没有匹配的账号。' : '还没有账号，点击右上角"授权新账号"开始。' }}
-        <div v-if="!filterCategoryId && !searchText" style="font-size:12px; color:var(--muted); margin-top:6px">
+        {{ filterCategoryIds.length || searchText || filterPlatform.length ? '没有匹配的账号。' : '还没有账号，点击右上角"授权新账号"开始。' }}
+        <div v-if="!filterCategoryIds.length && !searchText" style="font-size:12px; color:var(--muted); margin-top:6px">
           授权会弹出平台登录窗口，扫码完成后点击右上角红色"✅ 登录完成，保存账号"按钮，或直接关闭窗口即可。
         </div>
       </div>
@@ -372,7 +398,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref, computed, watch } from 'vue';
+import { onMounted, onBeforeUnmount, reactive, ref, computed, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh, Link, Monitor, Setting, Folder, Delete, Search } from '@element-plus/icons-vue';
 import { useAccountStore } from '../stores/account';
@@ -467,14 +493,84 @@ const healthCheckForm = reactive({
 });
 
 // 分类管理相关的状态
-const filterCategoryId = ref<string>('');
+const filterCategoryIds = ref<string[]>([]); // 分类多选筛选（含 'unclassified' 特殊项）
 const filterPlatform = ref<string[]>([]); // 平台多选筛选（基于已接入平台）
 const searchText = ref<string>('');
+const categorySearchText = ref(''); // 分类下拉内搜索
 const categoryDialogVisible = ref(false);
 const newCategoryName = ref('');
 const creatingCategory = ref(false);
 const editingCategoryId = ref('');
 const editingCategoryName = ref('');
+
+// 下拉筛选开关状态（同时仅一个展开）
+const openMenu = ref<'category' | 'platform' | null>(null);
+const platformSearchText = ref(''); // 平台下拉内搜索
+
+/** 分类触发器文案：多选时显示"分类"+计数，与平台下拉一致 */
+const categoryTriggerLabel = computed(() => {
+  return filterCategoryIds.value.length === 0 ? '全部分类' : '分类';
+});
+
+/** 平台下拉内按名称过滤 */
+const filteredPlatformOptions = computed(() => {
+  const q = platformSearchText.value.trim().toLowerCase();
+  if (!q) return availablePlatforms.value;
+  return availablePlatforms.value.filter((p) => p.name.toLowerCase().includes(q));
+});
+
+/** 分类下拉选项：'未分类' + 各分类，附账号数 */
+const allCategoryOptions = computed(() => {
+  const list = accountStore.categories.map((c) => ({
+    id: c.id,
+    name: c.name,
+    count: categoryCounts.value[c.id] || 0,
+  }));
+  list.unshift({ id: 'unclassified', name: '未分类', count: unclassifiedCount.value });
+  return list;
+});
+/** 分类选项总数（含未分类），用于下拉底部"已选 N / 总数" */
+const allCategoryOptionCount = computed(() => allCategoryOptions.value.length);
+/** 分类下拉内按名称过滤 */
+const filteredCategoryOptions = computed(() => {
+  const q = categorySearchText.value.trim().toLowerCase();
+  if (!q) return allCategoryOptions.value;
+  return allCategoryOptions.value.filter((c) => c.name.toLowerCase().includes(q));
+});
+
+function toggleMenu(which: 'category' | 'platform') {
+  openMenu.value = openMenu.value === which ? null : which;
+}
+/** 分类多选切换（同一分类可叠加，'unclassified' 为特殊选项） */
+function toggleCategoryFilter(id: string) {
+  const cur = filterCategoryIds.value;
+  if (cur.includes(id)) {
+    filterCategoryIds.value = cur.filter((k) => k !== id);
+  } else {
+    filterCategoryIds.value = [...cur, id];
+  }
+}
+/** 分类全选：选中所有分类（含未分类） */
+function selectAllCategories() {
+  filterCategoryIds.value = allCategoryOptions.value.map((c) => c.id);
+}
+/** 分类清空：回到"全部分类"（显示所有账号） */
+function clearCategories() {
+  filterCategoryIds.value = [];
+}
+function selectAllPlatforms() {
+  filterPlatform.value = availablePlatforms.value.map((p) => p.key);
+}
+function clearPlatforms() {
+  filterPlatform.value = [];
+}
+function onDocClick(e: MouseEvent) {
+  const t = e.target as HTMLElement | null;
+  if (!t || !t.closest('.dd')) openMenu.value = null;
+}
+function onKeyEsc(e: KeyboardEvent) {
+  if (e.key === 'Escape') openMenu.value = null;
+}
 
 // 概览指标（summary 同时驱动页面级状态条）
 const summary = computed(() => {
@@ -545,12 +641,14 @@ const unclassifiedCount = computed(
 // 根据分类 + 平台 + 搜索过滤账号
 const filteredAccounts = computed(() => {
   let list = accountStore.accounts;
-  if (filterCategoryId.value) {
-    if (filterCategoryId.value === 'unclassified') {
-      list = list.filter((a) => !a.categoryIds || a.categoryIds.length === 0);
-    } else {
-      list = list.filter((a) => a.categoryIds && a.categoryIds.includes(filterCategoryId.value));
-    }
+  if (filterCategoryIds.value.length > 0) {
+    const catSet = new Set(filterCategoryIds.value);
+    list = list.filter((a) => {
+      const catIds = a.categoryIds || [];
+      const matchUnclassified = catSet.has('unclassified') && catIds.length === 0;
+      const matchCat = catIds.some((cid) => catSet.has(cid));
+      return matchUnclassified || matchCat;
+    });
   }
   if (filterPlatform.value.length > 0) {
     const set = new Set(filterPlatform.value);
@@ -567,10 +665,6 @@ const filteredAccounts = computed(() => {
   }
   return list;
 });
-
-function setCat(id: string) {
-  filterCategoryId.value = id;
-}
 
 /** 平台筛选：多选切换（同一平台可叠加） */
 function togglePlatformFilter(key: string) {
@@ -629,7 +723,7 @@ function onPageSizeChange() {
 }
 
 // 过滤条件变化时回到首页，避免停留在已不存在的页码导致空白
-watch([filterCategoryId, searchText, filterPlatform], () => {
+watch([filterCategoryIds, searchText, filterPlatform], () => {
   currentPage.value = 1;
 });
 // 数据源刷新（如删除/授权后）可能导致总页数变少，夹取当前页
@@ -912,12 +1006,19 @@ async function deleteCategory(row: { id: string; name: string }) {
 }
 
 onMounted(async () => {
+  document.addEventListener('click', onDocClick);
+  window.addEventListener('keydown', onKeyEsc);
   await accountStore.loadPlatforms();
   await accountStore.refreshAccounts();
   await accountStore.loadCategories();
   envStore.loadAll().catch(() => {});
   // 异步加载健康检测配置（不阻塞 UI）
   accountStore.loadHealthCheckConfig().catch(() => {});
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocClick);
+  window.removeEventListener('keydown', onKeyEsc);
 });
 </script>
 
@@ -988,50 +1089,25 @@ onMounted(async () => {
   flex-wrap: wrap;
   min-width: 0;
 }
+.tb-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
 .tb-right {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
 }
-.pills {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-/* 两行筛选（分类 + 平台）纵向堆叠 */
-.filter-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  min-width: 0;
-}
-.pf-row {
+/* ===== 筛选下拉（分类单选 / 平台多选）===== */
+.dd { position: relative; display: inline-block; }
+.dd-trigger {
+  display: inline-flex;
   align-items: center;
-}
-/* 平台筛选胶囊：内嵌 logo + 计数角标 */
-.pf-pill .pf-ico {
-  width: 15px;
-  height: 15px;
-  object-fit: contain;
-  border-radius: 3px;
-}
-.pf-count {
-  font-size: 10.5px;
-  font-weight: 700;
-  line-height: 1;
-  padding: 2px 6px;
-  border-radius: 10px;
-  background: var(--line);
-  color: var(--slate);
-}
-.pf-pill.active .pf-count,
-.pill.active .pf-count {
-  background: rgba(255, 255, 255, 0.28);
-  color: #fff;
-}
-.pill {
-  height: 34px;
-  padding: 0 15px;
+  gap: 8px;
+  height: 36px;
+  padding: 0 14px;
   border-radius: var(--r-pill);
   border: 1px solid var(--line-strong);
   background: var(--surface);
@@ -1039,25 +1115,101 @@ onMounted(async () => {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: all var(--t-fast) var(--ease);
   font-family: inherit;
   white-space: nowrap;
-  /* 与发布选择账号的 .pill 保持一致：名称与计数角标间留间距 */
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+  transition: all var(--t-fast) var(--ease);
 }
-.pill:hover {
+.dd-trigger:hover {
+  border-color: var(--brand-indigo);
+  color: var(--ink);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+}
+.dd-trigger:focus-visible { outline: 2px solid var(--brand-indigo); outline-offset: 2px; }
+.dd-trigger[aria-expanded="true"] {
   border-color: var(--brand-indigo);
   color: var(--brand-indigo);
   background: var(--brand-grad-soft);
 }
-.pill.active {
-  background: var(--brand-grad);
-  border-color: transparent;
-  color: #fff;
-  box-shadow: var(--shadow-sm);
+.dd-trigger .chev {
+  width: 14px; height: 14px;
+  transition: transform var(--t-fast) var(--ease);
+  flex: 0 0 auto;
 }
+.dd-trigger[aria-expanded="true"] .chev { transform: rotate(180deg); }
+.dd-trigger .badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 9px; background: var(--brand-indigo); color: #fff;
+  font-size: 11px; font-weight: 700; line-height: 1;
+}
+.dd-panel {
+  position: absolute; top: calc(100% + 8px); left: 0; z-index: 50;
+  min-width: 264px; max-width: 320px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  opacity: 0; transform: translateY(-6px) scale(0.985);
+  transform-origin: top left;
+  pointer-events: none;
+  transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+}
+.dd.open .dd-panel { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+.dd-search {
+  display: flex; align-items: center; gap: 7px; height: 34px; padding: 0 10px;
+  margin: 2px 2px 6px; border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm); background: var(--surface-2); color: var(--muted);
+}
+.dd-search svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.dd-search input {
+  border: 0; outline: 0; background: transparent;
+  font-size: 13px; color: var(--ink); width: 100%; font-family: inherit;
+}
+.dd-search input::placeholder { color: var(--faint); }
+.dd-list { max-height: 264px; overflow-y: auto; padding-right: 2px; }
+.dd-list::-webkit-scrollbar { width: 6px; }
+.dd-list::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 3px; }
+.dd-list::-webkit-scrollbar-track { background: transparent; }
+.dd-opt {
+  display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 10px;
+  border-radius: var(--r-sm); cursor: pointer; font-size: 13.5px; color: var(--ink);
+  transition: background var(--t-fast) var(--ease); user-select: none;
+}
+.dd-opt:hover { background: var(--surface-2); }
+.dd-opt .label { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dd-opt .opt-count {
+  font-size: 11px; font-weight: 700; line-height: 1; padding: 2px 7px; border-radius: 10px;
+  background: var(--line); color: var(--slate); flex: 0 0 auto;
+}
+.dd-opt.selected { background: var(--brand-grad-soft); color: var(--brand-indigo); font-weight: 600; }
+.dd-opt.selected .opt-count { background: rgba(99, 102, 241, 0.18); color: var(--brand-indigo); }
+.mark {
+  width: 18px; height: 18px; flex: 0 0 auto; border-radius: 6px;
+  border: 1.5px solid var(--line-strong);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: all var(--t-fast) var(--ease);
+}
+.mark svg { width: 12px; height: 12px; opacity: 0; transform: scale(0.6); transition: all var(--t-fast) var(--ease); color: #fff; }
+.dd-opt.selected .mark { background: var(--brand-indigo); border-color: var(--brand-indigo); }
+.dd-opt.selected .mark svg { opacity: 1; transform: scale(1); }
+.pf-logo {
+  width: 20px; height: 20px; flex: 0 0 auto; border-radius: 6px;
+  object-fit: contain; background: var(--surface-2); border: 1px solid var(--line); padding: 2px;
+}
+.dd-foot {
+  display: flex; align-items: center; gap: 8px; margin-top: 6px;
+  padding: 9px 8px 4px; border-top: 1px solid var(--line);
+}
+.dd-foot .foot-text { flex: 1 1 auto; font-size: 12px; color: var(--muted); }
+.dd-foot .ghost {
+  height: 28px; padding: 0 12px; border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong); background: var(--surface);
+  color: var(--slate); font-size: 12px; font-weight: 600; cursor: pointer;
+  font-family: inherit; transition: all var(--t-fast) var(--ease);
+}
+.dd-foot .ghost:hover { border-color: var(--brand-indigo); color: var(--brand-indigo); background: var(--brand-grad-soft); }
+.dd-empty { padding: 14px 10px; text-align: center; font-size: 12.5px; color: var(--muted); }
 .tb-search {
   width: 230px;
   max-width: 40vw;
