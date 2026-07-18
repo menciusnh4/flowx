@@ -1,0 +1,205 @@
+{
+  "platform": "微信公众号",
+  "version": "1.0",
+  "update_date": "2026-07-18",
+  "categories": [
+    {
+      "category": "标题敏感词",
+      "description": "微信公众号标题审核重点关注的敏感词",
+      "words": [
+        {
+          "word": "震惊体",
+          "risk_level": "高",
+          "reason": "微信严打标题党",
+          "suggestion": "值得关注"
+        },
+        {
+          "word": "紧急通知",
+          "risk_level": "高",
+          "reason": "制造虚假紧迫感",
+          "suggestion": "重要提示"
+        },
+        {
+          "word": "刚刚宣布",
+          "risk_level": "高",
+          "reason": "伪新闻标题模式",
+          "suggestion": "最新动态"
+        },
+        {
+          "word": "央视曝光",
+          "risk_level": "高",
+          "reason": "冒用权威机构名义",
+          "suggestion": "据媒体报道"
+        },
+        {
+          "word": "终于真相了",
+          "risk_level": "中",
+          "reason": "悬念式标题党",
+          "suggestion": "事件始末"
+        },
+        {
+          "word": "删前速看",
+          "risk_level": "高",
+          "reason": "制造稀缺假象",
+          "suggestion": "内容速览"
+        },
+        {
+          "word": "转发扩散",
+          "risk_level": "中",
+          "reason": "诱导病毒式传播",
+          "suggestion": "欢迎分享"
+        },
+        {
+          "word": "不看后悔",
+          "risk_level": "高",
+          "reason": "恐吓式标题",
+          "suggestion": "建议了解"
+        },
+        {
+          "word": "内部消息",
+          "risk_level": "高",
+          "reason": "伪造内部信息",
+          "suggestion": "据可靠信息"
+        },
+        {
+          "word": "独家爆料",
+          "risk_level": "中",
+          "reason": "需确保真实性",
+          "suggestion": "独家整理"
+        }
+      ]
+    },
+    {
+      "category": "内容违规词",
+      "description": "微信公众平台上容易触发审核拦截的词汇",
+      "words": [
+        {
+          "word": "代购",
+          "risk_level": "高",
+          "reason": "微信严打海外代购",
+          "suggestion": "海外好物分享"
+        },
+        {
+          "word": "兼职",
+          "risk_level": "高",
+          "reason": "涉嫌网络诈骗/传销",
+          "suggestion": "灵活就业机会"
+        },
+        {
+          "word": "日赚",
+          "risk_level": "高",
+          "reason": "暴利诱惑类诈骗词",
+          "suggestion": "稳定收益"
+        },
+        {
+          "word": "躺赚",
+          "risk_level": "高",
+          "reason": "不劳而获诈骗诱饵",
+          "suggestion": "持续收入"
+        },
+        {
+          "word": " passive income",
+          "risk_level": "中",
+          "reason": "被动收入相关营销",
+          "suggestion": "被动收入（需合规说明）"
+        },
+        {
+          "word": "裂变",
+          "risk_level": "中",
+          "reason": "微信限制裂变营销",
+          "suggestion": "社群增长"
+        },
+        {
+          "word": "分销",
+          "risk_level": "高",
+          "reason": "三级分销涉嫌传销",
+          "suggestion": "合规分销"
+        },
+        {
+          "word": "返利",
+          "risk_level": "中",
+          "reason": "返利模式受限",
+          "suggestion": "返现活动"
+        },
+        {
+          "word": "红包",
+          "risk_level": "中",
+          "reason": "现金红包受监管限制",
+          "suggestion": "福利抽奖"
+        },
+        {
+          "word": "砍价",
+          "risk_level": "中",
+          "reason": "社交裂变受限",
+          "suggestion": "拼团优惠"
+        }
+      ]
+    },
+    {
+      "category": "行业特殊词",
+      "description": "特定行业在微信公众号上的敏感词汇",
+      "words": [
+        {
+          "word": "医美",
+          "risk_level": "高",
+          "reason": "医疗美容行业强监管",
+          "suggestion": "轻医美（需资质）"
+        },
+        {
+          "word": "微整形",
+          "risk_level": "高",
+          "reason": "医疗美容相关",
+          "suggestion": "医美项目（需资质）"
+        },
+        {
+          "word": "减肥药",
+          "risk_level": "高",
+          "reason": "保健品/药品宣传受限",
+          "suggestion": "体重管理"
+        },
+        {
+          "word": "丰胸",
+          "risk_level": "高",
+          "reason": "医疗美容相关",
+          "suggestion": "形体管理"
+        },
+        {
+          "word": "增高",
+          "risk_level": "高",
+          "reason": "虚假医疗宣传",
+          "suggestion": "身高管理"
+        },
+        {
+          "word": "理财",
+          "risk_level": "中",
+          "reason": "金融投资需持牌",
+          "suggestion": "财务规划"
+        },
+        {
+          "word": "股票推荐",
+          "risk_level": "高",
+          "reason": "非法荐股",
+          "suggestion": "行情分析"
+        },
+        {
+          "word": "内幕消息",
+          "risk_level": "高",
+          "reason": "证券违法词汇",
+          "suggestion": "公开研报"
+        },
+        {
+          "word": "区块链",
+          "risk_level": "中",
+          "reason": "虚拟货币相关受限",
+          "suggestion": "区块链科普"
+        },
+        {
+          "word": "ICO",
+          "risk_level": "高",
+          "reason": "非法集资相关",
+          "suggestion": "合规代币说明"
+        }
+      ]
+    }
+  ]
+}

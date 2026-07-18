@@ -348,6 +348,7 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
 <style scoped>
 .publish-page {
   padding: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   gap: 18px;

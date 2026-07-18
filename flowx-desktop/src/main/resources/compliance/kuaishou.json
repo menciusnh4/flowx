@@ -1,0 +1,205 @@
+{
+  "platform": "快手",
+  "version": "1.0",
+  "update_date": "2026-07-18",
+  "categories": [
+    {
+      "category": "广告营销类",
+      "description": "快手平台禁止或限制的营销推广词汇",
+      "words": [
+        {
+          "word": "加微信",
+          "risk_level": "高",
+          "reason": "引导站外交易，违反平台规则",
+          "suggestion": "站内联系客服"
+        },
+        {
+          "word": "私聊",
+          "risk_level": "高",
+          "reason": "诱导私信引流",
+          "suggestion": "站内私信咨询"
+        },
+        {
+          "word": "扫码",
+          "risk_level": "高",
+          "reason": "引导外部链接/二维码",
+          "suggestion": "点击主页链接"
+        },
+        {
+          "word": "关注领",
+          "risk_level": "中",
+          "reason": "诱导关注类营销话术",
+          "suggestion": "关注后参与活动"
+        },
+        {
+          "word": "点赞送",
+          "risk_level": "中",
+          "reason": "诱导互动类营销话术",
+          "suggestion": "互动有机会获得"
+        },
+        {
+          "word": "免费领",
+          "risk_level": "中",
+          "reason": "虚假营销诱饵",
+          "suggestion": "限时福利领取"
+        },
+        {
+          "word": "限时优惠",
+          "risk_level": "低",
+          "reason": "促销类敏感词，需谨慎使用",
+          "suggestion": "活动期间特惠"
+        },
+        {
+          "word": "全网最低",
+          "risk_level": "高",
+          "reason": "违反广告法极限词规定",
+          "suggestion": "高性价比"
+        },
+        {
+          "word": "官方授权",
+          "risk_level": "中",
+          "reason": "需提供真实授权证明",
+          "suggestion": "正规授权"
+        },
+        {
+          "word": "厂家直销",
+          "risk_level": "低",
+          "reason": "需有真实供应链证明",
+          "suggestion": "源头供货"
+        }
+      ]
+    },
+    {
+      "category": "内容违规类",
+      "description": "快手平台明确禁止的内容违规词汇",
+      "words": [
+        {
+          "word": "刷量",
+          "risk_level": "高",
+          "reason": "涉及数据造假",
+          "suggestion": "提升真实播放"
+        },
+        {
+          "word": "刷粉",
+          "risk_level": "高",
+          "reason": "涉及数据造假",
+          "suggestion": "稳步涨粉"
+        },
+        {
+          "word": "互粉",
+          "risk_level": "中",
+          "reason": "涉嫌违规涨粉",
+          "suggestion": "互相关注交流"
+        },
+        {
+          "word": "互赞",
+          "risk_level": "中",
+          "reason": "涉嫌数据造假",
+          "suggestion": "互相支持"
+        },
+        {
+          "word": "搬运",
+          "risk_level": "高",
+          "reason": "侵犯版权行为",
+          "suggestion": "转载需授权"
+        },
+        {
+          "word": "二创",
+          "risk_level": "低",
+          "reason": "需确认原创授权",
+          "suggestion": "二次创作（已授权）"
+        },
+        {
+          "word": "录屏",
+          "risk_level": "中",
+          "reason": "可能涉及版权问题",
+          "suggestion": "原视频引用"
+        },
+        {
+          "word": "去水印",
+          "risk_level": "高",
+          "reason": "规避平台标识",
+          "suggestion": "保留平台水印"
+        },
+        {
+          "word": "技术流",
+          "risk_level": "低",
+          "reason": "正常分类词汇",
+          "suggestion": "技术向内容"
+        },
+        {
+          "word": "剧情号",
+          "risk_level": "低",
+          "reason": "正常账号类型描述",
+          "suggestion": "剧情类账号"
+        }
+      ]
+    },
+    {
+      "category": "直播带货类",
+      "description": "快手直播场景中的限流敏感词",
+      "words": [
+        {
+          "word": "第一",
+          "risk_level": "高",
+          "reason": "广告法极限词",
+          "suggestion": "领先"
+        },
+        {
+          "word": "最",
+          "risk_level": "高",
+          "reason": "广告法极限词",
+          "suggestion": "很 / 特别"
+        },
+        {
+          "word": "顶级",
+          "risk_level": "高",
+          "reason": "广告法极限词",
+          "suggestion": "优质"
+        },
+        {
+          "word": "国家级",
+          "risk_level": "高",
+          "reason": "广告法极限词",
+          "suggestion": "行业级"
+        },
+        {
+          "word": "治愈",
+          "risk_level": "高",
+          "reason": "医疗健康类违禁词",
+          "suggestion": "舒缓"
+        },
+        {
+          "word": "100%有效",
+          "risk_level": "高",
+          "reason": "绝对化承诺",
+          "suggestion": "有效"
+        },
+        {
+          "word": "零风险",
+          "risk_level": "高",
+          "reason": "绝对化承诺",
+          "suggestion": "低风险"
+        },
+        {
+          "word": "包治",
+          "risk_level": "高",
+          "reason": "医疗功效承诺",
+          "suggestion": "有助于改善"
+        },
+        {
+          "word": "立竿见影",
+          "risk_level": "中",
+          "reason": "夸大效果",
+          "suggestion": "见效较快"
+        },
+        {
+          "word": "抢购",
+          "risk_level": "低",
+          "reason": "营造紧迫感营销词",
+          "suggestion": "限量开售"
+        }
+      ]
+    }
+  ]
+}

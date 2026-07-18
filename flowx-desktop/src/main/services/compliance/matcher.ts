@@ -10,8 +10,12 @@ export interface ACNode {
   /** 末节点命中的词（非末节点为 null） */
   term: string | null;
   level: ComplianceLevel | null;
-  /** 来源词库（common / douyin / xiaohongshu），用于平台标注 */
+  /** 来源词库（common / douyin / xiaohongshu ...），用于平台标注 */
   platform: string | null;
+  /** 替换建议（词库 r 字段；无则为 null） */
+  suggestion: string | null;
+  /** 相关类别（引流导流词 / 营销推广词 / 广告法极限词 ...；无则为 null） */
+  category: string | null;
 }
 
 /** 构建 trie 的原始词条 */
@@ -19,6 +23,10 @@ export interface RawTerm {
   term: string;
   level: ComplianceLevel;
   platform: string;
+  /** 替换建议（抖音/小红书/通用词库的 r 字段；知乎/快手/公众号无，留空） */
+  suggestion?: string;
+  /** 相关类别（词库分类名；无则留空） */
+  category?: string;
 }
 
 /** 单条扫描命中（未回填 field，由 caller 补全） */
@@ -28,6 +36,10 @@ export interface ScanHit {
   platform: string;
   start: number;
   end: number;
+  /** 替换建议（与命中词绑定；无则为 null） */
+  suggestion: string | null;
+  /** 相关类别（与命中词绑定；无则为 null） */
+  category: string | null;
 }
 
 /**
@@ -35,21 +47,23 @@ export interface ScanHit {
  * 平台词后插入可覆盖 common 同名词（末节点 field 取最后写入）。
  */
 export function buildTrie(terms: RawTerm[]): ACNode {
-  const root: ACNode = { children: new Map(), fail: null, term: null, level: null, platform: null };
+  const root: ACNode = { children: new Map(), fail: null, term: null, level: null, platform: null, suggestion: null, category: null };
 
-  for (const { term, level, platform } of terms) {
+  for (const { term, level, platform, suggestion, category } of terms) {
     if (!term) continue;
     let cur = root;
     for (const ch of term.toLowerCase()) {
       if (!cur.children.has(ch)) {
-        cur.children.set(ch, { children: new Map(), fail: null, term: null, level: null, platform: null });
+        cur.children.set(ch, { children: new Map(), fail: null, term: null, level: null, platform: null, suggestion: null, category: null });
       }
       cur = cur.children.get(ch)!;
     }
-    // 末节点记录词 + 等级 + 平台（后写覆盖先写）
+    // 末节点记录词 + 等级 + 平台 + 替换建议 + 类别（后写覆盖先写）
     cur.term = term;
     cur.level = level;
     cur.platform = platform;
+    cur.suggestion = suggestion ?? null;
+    cur.category = category ?? null;
   }
 
   // BFS 建立 failure links（标准 AC 算法）
@@ -93,6 +107,8 @@ export function search(root: ACNode, text: string): ScanHit[] {
         platform: node.platform!,
         start: i - term.length + 1,
         end: i + 1,
+        suggestion: node.suggestion,
+        category: node.category,
       });
       node = node.fail;
     }

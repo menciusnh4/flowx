@@ -11,6 +11,10 @@ import ComplianceDetailPanel from './ComplianceDetailPanel.vue'
 import ComplianceNoticeModal from './ComplianceNoticeModal.vue'
 import type { ComplianceSettings } from '../../types/compliance'
 import MarkdownEditor from './MarkdownEditor.vue'
+import { complianceHighlight } from '../directives/complianceHighlight'
+
+// 本地注册违禁词高亮指令（v-compliance-highlight）
+const vComplianceHighlight = complianceHighlight
 
 const props = defineProps<{
   /** 表单初始值（用于草稿加载、内容提取预填充等） */
@@ -93,6 +97,7 @@ const compliance = useCompliance({
     title: title.value,
     content: content.value,
     tags: tagsRaw.value.split(/[,，\s]+/).map((t) => t.trim().replace(/^#/, '')).filter((t) => t.length > 0),
+    tagsRaw: tagsRaw.value,
     summary: summary.value,
   }),
   platforms: () => {
@@ -106,13 +111,30 @@ const compliance = useCompliance({
   enabled: () => complianceSettings.value.promptEnabled,
 })
 
-/** 聚焦某字段（点击角标 / 面板命中时调用） */
-function locateField(field: string) {
+/** 聚焦某字段；带 start/end 时选中具体违禁词并把多行 textarea 滚动到可见（点击面板「定位」时调用） */
+function locateField(field: string, start?: number, end?: number) {
   nextTick(() => {
-    if (field === 'title') titleInputRef.value?.focus()
-    else if (field === 'content') contentTextareaRef.value?.focus()
-    else if (field === 'tags') tagsInputRef.value?.focus()
-    else if (field === 'summary') summaryTextareaRef.value?.focus()
+    let native: HTMLInputElement | HTMLTextAreaElement | null = null
+    if (field === 'title') native = (titleInputRef.value as any)?.input ?? null
+    else if (field === 'content') native = (contentTextareaRef.value as any)?.textarea ?? null
+    else if (field === 'tags') native = (tagsInputRef.value as any)?.input ?? null
+    else if (field === 'summary') native = (summaryTextareaRef.value as any)?.textarea ?? null
+    if (!native) return
+    native.focus()
+    // 带具体位置：选中违禁词（单行高亮词、多行滚动到选区）
+    if (typeof start === 'number' && typeof end === 'number' && end > start) {
+      try {
+        native.setSelectionRange(start, end)
+      } catch {
+        /* 部分浏览器对 input 某些状态不支持，忽略 */
+      }
+      if (native instanceof HTMLTextAreaElement) {
+        const cs = getComputedStyle(native)
+        const lineHeight = parseFloat(cs.lineHeight) || native.clientHeight / Math.max(1, native.value.split('\n').length)
+        const line = native.value.slice(0, start).split('\n').length - 1
+        native.scrollTop = Math.max(0, line * lineHeight - native.clientHeight / 2)
+      }
+    }
   })
 }
 
@@ -292,6 +314,7 @@ const currentAccounts = computed(() => {
 
 // 账号分类筛选与定时发布
 const publishFilterCategoryId = ref<string>('')
+const publishFilterPlatform = ref<string[]>([])
 const publishTimeType = ref<'now' | 'scheduled'>('now')
 const scheduledTime = ref<Date | null>(null)
 
@@ -311,6 +334,7 @@ function snapshot(): string {
     publishTimeType: publishTimeType.value,
     scheduledTime: scheduledTime.value ? scheduledTime.value.getTime() : null,
     publishFilterCategoryId: publishFilterCategoryId.value,
+    publishFilterPlatform: [...publishFilterPlatform.value],
     selectedIds: Object.keys(selectedIds).filter((k) => selectedIds[k]).sort(),
   })
 }
@@ -324,12 +348,52 @@ const isDirty = computed(() => baseline.value !== '' && snapshot() !== baseline.
 
 const visibleAccounts = computed(() => {
   const list = currentAccounts.value
-  if (!publishFilterCategoryId.value) return list
-  if (publishFilterCategoryId.value === 'unclassified') {
-    return list.filter((a) => !a.categoryIds || a.categoryIds.length === 0)
+  let res = list
+  if (publishFilterCategoryId.value) {
+    if (publishFilterCategoryId.value === 'unclassified') {
+      res = res.filter((a) => !a.categoryIds || a.categoryIds.length === 0)
+    } else {
+      res = res.filter((a) => a.categoryIds && a.categoryIds.includes(publishFilterCategoryId.value))
+    }
   }
-  return list.filter((a) => a.categoryIds && a.categoryIds.includes(publishFilterCategoryId.value))
+  if (publishFilterPlatform.value.length > 0) {
+    const set = new Set(publishFilterPlatform.value)
+    res = res.filter((a) => !!a.platform && set.has(a.platform))
+  }
+  return res
 })
+
+/** 当前可发布账号里实际出现的平台（去重 + 计数），用于驱动平台筛选胶囊 */
+const availablePlatforms = computed(() => {
+  const map = new Map<string, number>()
+  for (const a of currentAccounts.value) {
+    if (!a.platform) continue
+    map.set(a.platform, (map.get(a.platform) || 0) + 1)
+  }
+  return Array.from(map.entries()).map(([key, count]) => ({ key, name: platformName(key), count }))
+})
+
+/** 各分类的账号数（基于当前可发布账号），用于分类筛选胶囊计数角标（与平台筛选一致） */
+const categoryCounts = computed<Record<string, number>>(() => {
+  const map: Record<string, number> = {}
+  for (const c of accountStore.categories) {
+    map[c.id] = currentAccounts.value.filter((a) => a.categoryIds?.includes(c.id)).length
+  }
+  return map
+})
+/** 未分类账号数（基于当前可发布账号） */
+const unclassifiedCount = computed(
+  () => currentAccounts.value.filter((a) => !a.categoryIds || a.categoryIds.length === 0).length,
+)
+
+function togglePlatformFilter(key: string) {
+  const cur = publishFilterPlatform.value
+  if (cur.includes(key)) {
+    publishFilterPlatform.value = cur.filter((k) => k !== key)
+  } else {
+    publishFilterPlatform.value = [...cur, key]
+  }
+}
 
 // 定时发送：禁止选择过去的日期
 function disabledScheduledDate(time: Date) {
@@ -1043,7 +1107,7 @@ function setType(t: 'video' | 'image' | 'article') {
         <!-- 标题 -->
         <div class="field">
           <label>标题<ComplianceBadge :level="compliance.badges.value.title?.level" :count="compliance.badges.value.title?.count" @click="locateField('title')" /><span class="counter">{{ title.length }} / {{ titleMaxLength }}</span></label>
-          <el-input ref="titleInputRef" v-model="title" :placeholder="titlePlaceholder" :maxlength="titleMaxLength" @input="notifyChange" />
+          <el-input ref="titleInputRef" v-model="title" :placeholder="titlePlaceholder" :maxlength="titleMaxLength" @input="notifyChange" v-compliance-highlight="compliance.fieldMatches('title')" />
         </div>
 
         <!-- 正文 / 描述 -->
@@ -1075,6 +1139,7 @@ function setType(t: 'video' | 'image' | 'article') {
                 : '可选：为视频添加描述文案（快手最多 500 字）'"
             :maxlength="platformContentLimit.min"
             @input="notifyChange"
+            v-compliance-highlight="compliance.fieldMatches('content')"
           />
           <!-- Markdown 模式（仅文章） -->
           <MarkdownEditor
@@ -1095,7 +1160,7 @@ function setType(t: 'video' | 'image' | 'article') {
         <!-- 话题 -->
         <div class="field">
           <label>话题标签<ComplianceBadge :level="compliance.badges.value.tags?.level" :count="compliance.badges.value.tags?.count" @click="locateField('tags')" /></label>
-          <el-input ref="tagsInputRef" v-model="tagsRaw" placeholder="多个话题用空格或逗号分隔，例如：美食探店 上海生活" @input="notifyChange" />
+          <el-input ref="tagsInputRef" v-model="tagsRaw" placeholder="多个话题用空格或逗号分隔，例如：美食探店 上海生活" @input="notifyChange" v-compliance-highlight="compliance.fieldMatches('tags')" />
         </div>
 
         <!-- 素材（视频 / 图文） -->
@@ -1159,7 +1224,7 @@ function setType(t: 'video' | 'image' | 'article') {
         <!-- 摘要（文章） -->
         <div class="field" v-if="contentType === 'article'">
           <label>摘要<ComplianceBadge :level="compliance.badges.value.summary?.level" :count="compliance.badges.value.summary?.count" @click="locateField('summary')" /><span class="counter">{{ summary.length }} / {{ articleSummaryMaxLength }}</span></label>
-          <el-input ref="summaryTextareaRef" v-model="summary" type="textarea" :rows="2" placeholder="可选：文章摘要/简介（抖音300字/小红书1000字）" :maxlength="articleSummaryMaxLength" @input="notifyChange" />
+          <el-input ref="summaryTextareaRef" v-model="summary" type="textarea" :rows="2" placeholder="可选：文章摘要/简介（抖音300字/小红书1000字）" :maxlength="articleSummaryMaxLength" @input="notifyChange" v-compliance-highlight="compliance.fieldMatches('summary')" />
         </div>
 
         <!-- 发布时间 -->
@@ -1186,10 +1251,30 @@ function setType(t: 'video' | 'image' | 'article') {
       <!-- 右：选择账号 -->
       <div class="panel acc-card">
         <h2 class="sec-title">选择发布账号</h2>
-        <div class="filters">
-          <button type="button" class="pill" :class="{ active: publishFilterCategoryId === '' }" @click="publishFilterCategoryId = ''">全部分类</button>
-          <button type="button" class="pill" :class="{ active: publishFilterCategoryId === 'unclassified' }" @click="publishFilterCategoryId = 'unclassified'">未分类</button>
-          <button type="button" class="pill" v-for="cat in accountStore.categories" :key="cat.id" :class="{ active: publishFilterCategoryId === cat.id }" @click="publishFilterCategoryId = cat.id">{{ cat.name }}</button>
+        <div class="filters-block">
+          <div class="filters-row">
+            <div class="filters">
+              <button type="button" class="pill" :class="{ active: publishFilterCategoryId === '' }" @click="publishFilterCategoryId = ''">全部分类</button>
+              <button type="button" class="pill" :class="{ active: publishFilterCategoryId === 'unclassified' }" @click="publishFilterCategoryId = 'unclassified'">
+                <span>未分类</span>
+                <span class="pf-count">{{ unclassifiedCount }}</span>
+              </button>
+              <button type="button" class="pill" v-for="cat in accountStore.categories" :key="cat.id" :class="{ active: publishFilterCategoryId === cat.id }" @click="publishFilterCategoryId = cat.id">
+                <span>{{ cat.name }}</span>
+                <span class="pf-count">{{ categoryCounts[cat.id] }}</span>
+              </button>
+            </div>
+          </div>
+          <div class="filters-row">
+            <div class="filters">
+              <button type="button" class="pill" :class="{ active: publishFilterPlatform.length === 0 }" @click="publishFilterPlatform = []">全部平台</button>
+              <button type="button" class="pill pf-pill" v-for="p in availablePlatforms" :key="p.key" :class="{ active: publishFilterPlatform.includes(p.key) }" @click="togglePlatformFilter(p.key)">
+                <img v-if="getPlatformIcon(p.key)" :src="getPlatformIcon(p.key)" class="pf-ico" :alt="p.name" />
+                <span>{{ p.name }}</span>
+                <span class="pf-count">{{ p.count }}</span>
+              </button>
+            </div>
+          </div>
         </div>
         <div class="pick-actions">
           <button type="button" class="link-btn" @click="selectAll">全选可见</button>
@@ -1224,22 +1309,22 @@ function setType(t: 'video' | 'image' | 'article') {
             </div>
           </div>
         </div>
+        <!-- 发布操作区（移入右侧账号面板底部，平衡左右高度） -->
+        <div class="acc-footer">
+          <div class="submit-row">
+            <el-button type="primary" :loading="submitting" :disabled="submitting || visibleAccounts.length === 0" @click="submitPublish">
+              {{ submitText || (publishTimeType === 'scheduled' ? '🕘 定时发布到' : '🚀 一键发布到') + ' ' + getSelectedIds().length + ' 个账号' }}
+            </el-button>
+            <el-button type="warning" :loading="submitting" :disabled="submitting || visibleAccounts.length === 0" @click="submitTestPublish">
+              🔍 发布测试
+            </el-button>
+            <el-button :disabled="submitting" @click="clearForm">清空</el-button>
+            <slot name="footer-extra"></slot>
+          </div>
+        </div>
       </div>
     </div>
 
-    <!-- 底部提交栏 -->
-    <div class="form-footer">
-      <div class="submit-row">
-        <el-button type="primary" :loading="submitting" :disabled="submitting || visibleAccounts.length === 0" @click="submitPublish">
-          {{ submitText || (publishTimeType === 'scheduled' ? '🕘 定时发布到' : '🚀 一键发布到') + ' ' + getSelectedIds().length + ' 个账号' }}
-        </el-button>
-        <el-button type="warning" :loading="submitting" :disabled="submitting || visibleAccounts.length === 0" @click="submitTestPublish">
-          🔍 发布测试
-        </el-button>
-        <el-button :disabled="submitting" @click="clearForm">清空</el-button>
-        <slot name="footer-extra"></slot>
-      </div>
-    </div>
   </div>
   <ComplianceNoticeModal ref="noticeRef" />
 </template>
@@ -1255,14 +1340,19 @@ function setType(t: 'video' | 'image' | 'article') {
 .pub-wrap {
   display: grid;
   grid-template-columns: 1.4fr 1fr;
+  grid-template-rows: minmax(0, 1fr);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
 @media (max-width: 1080px) {
-  .pub-wrap { grid-template-columns: 1fr; }
+  .pub-wrap {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    overflow: visible;
+  }
 }
 .panel {
   background: var(--surface);
@@ -1271,8 +1361,8 @@ function setType(t: 'video' | 'image' | 'article') {
   padding: 20px 22px;
   box-shadow: var(--shadow-xs);
 }
-.pub-card { overflow-y: auto; }
-.acc-card { display: flex; flex-direction: column; min-height: 0; }
+.pub-card { overflow-y: auto; min-height: 0; }
+.acc-card { display: flex; flex-direction: column; min-height: 0; align-self: stretch; }
 .pick-scroll { overflow-y: auto; min-height: 0; flex: 1; padding-right: 4px; }
 
 /* 内容类型切换 */
@@ -1376,7 +1466,10 @@ function setType(t: 'video' | 'image' | 'article') {
 
 /* 账号选择 */
 .sec-title { font-family: var(--font-display); font-size: 16px; font-weight: 700; margin: 0 0 12px; color: var(--ink); }
-.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.filters-block { margin-bottom: 12px; }
+.filters-row { display: flex; align-items: center; gap: 8px; }
+.filters-row + .filters-row { margin-top: 10px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; flex: 1; min-width: 0; }
 .pill {
   padding: 7px 14px;
   border-radius: 20px;
@@ -1388,9 +1481,25 @@ function setType(t: 'video' | 'image' | 'article') {
   cursor: pointer;
   transition: all var(--t) var(--ease);
   font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 .pill:hover { border-color: var(--brand-indigo); color: var(--brand-indigo); }
 .pill.active { background: var(--brand-grad); color: #fff; border-color: transparent; }
+/* 平台筛选胶囊：内嵌 logo + 计数角标 */
+.pf-pill .pf-ico { width: 15px; height: 15px; object-fit: contain; border-radius: 3px; }
+.pf-count {
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: var(--line);
+  color: var(--slate);
+}
+.pf-pill.active .pf-count,
+.pill.active .pf-count { background: rgba(255, 255, 255, 0.28); color: #fff; }
 .pick-actions { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
 .link-btn { background: none; border: none; color: var(--brand-indigo); font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 0; font-family: inherit; }
 .link-btn:hover { text-decoration: underline; }
@@ -1426,16 +1535,16 @@ function setType(t: 'video' | 'image' | 'article') {
 .seg-btn.active { background: #fff; color: var(--brand-indigo); box-shadow: var(--shadow-xs); }
 .time-picker { width: 220px; }
 
-/* 底部提交栏 */
+/* 底部提交栏（已移入右侧账号面板底部） */
 .submit-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.form-footer {
-  flex-shrink: 0;
-  padding: 14px 22px;
+.acc-footer {
+  margin-top: auto;
+  padding-top: 16px;
   border-top: 1px solid var(--line);
-  background: var(--surface);
-  display: flex;
-  justify-content: center;
+  flex-shrink: 0;
 }
+.acc-footer .submit-row { justify-content: flex-start; }
+.acc-footer .el-button--primary { flex: 1 1 auto; }
 
 /* 字数限制提示 */
 .kuaishou-hint { font-size: 12px; color: var(--warning); margin-top: 4px; background: #fffbeb; border-left: 3px solid var(--warning); padding: 6px 10px; border-radius: var(--r-sm); }

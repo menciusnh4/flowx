@@ -32,13 +32,14 @@ export const ComplianceService = {
       ['title', fields.title ?? ''],
       ['content', fields.content ?? ''],
       ['summary', fields.summary ?? ''],
-      ['tags', (fields.tags ?? []).join(' ')], // 话题数组 join 后扫描
+      // tags 优先用原始串扫描：offset 与输入框文本对齐，行内高亮才不会错位
+      ['tags', fields.tagsRaw ?? (fields.tags ?? []).join(' ')],
     ];
 
     for (const [field, text] of fieldList) {
       if (!text) continue; // 空字段跳过，不误提示
       for (const hit of search(trie, text)) {
-        matches.push({ ...hit, field });
+        matches.push({ ...hit, field, suggestion: hit.suggestion ?? undefined, category: hit.category ?? undefined });
       }
     }
 

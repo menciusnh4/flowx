@@ -1,50 +1,1249 @@
 {
-  "high": [
-    "加微信",
-    "微信下单",
-    "私聊购买",
-    "加我微信",
-    "导流私信",
-    "站外交易",
-    "扫码领取",
-    "私信领取",
-    "国家级",
-    "世界第一",
-    "第一品牌",
-    "最便宜",
-    "中国驰名商标",
-    "稳赚不赔",
-    "保本保息"
-  ],
-  "mid": [
-    "绝对",
-    "100%有效",
-    "史上最强",
-    "全网最低",
-    "顶级",
-    "极致",
-    "唯一",
-    "首选",
-    "独家",
-    "永久",
-    "万能",
-    "完美",
-    "史无前例",
-    "绝无仅有",
-    "包治百病",
-    "根治",
-    "彻底治愈",
-    "药到病除",
-    "招财进宝",
-    "逢凶化吉",
-    "转运",
-    "开光"
-  ],
-  "low": [
-    "神器",
-    "推荐",
-    "爆款",
-    "必火",
-    "神级"
+  "platform": "common",
+  "version": "3.0.0",
+  "update_date": "2026-07-18 02:35:16",
+  "categories": [
+    {
+      "category": "绝对化用语",
+      "description": "01_广告法极限词（🟡 高风险）",
+      "words": [
+        {
+          "word": "最好",
+          "risk_level": "高",
+          "reason": "最高级比较",
+          "suggestion": "出色 / 优秀"
+        },
+        {
+          "word": "第一",
+          "risk_level": "高",
+          "reason": "无依据排名",
+          "suggestion": "首发 / 领先"
+        },
+        {
+          "word": "唯一",
+          "risk_level": "高",
+          "reason": "排他性绝对",
+          "suggestion": "独特 / 稀有"
+        },
+        {
+          "word": "首个",
+          "risk_level": "高",
+          "reason": "时间性绝对",
+          "suggestion": "早期 / 先行"
+        },
+        {
+          "word": "顶级",
+          "risk_level": "高",
+          "reason": "等级性绝对",
+          "suggestion": "高端 / 优质"
+        },
+        {
+          "word": "极致",
+          "risk_level": "高",
+          "reason": "程度性绝对",
+          "suggestion": "精心 / 细致"
+        },
+        {
+          "word": "极品",
+          "risk_level": "高",
+          "reason": "品质性绝对",
+          "suggestion": "优质 / 上乘"
+        },
+        {
+          "word": "巅峰",
+          "risk_level": "高",
+          "reason": "状态性绝对",
+          "suggestion": "高水平 / 成熟"
+        },
+        {
+          "word": "顶峰",
+          "risk_level": "高",
+          "reason": "状态性绝对",
+          "suggestion": "高水准"
+        },
+        {
+          "word": "终结者",
+          "risk_level": "高",
+          "reason": "终结性绝对",
+          "suggestion": "优选方案"
+        },
+        {
+          "word": "最",
+          "risk_level": "高",
+          "reason": "最高级前缀",
+          "suggestion": "很 / 非常"
+        },
+        {
+          "word": "最佳",
+          "risk_level": "高",
+          "reason": "最优级",
+          "suggestion": "优良 / 出色"
+        },
+        {
+          "word": "最优",
+          "risk_level": "高",
+          "reason": "最优级",
+          "suggestion": "推荐 / 优选"
+        },
+        {
+          "word": "最高",
+          "risk_level": "高",
+          "reason": "最高级",
+          "suggestion": "较高 / 优质"
+        },
+        {
+          "word": "最低",
+          "risk_level": "高",
+          "reason": "最低级",
+          "suggestion": "较低 / 优惠"
+        },
+        {
+          "word": "史上",
+          "risk_level": "高",
+          "reason": "时间跨度绝对",
+          "suggestion": "近年来 / 近期"
+        },
+        {
+          "word": "空前",
+          "risk_level": "高",
+          "reason": "历史性绝对",
+          "suggestion": "罕见 / 少有"
+        },
+        {
+          "word": "绝无仅有",
+          "risk_level": "高",
+          "reason": "唯一性绝对",
+          "suggestion": "稀有 / 独特"
+        },
+        {
+          "word": "无可比拟",
+          "risk_level": "高",
+          "reason": "比较性绝对",
+          "suggestion": "优秀 / 出众"
+        },
+        {
+          "word": "无人能及",
+          "risk_level": "高",
+          "reason": "比较性绝对",
+          "suggestion": "领先 / 优秀"
+        }
+      ]
+    },
+    {
+      "category": "权威背书类",
+      "description": "01_广告法极限词（🟡 高风险）",
+      "words": [
+        {
+          "word": "国家级",
+          "risk_level": "高",
+          "reason": "借国家名义",
+          "suggestion": "(需提供官方认证文件)"
+        },
+        {
+          "word": "世界级",
+          "risk_level": "高",
+          "reason": "借国际名义",
+          "suggestion": "国际范 / 全球风格"
+        },
+        {
+          "word": "国家领导人推荐",
+          "risk_level": "高",
+          "reason": "冒用领导人名义",
+          "suggestion": "(禁止使用)"
+        },
+        {
+          "word": "专供",
+          "risk_level": "高",
+          "reason": "冒用特供名义",
+          "suggestion": "特选 / 精选"
+        },
+        {
+          "word": "特供",
+          "risk_level": "高",
+          "reason": "冒用特供名义",
+          "suggestion": "精选 / 限定"
+        },
+        {
+          "word": "免检",
+          "risk_level": "高",
+          "reason": "冒用免检资格",
+          "suggestion": "严格质检"
+        },
+        {
+          "word": "官方指定",
+          "risk_level": "高",
+          "reason": "冒用官方名义",
+          "suggestion": "(需授权证明)"
+        },
+        {
+          "word": "政府推荐",
+          "risk_level": "高",
+          "reason": "冒用政府名义",
+          "suggestion": "(需授权证明)"
+        },
+        {
+          "word": "央视报道",
+          "risk_level": "高",
+          "reason": "冒用媒体名义",
+          "suggestion": "(需提供证据)"
+        },
+        {
+          "word": "权威认证",
+          "risk_level": "高",
+          "reason": "模糊权威",
+          "suggestion": "(需提供证书编号)"
+        }
+      ]
+    },
+    {
+      "category": "虚假宣传类",
+      "description": "01_广告法极限词（🟡 高风险）",
+      "words": [
+        {
+          "word": "纯天然",
+          "risk_level": "高",
+          "reason": "无法验证",
+          "suggestion": "天然成分 / 植物提取"
+        },
+        {
+          "word": "100%有效",
+          "risk_level": "高",
+          "reason": "承诺效果",
+          "suggestion": "效果因人而异"
+        },
+        {
+          "word": "根治",
+          "risk_level": "高",
+          "reason": "医疗承诺",
+          "suggestion": "改善 / 缓解"
+        },
+        {
+          "word": "治愈",
+          "risk_level": "高",
+          "reason": "医疗承诺",
+          "suggestion": "辅助调理"
+        },
+        {
+          "word": "无效退款",
+          "risk_level": "高",
+          "reason": "承诺性",
+          "suggestion": "(需明确条件)"
+        },
+        {
+          "word": "零风险",
+          "risk_level": "高",
+          "reason": "承诺性",
+          "suggestion": "低风险 / 可控风险"
+        },
+        {
+          "word": "零添加",
+          "risk_level": "高",
+          "reason": "需明确范围",
+          "suggestion": "特定添加剂未添加(需标注范围)"
+        },
+        {
+          "word": "不反弹",
+          "risk_level": "高",
+          "reason": "承诺性",
+          "suggestion": "持续维护"
+        },
+        {
+          "word": "永久",
+          "risk_level": "高",
+          "reason": "时间承诺",
+          "suggestion": "长期 / 持续"
+        },
+        {
+          "word": "永不",
+          "risk_level": "高",
+          "reason": "时间承诺",
+          "suggestion": "长期避免"
+        },
+        {
+          "word": "包治百病",
+          "risk_level": "高",
+          "reason": "医疗虚假",
+          "suggestion": "(禁止)"
+        },
+        {
+          "word": "神药",
+          "risk_level": "高",
+          "reason": "医疗虚假",
+          "suggestion": "(禁止)"
+        },
+        {
+          "word": "祖传秘方",
+          "risk_level": "高",
+          "reason": "医疗相关",
+          "suggestion": "(需资质证明)"
+        }
+      ]
+    },
+    {
+      "category": "功效承诺类",
+      "description": "01_广告法极限词（🟡 高风险）",
+      "words": [
+        {
+          "word": "立竿见影",
+          "risk_level": "高",
+          "reason": "时间承诺",
+          "suggestion": "短期可见效"
+        },
+        {
+          "word": "三天见效",
+          "risk_level": "高",
+          "reason": "时间承诺",
+          "suggestion": "因人而异"
+        },
+        {
+          "word": "七天美白",
+          "risk_level": "高",
+          "reason": "时间+效果承诺",
+          "suggestion": "提亮肤色需坚持"
+        },
+        {
+          "word": "月瘦20斤",
+          "risk_level": "高",
+          "reason": "数字承诺",
+          "suggestion": "配合饮食运动"
+        },
+        {
+          "word": "增高X厘米",
+          "risk_level": "高",
+          "reason": "身体改变承诺",
+          "suggestion": "(医疗相关需资质)"
+        },
+        {
+          "word": "返老还童",
+          "risk_level": "高",
+          "reason": "夸张功效",
+          "suggestion": "年轻态 / 嫩肤"
+        },
+        {
+          "word": "逆生长",
+          "risk_level": "高",
+          "reason": "夸张功效",
+          "suggestion": "年轻化护理"
+        },
+        {
+          "word": "冻龄",
+          "risk_level": "高",
+          "reason": "需谨慎使用",
+          "suggestion": "抗衰老护理"
+        },
+        {
+          "word": "祛斑根除",
+          "risk_level": "高",
+          "reason": "根治承诺",
+          "suggestion": "淡化色斑"
+        },
+        {
+          "word": "彻底解决",
+          "risk_level": "高",
+          "reason": "根治承诺",
+          "suggestion": "有效改善"
+        }
+      ]
+    },
+    {
+      "category": "价格诱导类",
+      "description": "01_广告法极限词（🟡 高风险）",
+      "words": [
+        {
+          "word": "最低价",
+          "risk_level": "高",
+          "reason": "价格绝对",
+          "suggestion": "优惠价 / 性价比高"
+        },
+        {
+          "word": "全网最低",
+          "risk_level": "高",
+          "reason": "价格绝对",
+          "suggestion": "价格优势"
+        },
+        {
+          "word": "史低价",
+          "risk_level": "高",
+          "reason": "时间+价格绝对",
+          "suggestion": "限时优惠"
+        },
+        {
+          "word": "跳楼价",
+          "risk_level": "高",
+          "reason": "夸张表达",
+          "suggestion": "大促价 / 特惠价"
+        },
+        {
+          "word": "白菜价",
+          "risk_level": "高",
+          "reason": "非规范表达",
+          "suggestion": "亲民价 / 实惠"
+        },
+        {
+          "word": "亏本甩卖",
+          "risk_level": "高",
+          "reason": "可能涉嫌虚假",
+          "suggestion": "促销 / 让利"
+        },
+        {
+          "word": "倒闭清仓",
+          "risk_level": "高",
+          "reason": "可能涉嫌虚假",
+          "suggestion": "清仓 / 特卖"
+        },
+        {
+          "word": "最后X小时",
+          "risk_level": "高",
+          "reason": "紧迫性制造",
+          "suggestion": "限时活动"
+        },
+        {
+          "word": "仅剩最后X件",
+          "risk_level": "高",
+          "reason": "紧迫性制造",
+          "suggestion": "库存有限"
+        }
+      ]
+    },
+    {
+      "category": "医美/美容行业",
+      "description": "03_行业特殊禁词（🟡 高风险）",
+      "words": [
+        {
+          "word": "整容",
+          "risk_level": "高",
+          "reason": "用规范术语",
+          "suggestion": "医美 / 医疗美容"
+        },
+        {
+          "word": "换脸",
+          "risk_level": "高",
+          "reason": "夸张表达",
+          "suggestion": "面部轮廓调整"
+        },
+        {
+          "word": "磨骨",
+          "risk_level": "高",
+          "reason": "用医学规范术语",
+          "suggestion": "颌面整形"
+        },
+        {
+          "word": "瘦脸针",
+          "risk_level": "高",
+          "reason": "医美项目需资质",
+          "suggestion": "肉毒素注射(需医师资格)"
+        },
+        {
+          "word": "玻尿酸填充",
+          "risk_level": "高",
+          "reason": "医美项目需资质",
+          "suggestion": "透明质酸注射(需医疗机构)"
+        },
+        {
+          "word": "无痛",
+          "risk_level": "高",
+          "reason": "无法保证",
+          "suggestion": "舒适化 / 低痛感"
+        },
+        {
+          "word": "无痕",
+          "risk_level": "高",
+          "reason": "无法保证",
+          "suggestion": "微创 / 恢复快"
+        },
+        {
+          "word": "永久定型",
+          "risk_level": "高",
+          "reason": "时间承诺",
+          "suggestion": "维持时间因产品而异"
+        },
+        {
+          "word": "零恢复期",
+          "risk_level": "高",
+          "reason": "无法保证",
+          "suggestion": "恢复期短"
+        },
+        {
+          "word": "安全到可以吃",
+          "risk_level": "高",
+          "reason": "误导性",
+          "suggestion": "通过安全性测试"
+        },
+        {
+          "word": "明星同款",
+          "risk_level": "高",
+          "reason": "无法验证",
+          "suggestion": "类似风格 / 同类型号"
+        },
+        {
+          "word": "院长主刀",
+          "risk_level": "高",
+          "reason": "需资质证明",
+          "suggestion": "资深医生操作"
+        },
+        {
+          "word": "100%成功",
+          "risk_level": "高",
+          "reason": "承诺性",
+          "suggestion": "满意度高 / 成功率统计"
+        }
+      ]
+    },
+    {
+      "category": "教育培训行业",
+      "description": "03_行业特殊禁词（🟡 高风险）",
+      "words": [
+        {
+          "word": "保过",
+          "risk_level": "高",
+          "reason": "承诺性违规",
+          "suggestion": "(禁止)"
+        },
+        {
+          "word": "必过",
+          "risk_level": "高",
+          "reason": "承诺性",
+          "suggestion": "助力通过 / 提高通过率"
+        },
+        {
+          "word": "不过退款",
+          "risk_level": "高",
+          "reason": "需明确条款",
+          "suggestion": "(需明确退费条件)"
+        },
+        {
+          "word": "签约保过",
+          "risk_level": "高",
+          "reason": "合同式承诺违规",
+          "suggestion": "(禁止)"
+        },
+        {
+          "word": "一次通过",
+          "risk_level": "高",
+          "reason": "承诺性",
+          "suggestion": "助力备考 / 系统学习"
+        },
+        {
+          "word": "就业保障",
+          "risk_level": "高",
+          "reason": "无条件承诺禁止",
+          "suggestion": "就业推荐 / 求职辅导"
+        },
+        {
+          "word": "名师",
+          "risk_level": "高",
+          "reason": "需可验证资质",
+          "suggestion": "优秀教师 / 经验丰富教师"
+        },
+        {
+          "word": "命题组",
+          "risk_level": "高",
+          "reason": "冒用官方身份",
+          "suggestion": "(禁止冒用)"
+        },
+        {
+          "word": "阅卷人",
+          "risk_level": "高",
+          "reason": "冒用官方身份",
+          "suggestion": "(禁止冒用)"
+        },
+        {
+          "word": "内部资料",
+          "risk_level": "高",
+          "reason": "暗示内幕",
+          "suggestion": "整理资料 / 精华笔记"
+        },
+        {
+          "word": "真题",
+          "risk_level": "高",
+          "reason": "版权问题",
+          "suggestion": "(需版权授权)"
+        },
+        {
+          "word": "泄题",
+          "risk_level": "高",
+          "reason": "违法行为",
+          "suggestion": "(禁止)"
+        },
+        {
+          "word": "透题",
+          "risk_level": "高",
+          "reason": "违法行为",
+          "suggestion": "(禁止)"
+        },
+        {
+          "word": "答案",
+          "risk_level": "高",
+          "reason": "学术诚信",
+          "suggestion": "避免直接提供完整答案"
+        },
+        {
+          "word": "作弊",
+          "risk_level": "高",
+          "reason": "违法行为",
+          "suggestion": "(禁止)"
+        },
+        {
+          "word": "一本上线率100%",
+          "risk_level": "高",
+          "reason": "数据需可验证",
+          "suggestion": "往届成绩参考 / 因人而异"
+        },
+        {
+          "word": "提分XX分",
+          "risk_level": "高",
+          "reason": "承诺性",
+          "suggestion": "平均提分 / 因人而异"
+        },
+        {
+          "word": "一本书学会",
+          "risk_level": "高",
+          "reason": "绝对化",
+          "suggestion": "系统学习 / 入门到精通系列"
+        }
+      ]
+    },
+    {
+      "category": "金融/理财行业",
+      "description": "03_行业特殊禁词（🟡 高风险）",
+      "words": [
+        {
+          "word": "稳赚不赔",
+          "risk_level": "高",
+          "reason": "投资必有风险",
+          "suggestion": "(禁止)"
+        },
+        {
+          "word": "保本保收益",
+          "risk_level": "高",
+          "reason": "违规承诺",
+          "suggestion": "(禁止，除非存款类)"
+        },
+        {
+          "word": "年化收益XX%",
+          "risk_level": "高",
+          "reason": "需风险提示",
+          "suggestion": "过往业绩不代表未来"
+        },
+        {
+          "word": "零风险投资",
+          "risk_level": "高",
+          "reason": "误导性",
+          "suggestion": "低风险理财选项"
+        },
+        {
+          "word": "内部消息",
+          "risk_level": "高",
+          "reason": "违法",
+          "suggestion": "(禁止，涉嫌内幕交易)"
+        },
+        {
+          "word": "庄家",
+          "risk_level": "高",
+          "reason": "市场操纵暗示",
+          "suggestion": "(避免使用)"
+        },
+        {
+          "word": "拉升",
+          "risk_level": "高",
+          "reason": "市场操纵暗示",
+          "suggestion": "(避免使用)"
+        },
+        {
+          "word": "抄底",
+          "risk_level": "高",
+          "reason": "建议性而非预测",
+          "suggestion": "低位布局 / 逢低买入"
+        },
+        {
+          "word": "牛市来了",
+          "risk_level": "高",
+          "reason": "避免预测性断言",
+          "suggestion": "市场向好 / 上涨趋势"
+        },
+        {
+          "word": "翻倍",
+          "risk_level": "高",
+          "reason": "承诺性",
+          "suggestion": "收益潜力 / 历史表现参考"
+        },
+        {
+          "word": "暴利",
+          "risk_level": "高",
+          "reason": "诱惑性",
+          "suggestion": "较高收益可能性"
+        },
+        {
+          "word": "无门槛",
+          "risk_level": "高",
+          "reason": "需说明实际条件",
+          "suggestion": "入门简单 / 低起点"
+        },
+        {
+          "word": "带单",
+          "risk_level": "高",
+          "reason": "违法",
+          "suggestion": "(禁止，涉嫌非法荐股)"
+        },
+        {
+          "word": "荐股",
+          "risk_level": "高",
+          "reason": "需牌照",
+          "suggestion": "(需持牌资质)"
+        },
+        {
+          "word": "配资",
+          "risk_level": "高",
+          "reason": "需牌照",
+          "suggestion": "(需持牌资质)"
+        }
+      ]
+    },
+    {
+      "category": "食品/保健品行业",
+      "description": "03_行业特殊禁词（🟡 高风险）",
+      "words": [
+        {
+          "word": "抗癌",
+          "risk_level": "高",
+          "reason": "涉及疾病治疗",
+          "suggestion": "(普通食品禁止)"
+        },
+        {
+          "word": "防癌",
+          "risk_level": "高",
+          "reason": "涉及疾病预防",
+          "suggestion": "(普通食品禁止)"
+        },
+        {
+          "word": "降血糖",
+          "risk_level": "高",
+          "reason": "疾病治疗功能",
+          "suggestion": "(保健食品需蓝帽+审批功能)"
+        },
+        {
+          "word": "降血压",
+          "risk_level": "高",
+          "reason": "疾病治疗功能",
+          "suggestion": "(保健食品需蓝帽+审批功能)"
+        },
+        {
+          "word": "减肥",
+          "risk_level": "高",
+          "reason": "保健功能宣称",
+          "suggestion": "管理体重 / 辅助减脂(需资质)"
+        },
+        {
+          "word": "增高",
+          "risk_level": "高",
+          "reason": "无科学依据",
+          "suggestion": "(禁止)"
+        },
+        {
+          "word": "益智",
+          "risk_level": "高",
+          "reason": "功能宣称",
+          "suggestion": "(保健食品需审批)"
+        },
+        {
+          "word": "补脑",
+          "risk_level": "高",
+          "reason": "功能宣称",
+          "suggestion": "营养补充 / 支持脑力(需资质)"
+        },
+        {
+          "word": "增强免疫力",
+          "risk_level": "高",
+          "reason": "功能宣称",
+          "suggestion": "(保健食品需蓝帽审批)"
+        },
+        {
+          "word": "调节肠胃",
+          "risk_level": "高",
+          "reason": "功能宣称",
+          "suggestion": "(保健食品需蓝帽审批)"
+        },
+        {
+          "word": "纯天然无添加",
+          "risk_level": "高",
+          "reason": "需具体说明",
+          "suggestion": "配料表以实际为准"
+        },
+        {
+          "word": "有机",
+          "risk_level": "高",
+          "reason": "认证要求",
+          "suggestion": "(需有机认证标志)"
+        },
+        {
+          "word": "绿色食品",
+          "risk_level": "高",
+          "reason": "认证要求",
+          "suggestion": "(需绿色食品认证)"
+        },
+        {
+          "word": "无糖",
+          "risk_level": "高",
+          "reason": "技术性定义",
+          "suggestion": "不含蔗糖 / 含代糖(需标注)"
+        },
+        {
+          "word": "低脂",
+          "risk_level": "高",
+          "reason": "营养声称标准",
+          "suggestion": "(需符合国标定义)"
+        },
+        {
+          "word": "0卡路里",
+          "risk_level": "高",
+          "reason": "营养声称标准",
+          "suggestion": "(需符合国标能量定义)"
+        }
+      ]
+    },
+    {
+      "category": "母婴/儿童行业",
+      "description": "03_行业特殊禁词（🟡 高风险）",
+      "words": [
+        {
+          "word": "最安全",
+          "risk_level": "高",
+          "reason": "绝对化",
+          "suggestion": "安全材质 / 通过检测"
+        },
+        {
+          "word": "最适合宝宝",
+          "risk_level": "高",
+          "reason": "绝对化",
+          "suggestion": "适合X月龄以上宝宝"
+        },
+        {
+          "word": "医生推荐",
+          "risk_level": "高",
+          "reason": "权威背书",
+          "suggestion": "(需提供医生背书证明)"
+        },
+        {
+          "word": "儿科专家首选",
+          "risk_level": "高",
+          "reason": "权威背书",
+          "suggestion": "(需提供证明)"
+        },
+        {
+          "word": "智商提高",
+          "risk_level": "高",
+          "reason": "功效承诺",
+          "suggestion": "启蒙开发 / 早期教育"
+        },
+        {
+          "word": "长高",
+          "risk_level": "高",
+          "reason": "功效承诺",
+          "suggestion": "成长支持 / 营养搭配"
+        },
+        {
+          "word": "不哭不闹",
+          "risk_level": "高",
+          "reason": "承诺性",
+          "suggestion": "安抚效果好 / 宝宝接受度高"
+        },
+        {
+          "word": "一夜安睡",
+          "risk_level": "高",
+          "reason": "承诺性",
+          "suggestion": "改善睡眠质量"
+        },
+        {
+          "word": "妈妈首选",
+          "risk_level": "高",
+          "reason": "主观推荐",
+          "suggestion": "受欢迎 / 口碑好"
+        },
+        {
+          "word": "网红同款",
+          "risk_level": "高",
+          "reason": "社交证明",
+          "suggestion": "热门款 / 流行款"
+        },
+        {
+          "word": "明星宝宝也在用",
+          "risk_level": "高",
+          "reason": "名人代言",
+          "suggestion": "(需授权)"
+        }
+      ]
+    },
+    {
+      "category": "房产/装修行业",
+      "description": "03_行业特殊禁词（🟡 高风险）",
+      "words": [
+        {
+          "word": "学区房",
+          "risk_level": "高",
+          "reason": "政策变化风险",
+          "suggestion": "教育资源周边房源(以教育局公布为准)"
+        },
+        {
+          "word": "地铁上盖",
+          "risk_level": "高",
+          "reason": "距离需准确",
+          "suggestion": "近地铁站 / 步行可达"
+        },
+        {
+          "word": "升值空间巨大",
+          "risk_level": "高",
+          "reason": "投资回报承诺",
+          "suggestion": "地段价值 / 发展潜力"
+        },
+        {
+          "word": "抢到即赚到",
+          "risk_level": "高",
+          "reason": "投资回报承诺",
+          "suggestion": "(禁止)"
+        },
+        {
+          "word": "最后几套",
+          "risk_level": "高",
+          "reason": "紧迫性",
+          "suggestion": "在售房源有限"
+        },
+        {
+          "word": "开盘必抢",
+          "risk_level": "高",
+          "reason": "紧迫性",
+          "suggestion": "关注度高的楼盘"
+        },
+        {
+          "word": "零首付",
+          "risk_level": "高",
+          "reason": "金融合规",
+          "suggestion": "(需说明具体金融方案)"
+        },
+        {
+          "word": "送车位",
+          "risk_level": "高",
+          "reason": "促销方式需合规",
+          "suggestion": "购车位优惠 / 含车位套餐"
+        },
+        {
+          "word": "豪华装修",
+          "risk_level": "高",
+          "reason": "需明确标准",
+          "suggestion": "精装 / 高标配置"
+        },
+        {
+          "word": "豪宅",
+          "risk_level": "高",
+          "reason": "避免夸大",
+          "suggestion": "高品质住宅 / 大平层"
+        },
+        {
+          "word": "地王",
+          "risk_level": "高",
+          "reason": "避免炒作",
+          "suggestion": "高价地块项目"
+        },
+        {
+          "word": "CBD核心",
+          "risk_level": "高",
+          "reason": "地理描述需准确",
+          "suggestion": "商务区附近 / 核心地段"
+        }
+      ]
+    },
+    {
+      "category": "政治敏感类",
+      "description": "04_法律敏感词（🔴 绝对违禁）",
+      "words": [
+        {
+          "word": "(涉及国家领导人的不当称呼或贬损)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(涉及国家制度的不当言论)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(涉及领土完整的错误表述)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(必须使用标准表述)"
+        },
+        {
+          "word": "(涉及民族宗教的不当言论)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(涉及历史事件的歪曲/否定)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(涉及军警的不当表述)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(涉及政府部门的负面造谣)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(涉及突发公共事件的谣言)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(未经证实不传播)"
+        },
+        {
+          "word": "(涉及国家秘密的信息)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止泄露)"
+        },
+        {
+          "word": "(涉及反动组织/邪教)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        }
+      ]
+    },
+    {
+      "category": "涉黄色情类",
+      "description": "04_法律敏感词（🔴 绝对违禁）",
+      "words": [
+        {
+          "word": "(露骨性行为描述)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(性器官直白描述)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(色情服务招揽)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(裸聊/视讯招揽)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(援交/约炮)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(情色小说/视频链接)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(擦边球隐晦表达)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(平台判定后处理)"
+        },
+        {
+          "word": "(性暗示表情/动作)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(避免)"
+        }
+      ]
+    },
+    {
+      "category": "暴力恐怖类",
+      "description": "04_法律敏感词（🔴 绝对违禁）",
+      "words": [
+        {
+          "word": "(凶杀/杀人细节描述)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(自制武器/爆炸物教程)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(毒品制作/贩卖)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(恐怖主义宣扬)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(极端行为煽动)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(自残/自杀方法)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止，应引导求助)"
+        },
+        {
+          "word": "(虐待/暴力细节)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(血腥画面描述)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(避免)"
+        }
+      ]
+    },
+    {
+      "category": "诈骗侵权类",
+      "description": "04_法律敏感词（🔴 绝对违禁）",
+      "words": [
+        {
+          "word": "(假冒客服/官方)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(钓鱼链接/仿冒网站)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(个人信息买卖)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(银行卡/账号诈骗)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(刷单诈骗)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(杀猪盘话术)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(虚拟货币传销)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(盗版资源传播)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(禁止侵犯知识产权)"
+        },
+        {
+          "word": "(未授权使用他人肖像)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(需获得授权)"
+        },
+        {
+          "word": "(商标侵权)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(注意品牌授权)"
+        }
+      ]
+    },
+    {
+      "category": "社会公德类",
+      "description": "04_法律敏感词（🔴 绝对违禁）",
+      "words": [
+        {
+          "word": "(歧视性称谓/言论)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(地域黑/职业歧视)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(性别歧视言论)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(未成年人不良引导)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(赌博相关)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(烟酒向未成年人推销)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(绝对禁止)"
+        },
+        {
+          "word": "(封建迷信/算命改运)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(避免或注明娱乐性质)"
+        },
+        {
+          "word": "(炫富/拜金引导)",
+          "risk_level": "高",
+          "reason": "",
+          "suggestion": "(避免过度)"
+        }
+      ]
+    }
   ]
 }

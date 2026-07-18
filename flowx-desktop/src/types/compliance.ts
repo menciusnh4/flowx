@@ -20,6 +20,8 @@ export interface ComplianceMatch {
   platform: string;
   /** 建议替换（P2 对象形态提供，P0 可选） */
   suggestion?: string;
+  /** 相关类别（引流导流词 / 营销推广词 / 广告法极限词 ...；部分词库无则为空） */
+  category?: string;
 }
 
 /** 扫描结果（聚合） */
@@ -44,6 +46,8 @@ export interface ComplianceScanRequest {
     title: string;
     content?: string;
     tags?: string[];
+    /** 话题原始串（逗号/空格分隔），用于让 tags 命中 offset 与输入框文本对齐，便于行内高亮 */
+    tagsRaw?: string;
     summary?: string;
   };
 }
@@ -61,5 +65,11 @@ export interface ComplianceWordFile {
   low: string[];
 }
 
-/** 平台词库文件标识 */
-export type ComplianceDictionaryFile = 'common' | 'douyin' | 'xiaohongshu';
+/** 平台词库文件标识（common = 通用违禁词库；其余为各平台专用限流词） */
+export type ComplianceDictionaryFile =
+  | 'common'
+  | 'douyin'
+  | 'xiaohongshu'
+  | 'zhihu'
+  | 'kuaishou'
+  | 'wechat_official';

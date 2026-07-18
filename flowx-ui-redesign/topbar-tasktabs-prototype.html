@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FlowX 顶栏全局任务选项卡原型</title>
+<style>
+/* ============ Design Tokens（对齐 FlowX：靛蓝 #6366F1 → 天蓝 #38BDF8）============ */
+:root{
+  --indigo:#6366f1; --indigo-600:#4f46e5; --sky:#38bdf8; --sky-600:#0ea5e9;
+  --ink:#0f172a; --ink-2:#1e293b; --slate:#475569; --muted:#64748b; --faint:#94a3b8;
+  --line:rgba(15,23,42,.08); --line-soft:rgba(15,23,42,.05);
+  --glass:rgba(255,255,255,.85); --glass-strong:#fff;
+  --bg:#f3f5fb;
+  --shadow-sm:0 2px 10px rgba(99,102,241,.06);
+  --shadow-md:0 10px 26px -8px rgba(99,102,241,.16);
+  --shadow-lg:0 22px 44px -14px rgba(99,102,241,.24);
+  --ok:#10b981; --warn:#f59e0b; --danger:#f43f5e; --blue:#3b82f6;
+  --p-douyin:#06b6d4; --p-xhs:#ff4d4f; --p-kuaishou:#f97316; --p-wechat:#10b981; --p-zhihu:#2563eb;
+  --r-lg:16px; --r-md:12px; --r-sm:9px;
+  --ease:cubic-bezier(.16,1,.3,1);
+  --font:'Plus Jakarta Sans','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--font);background:var(--bg);color:var(--ink-2);-webkit-font-smoothing:antialiased;font-size:14px;line-height:1.5}
+button{font-family:inherit;cursor:pointer;border:none;background:none}
+
+/* ============ 外壳：左侧圆润侧边栏（仅作上下文）============ */
+.app{display:flex;flex-direction:row;height:100vh;overflow:hidden}
+.sidenav{width:250px;flex-shrink:0;display:flex;flex-direction:column;padding:20px 14px;gap:4px;
+  background:var(--glass);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+  border-right:1px solid var(--line);z-index:40}
+.snav-logo{display:flex;align-items:center;gap:12px;padding:4px 12px 18px}
+.snav-logo .mark{width:40px;height:40px;border-radius:13px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  font-weight:800;font-size:20px;color:#fff;background:linear-gradient(135deg,var(--indigo),var(--sky));box-shadow:var(--shadow-md)}
+.snav-logo .ln1{font-size:18px;font-weight:800;letter-spacing:-.02em;color:var(--ink);line-height:1.1}
+.snav-logo .ln2{font-size:10.5px;color:var(--faint);font-weight:600;margin-top:2px}
+.snav-menu{flex:1;display:flex;flex-direction:column;gap:3px;overflow-y:auto;padding-right:2px;margin-top:4px}
+.nav-item{display:flex;align-items:center;gap:11px;width:100%;height:44px;padding:0 13px;border-radius:13px;
+  color:var(--slate);font-weight:600;font-size:13.5px;text-align:left;transition:all .2s var(--ease);position:relative}
+.nav-item .ic{font-size:17px;width:20px;text-align:center;flex-shrink:0}
+.nav-item:hover{background:rgba(99,102,241,.07);color:var(--indigo)}
+.nav-item.active{background:linear-gradient(135deg,rgba(99,102,241,.15),rgba(56,189,248,.06));color:var(--indigo);box-shadow:var(--shadow-sm)}
+.nav-item.active::before{content:"";position:absolute;left:-14px;top:50%;transform:translateY(-50%);width:4px;height:22px;border-radius:0 4px 4px 0;
+  background:linear-gradient(135deg,var(--indigo),var(--sky))}
+.snav-foot{display:flex;flex-direction:column;gap:10px;padding-top:14px;margin-top:4px;border-top:1px solid var(--line-soft)}
+
+/* ============ 右侧：顶部导航条（本次重点）============ */
+.rightcol{flex:1;display:flex;flex-direction:column;min-width:0}
+.topbar{height:62px;flex-shrink:0;display:flex;align-items:center;gap:16px;padding:0 22px;
+  background:var(--glass);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+  border-bottom:1px solid var(--line);z-index:30}
+
+/* 左侧：页面标题（固定宽度，不挤压任务区） */
+.top-title{font-size:15px;font-weight:800;color:var(--ink);letter-spacing:-.01em;flex-shrink:0;display:flex;align-items:center;gap:8px}
+.top-title .ic{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px;
+  background:linear-gradient(135deg,rgba(99,102,241,.16),rgba(56,189,248,.08));color:var(--indigo)}
+
+/* —— 核心：全局任务选项卡区域（弹性区，永不挤压搜索栏）—— */
+.tasktab-zone{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:6px;height:42px;
+  padding:0 5px;border-radius:12px;background:rgba(15,23,42,.035);border:1px solid var(--line-soft)}
+.ttab-nav{width:26px;height:26px;flex-shrink:0;border-radius:8px;display:flex;align-items:center;justify-content:center;
+  font-size:13px;color:var(--slate);background:#fff;border:1px solid var(--line);transition:all .15s var(--ease)}
+.ttab-nav:hover:not(.disabled){color:var(--indigo);border-color:rgba(99,102,241,.4)}
+.ttab-nav.disabled{opacity:.3;cursor:default}
+.ttab-nav.hidden{display:none}
+.ttab-track{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:7px;height:100%;
+  overflow-x:auto;scroll-behavior:smooth;-ms-overflow-style:none;scrollbar-width:none}
+.ttab-track::-webkit-scrollbar{display:none}
+
+.ttab{flex-shrink:0;display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 6px 0 11px;border-radius:9px;
+  background:#fff;border:1px solid var(--line);color:var(--slate);font-size:12.5px;font-weight:700;max-width:188px;
+  white-space:nowrap;cursor:pointer;transition:all .18s var(--ease)}
+.ttab .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.ttab .t-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:118px}
+.ttab .x{width:18px;height:18px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:13px;
+  color:var(--faint);flex-shrink:0;transition:.15s var(--ease);margin-left:1px}
+.ttab .x:hover{background:rgba(244,63,94,.14);color:var(--danger)}
+.ttab:hover{border-color:rgba(99,102,241,.4);color:var(--indigo);box-shadow:var(--shadow-sm)}
+.ttab.active{background:linear-gradient(135deg,rgba(99,102,241,.16),rgba(56,189,248,.07));
+  border-color:rgba(99,102,241,.5);color:var(--indigo);box-shadow:var(--shadow-sm)}
+.ttab-add{flex-shrink:0;display:inline-flex;align-items:center;gap:5px;height:32px;padding:0 11px;border-radius:9px;
+  border:1px dashed var(--line);background:transparent;color:var(--muted);font-size:12.5px;font-weight:700;transition:all .15s var(--ease)}
+.ttab-add:hover{border-color:rgba(99,102,241,.5);color:var(--indigo);background:rgba(99,102,241,.05)}
+
+/* —— 与右侧搜索栏的恒定间隔 + 分隔线 —— */
+.ttab-divider{width:1px;height:24px;background:var(--line);margin:0 18px;flex-shrink:0}
+
+/* 右侧：搜索栏（固定宽度，位置恒定） */
+.top-search{position:relative;flex-shrink:0;width:320px}
+.top-search::before{content:"🔍";position:absolute;left:13px;top:50%;transform:translateY(-50%);font-size:13px;opacity:.45}
+.top-search input{width:100%;height:40px;padding:0 14px 0 38px;border:1px solid var(--line);border-radius:12px;font-size:13px;
+  background:#fff;outline:none;font-family:inherit;color:var(--ink-2);transition:all .2s var(--ease)}
+.top-search input:focus{border-color:var(--indigo);box-shadow:0 0 0 3px rgba(99,102,241,.13)}
+.win-dots{display:flex;gap:8px;padding-left:2px;flex-shrink:0}
+.win-dots span{width:12px;height:12px;border-radius:50%}
+.win-dots .r{background:#ff5f57}.win-dots .y{background:#febc2e}.win-dots .g{background:#28c840}
+
+/* ============ 主内容（示意）============ */
+.main{flex:1;overflow-y:auto;padding:26px 30px 48px}
+.panel{background:var(--glass-strong);border:1px solid var(--line);border-radius:var(--r-lg);padding:20px 22px;margin-bottom:16px;box-shadow:var(--shadow-sm)}
+.sec-title{font-size:17px;font-weight:800;color:var(--ink);letter-spacing:-.01em;margin:0 0 4px}
+.sec-sub{font-size:12.5px;color:var(--muted);margin-bottom:16px}
+.workspace{flex:1;min-height:360px;border-radius:var(--r-md);border:1px dashed var(--line);background:rgba(255,255,255,.5);
+  display:flex;align-items:center;justify-content:center;color:var(--faint);font-weight:700;font-size:14px;text-align:center;padding:30px}
+.workspace b{color:var(--indigo)}
+.toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.btn{display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 15px;border-radius:11px;font-weight:700;font-size:13px;
+  background:#fff;border:1px solid var(--line);color:var(--ink-2);transition:all .2s var(--ease)}
+.btn:hover{border-color:rgba(99,102,241,.4);color:var(--indigo);box-shadow:var(--shadow-sm)}
+.btn.primary{background:linear-gradient(135deg,var(--indigo),var(--indigo-600));color:#fff;border-color:transparent;box-shadow:var(--shadow-md)}
+.btn.primary:hover{filter:brightness(1.05);color:#fff}
+.speclist{display:grid;grid-template-columns:200px 1fr;gap:10px 18px;font-size:13px;margin-top:6px}
+.speclist dt{font-weight:800;color:var(--ink);display:flex;align-items:center;gap:7px}
+.speclist dt .k{width:7px;height:7px;border-radius:50%;background:linear-gradient(135deg,var(--indigo),var(--sky))}
+.speclist dd{color:var(--slate);line-height:1.6}
+.hl{color:var(--indigo);font-weight:800}
+.note{font-size:12px;color:var(--muted);margin-top:12px;line-height:1.6}
+
+/* 响应式：窄屏收窄搜索栏 */
+@media(max-width:1080px){.top-search{width:240px}.ttab-divider{margin:0 12px}}
+@media(max-width:760px){.top-title span.txt{display:none}.top-search{width:180px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- 左侧侧边栏（上下文） -->
+  <aside class="sidenav">
+    <div class="snav-logo">
+      <div class="mark">F</div>
+      <div><div class="ln1">FlowX</div><div class="ln2">多平台内容发布</div></div>
+    </div>
+    <nav class="snav-menu">
+      <div class="nav-item"><span class="ic">🏠</span>仪表盘</div>
+      <div class="nav-item"><span class="ic">👤</span>账号管理</div>
+      <div class="nav-item"><span class="ic">🚀</span>一键发布</div>
+      <div class="nav-item"><span class="ic">📝</span>草稿箱</div>
+      <div class="nav-item active"><span class="ic">🧰</span>工作台</div>
+      <div class="nav-item"><span class="ic">🌐</span>浏览器</div>
+      <div class="nav-item"><span class="ic">📜</span>发布历史</div>
+    </nav>
+    <div class="snav-foot">
+      <div class="nav-item"><span class="ic">⚙️</span>系统配置</div>
+      <div class="nav-item"><span class="ic">📊</span>日志管理</div>
+    </div>
+  </aside>
+
+  <div class="rightcol">
+    <!-- ============ 顶部导航条 ============ -->
+    <header class="topbar">
+      <div class="top-title"><span class="ic">🧰</span><span class="txt">工作台</span></div>
+
+      <!-- 全局任务选项卡区域（弹性区） -->
+      <div class="tasktab-zone">
+        <button class="ttab-nav hidden" id="chevL" title="向左">‹</button>
+        <div class="ttab-track" id="track"></div>
+        <button class="ttab-nav hidden" id="chevR" title="向右">›</button>
+      </div>
+
+      <div class="ttab-divider"></div>
+
+      <!-- 右侧搜索栏（位置恒定） -->
+      <div class="top-search"><input type="text" placeholder="搜索账号、任务、内容…" /></div>
+      <div class="win-dots"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    </header>
+
+    <!-- ============ 主内容 ============ -->
+    <main class="main">
+      <div class="panel">
+        <div class="sec-title">顶栏全局任务选项卡</div>
+        <div class="sec-sub">中部弹性区域承载任务选项卡，与右侧搜索栏保持恒定间距；开再多标签也不挤压搜索栏。</div>
+        <div class="toolbar">
+          <button class="btn primary" id="addOne">＋ 新建任务</button>
+          <button class="btn" id="stress">压力测试：＋10 个</button>
+          <button class="btn" id="reset">重置为 5 个</button>
+        </div>
+        <div class="workspace" id="ws">当前激活任务：<b id="wsName">—</b><br/>（此处为对应任务的内容区，原型仅示意）</div>
+      </div>
+
+      <div class="panel">
+        <div class="sec-title">设计说明 / 交付规范</div>
+        <div class="sec-sub">供开发落地的关键参数（可直接转 Element Plus / Vue 组件）。</div>
+        <dl class="speclist">
+          <dt><span class="k"></span>区域定义</dt><dd>顶栏中部设弹性容器 <span class="hl">flex:1; min-width:0</span>，专属承载全局任务选项卡；永不挤压左右元素。</dd>
+          <dt><span class="k"></span>与搜索栏间距</dt><dd>固定 <span class="hl">18px 间隔 ×2 + 1px 分隔线</span>（约 37px），恒定不变，不随标签数量变化。</dd>
+          <dt><span class="k"></span>溢出策略</dt><dd>标签超出可视宽度时，区域内<span class="hl">横向滚动</span>，左右 <span class="hl">◀ ▶ 翻页按钮</span>仅在溢出时出现；搜索栏位置与间距恒定。</dd>
+          <dt><span class="k"></span>标签规格</dt><dd>高 32 / 圆角 9 / 最大宽 188（超长标题省略号）/ 结构：平台色点 + 标题 + 关闭 ×。</dd>
+          <dt><span class="k"></span>激活态</dt><dd>靛蓝渐变底 + 靛蓝描边 + 柔光阴影；关闭按钮 hover 变红。</dd>
+          <dt><span class="k"></span>新增入口</dt><dd>区域右端常驻 <span class="hl">＋ 新建任务</span>（虚线按钮），点击追加标签用于演示溢出。</dd>
+          <dt><span class="k"></span>响应式</dt><dd>≤1080px 搜索栏收窄至 240px；≤760px 标题文字隐藏、搜索栏 180px（建议更窄时折叠为图标按钮）。</dd>
+        </dl>
+        <div class="note">※ 原型交互：点击标签切换激活、× 关闭、＋/压力测试 增加标签以观察溢出与恒定间距。键盘可 Tab 聚焦标签，符合 WCAG 可达性。</div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+const PLATFORMS=[
+  {key:'douyin',name:'抖音',color:'var(--p-douyin)'},
+  {key:'xhs',name:'小红书',color:'var(--p-xhs)'},
+  {key:'kuaishou',name:'快手',color:'var(--p-kuaishou)'},
+  {key:'wechat',name:'视频号',color:'var(--p-wechat)'},
+  {key:'zhihu',name:'知乎',color:'var(--p-zhihu)'},
+];
+const TITLES=['夏日穿搭种草','新品开箱实测','探店vlog第3期','健身打卡Day12','护肤教程','旅行攻略合集','美食测评','数码好物推荐','萌宠日常','职场干货','周末去哪儿','好物清单','口红试色','露营装备'];
+let uid=0,tasks=[],activeId=null;
+
+const track=document.getElementById('track');
+const chevL=document.getElementById('chevL'),chevR=document.getElementById('chevR');
+const wsName=document.getElementById('wsName');
+
+function addTask(p,t){const id='t'+(++uid);tasks.push({id,platform:p,title:t});if(!activeId)activeId=id;render();}
+function removeTask(id){
+  tasks=tasks.filter(x=>x.id!==id);
+  if(activeId===id) activeId=tasks.length?tasks[0].id:null;
+  render();
+}
+function setActive(id){activeId=id;render();}
+
+function render(){
+  track.innerHTML='';
+  tasks.forEach(t=>{
+    const p=PLATFORMS.find(x=>x.key===t.platform);
+    const el=document.createElement('div');
+    el.className='ttab'+(t.id===activeId?' active':'');
+    el.dataset.id=t.id;
+    el.innerHTML=`<span class="dot" style="background:${p.color}"></span>`+
+      `<span class="t-title">${t.title}</span>`+
+      `<span class="x" title="关闭">×</span>`;
+    track.appendChild(el);
+  });
+  const add=document.createElement('button');
+  add.className='ttab-add';add.id='addInline';add.innerHTML='＋ 新建';
+  track.appendChild(add);
+
+  const cur=tasks.find(t=>t.id===activeId);
+  wsName.textContent=cur?cur.title:'（无任务）';
+  updateOverflow();
+}
+
+function updateOverflow(){
+  const overflow=track.scrollWidth-track.clientWidth>2;
+  chevL.classList.toggle('hidden',!overflow);
+  chevR.classList.toggle('hidden',!overflow);
+  if(!overflow) track.scrollLeft=0;
+  updateChevState();
+}
+function updateChevState(){
+  const atStart=track.scrollLeft<=2;
+  const atEnd=track.scrollLeft+track.clientWidth>=track.scrollWidth-2;
+  chevL.classList.toggle('disabled',atStart);
+  chevR.classList.toggle('disabled',atEnd);
+}
+
+track.addEventListener('click',e=>{
+  if(e.target.closest('#addInline')){addSample();return;}
+  const tab=e.target.closest('.ttab');if(!tab)return;
+  if(e.target.closest('.x')) removeTask(tab.dataset.id);
+  else setActive(tab.dataset.id);
+});
+chevL.addEventListener('click',()=>track.scrollBy({left:-240,behavior:'smooth'}));
+chevR.addEventListener('click',()=>track.scrollBy({left:240,behavior:'smooth'}));
+track.addEventListener('scroll',updateChevState);
+window.addEventListener('resize',updateOverflow);
+
+function addSample(){
+  const p=PLATFORMS[uid%PLATFORMS.length];
+  const t=TITLES[uid%TITLES.length];
+  addTask(p.key,t);
+}
+
+document.getElementById('addOne').addEventListener('click',addSample);
+document.getElementById('stress').addEventListener('click',()=>{for(let i=0;i<10;i++)addSample();});
+document.getElementById('reset').addEventListener('click',()=>{
+  tasks=[];activeId=null;uid=0;
+  ['douyin','xhs','kuaishou','wechat','zhihu'].forEach((k,i)=>addTask(k,TITLES[i]));
+});
+
+// 初始：5 个任务
+['douyin','xhs','kuaishou','wechat','zhihu'].forEach((k,i)=>addTask(k,TITLES[i]));
+</script>
+</body>
+</html>

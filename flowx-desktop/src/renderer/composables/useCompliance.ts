@@ -14,6 +14,8 @@ export interface ComplianceFieldSource {
   title: string;
   content: string;
   tags: string[];
+  /** 话题原始串，供主进程按真实输入框文本计算 offset（行内高亮对齐用） */
+  tagsRaw: string;
   summary: string;
 }
 

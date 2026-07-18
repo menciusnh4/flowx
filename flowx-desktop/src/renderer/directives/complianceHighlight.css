@@ -1,0 +1,31 @@
+/* 违禁词行内高亮覆盖层：贴在输入框之上，透明、不挡输入，只画颜色横线 */
+.compliance-highlight-backdrop {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  z-index: 2; /* 位于真实输入框(relative,z-index:1)之上，但 pointer-events:none 不挡输入 */
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  color: transparent !important; /* 文字不可见，只露出下划线；真实文字由下层 textarea 绘制 */
+  background: transparent !important;
+  border: none;
+  box-sizing: border-box;
+}
+
+/* 换行/断词度量由 copyMetrics 从真实 input/textarea 复制（inline 覆盖此处），
+   以保证高亮层与正文逐字逐行对齐；这里仅保留横向裁剪兜底。 */
+.compliance-highlight-backdrop.ch-input {
+  overflow-x: hidden;
+}
+
+/* 命中词下划线（颜色与图例一致：高红 / 中橙 / 低蓝） */
+.compliance-highlight-backdrop .ch-high {
+  border-bottom: 2px solid #f56c6c;
+}
+.compliance-highlight-backdrop .ch-mid {
+  border-bottom: 2px solid #e6a23c;
+}
+.compliance-highlight-backdrop .ch-low {
+  border-bottom: 2px solid #409eff;
+}

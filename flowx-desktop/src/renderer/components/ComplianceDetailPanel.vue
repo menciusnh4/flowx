@@ -8,7 +8,7 @@ const props = defineProps<{
   scanning?: boolean;
   platformLabel?: string;
 }>();
-const emit = defineEmits<{ (e: 'toggle'): void; (e: 'locate', field: string): void }>();
+const emit = defineEmits<{ (e: 'toggle'): void; (e: 'locate', field: string, start: number, end: number): void }>();
 
 const enabled = computed(() => props.enabled ?? true);
 const internalOpen = ref(false);
@@ -79,7 +79,16 @@ function fieldName(f: string): string {
   return ({ title: '标题', content: '正文', tags: '话题', summary: '摘要' } as Record<string, string>)[f] || f;
 }
 function platformName(p: string): string {
-  return p === 'common' ? '通用' : p === 'douyin' ? '抖音' : p === 'xiaohongshu' ? '小红书' : p;
+  return (
+    {
+      common: '通用',
+      douyin: '抖音',
+      xiaohongshu: '小红书',
+      zhihu: '知乎',
+      kuaishou: '快手',
+      wechat_official: '微信公众号',
+    } as Record<string, string>
+  )[p] || p;
 }
 </script>
 
@@ -116,18 +125,21 @@ function platformName(p: string): string {
           :key="i"
           class="hit"
           :class="m.level"
-          @click="emit('locate', m.field)"
+          @click="emit('locate', m.field, m.start, m.end)"
         >
           <span class="h-lv">{{ lvName(m.level) }}</span>
           <div class="h-body">
             <div class="h-word">
               命中「{{ m.term }}」
-              <span class="h-plats"><span class="h-plat">{{ platformName(m.platform) }}</span></span>
+              <span class="h-plats">
+                <span class="h-plat">{{ platformName(m.platform) }}</span>
+                <span v-if="m.category" class="h-cat">{{ m.category }}</span>
+              </span>
             </div>
             <div class="h-meta">{{ fieldName(m.field) }}</div>
-            <div v-if="m.suggestion" class="h-suggest">建议改为：<b>{{ m.suggestion }}</b></div>
+            <div v-if="m.suggestion" class="h-suggest">替换建议：<b>{{ m.suggestion }}</b></div>
           </div>
-          <button class="h-locate" type="button" @click.stop="emit('locate', m.field)">定位</button>
+          <button class="h-locate" type="button" @click.stop="emit('locate', m.field, m.start, m.end)">定位</button>
         </div>
       </div>
     </div>
@@ -240,8 +252,9 @@ function platformName(p: string): string {
 .h-meta { font-size: 12px; color: var(--slate, #475569); margin-top: 2px; }
 .h-suggest { font-size: 12px; color: var(--muted, #64748b); margin-top: 3px; }
 .h-suggest b { color: var(--indigo, #6366f1); font-weight: 700; }
-.h-plats { display: inline-flex; gap: 4px; margin-left: 6px; }
+.h-plats { display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: middle; }
 .h-plat { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 6px; color: #fff; background: #94a3b8; }
+.h-cat { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 6px; color: #0f766e; background: rgba(13, 148, 136, 0.12); border: 1px solid rgba(13, 148, 136, 0.25); }
 .h-locate {
   flex-shrink: 0;
   font-size: 12px;

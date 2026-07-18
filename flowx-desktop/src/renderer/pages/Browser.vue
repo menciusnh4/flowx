@@ -242,6 +242,10 @@ watch(
 async function updateViewBounds() {
   if (!browserContainerRef.value || !activeTabId.value) return
   const rect = browserContainerRef.value.getBoundingClientRect()
+  // 容器不可见（display:none / 布局未就绪 / 仅发布表单模式）时尺寸为 0，
+  // 若仍照常 setBounds 会把原生视图设成 0 尺寸并停在屏幕外 → 内容区空白。
+  // 这里直接跳过，交给 ResizeObserver 在容器重新可见时再校正（见 onMounted）。
+  if (rect.width <= 0 || rect.height <= 0) return
   try {
     await electronApi.browser.setBounds(activeTabId.value, {
       x: Math.round(rect.left),
@@ -1002,16 +1006,43 @@ function handleSelectorCancelledEvent(data: { viewId: string }) {
 async function saveToDraft() {
   if (!publishFormRef.value) return
   const formData = publishFormRef.value.getFormData()
-  if (!formData.title?.trim()) {
-    ElMessage.warning('请先填写标题')
+
+  const rawTitle = (formData.title || '').trim()
+  const rawContent = (formData.content || '').trim()
+
+  // 提取场景下标题常为空白（手动选择文本块、页面无 h1/og:title、纯图片提取等），
+  // 这里兜底生成标题，保证「提取内容 → 保存草稿」始终可走通，不再硬性拦截。
+  let finalTitle = rawTitle
+  if (!finalTitle && rawContent) {
+    finalTitle = rawContent.split('\n').map((l) => l.trim()).find((l) => l)?.slice(0, 40) || rawContent.slice(0, 40)
+  }
+  if (!finalTitle) {
+    finalTitle = (pageTitle.value || '').trim() || currentUrl.value?.trim() || '未命名草稿'
+  }
+
+  // 标题与正文都为空，确实没有可保存的内容
+  if (!finalTitle && !rawContent) {
+    ElMessage.warning('没有可保存的内容')
     return
   }
+
+  // 来源站点名（用于草稿列表展示，提取场景更有意义）
+  let sourceSite: string | undefined
+  if (pageTitle.value) sourceSite = pageTitle.value.trim()
+  else if (currentUrl.value) {
+    try {
+      sourceSite = new URL(currentUrl.value).hostname.replace(/^www\./, '')
+    } catch {
+      // ignore
+    }
+  }
+
   try {
     await electronApi.draft.create({
-      title: formData.title,
+      title: finalTitle,
       contentType: formData.contentType || 'article',
       formData: {
-        title: formData.title || '',
+        title: finalTitle,
         content: formData.content || '',
         tagsRaw: (formData.tags || []).join(' '),
         mediaFiles: formData.mediaFiles || [],
@@ -1021,6 +1052,7 @@ async function saveToDraft() {
         scheduledTime: null,
       },
       sourceUrl: currentUrl.value,
+      sourceSite,
     })
     ElMessage.success('已保存到草稿箱')
   } catch (e) {
@@ -1046,9 +1078,33 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   }
 }
 
+// 容器尺寸观察器：原生 WebContentsView 的位置/大小全靠测量 .browser-container 的 rect 后 setBounds。
+// 工作台所有系统 tab 用 v-show 同挂载，浏览器容器在初始化时常处于 display:none（rect=0），
+// 仅有的几处 updateViewBounds 触发（切 tab / 路由 / 拖拽）易漏掉「容器由隐藏变可见」这一关键时机，
+// 导致原生视图停在 0 尺寸、内容区空白。ResizeObserver 在容器渲染尺寸变化（含隐藏→可见）时
+// 自动重算 bounds，是本 bug 的根因修复；不可见时把原生视图移出屏幕，避免遮挡其它 tab。
+let containerResizeObserver: ResizeObserver | null = null
+function setupContainerResizeObserver() {
+  if (containerResizeObserver || typeof ResizeObserver === 'undefined') return
+  const el = browserContainerRef.value
+  if (!el) return
+  containerResizeObserver = new ResizeObserver(() => {
+    if (!el || !activeTabId.value) return
+    const rect = el.getBoundingClientRect()
+    if (rect.width > 0 && rect.height > 0) {
+      updateViewBounds()
+    } else {
+      // 容器不可见：把原生视图移出屏幕，防止穿透显示到其它 tab 之上
+      hideTabView(activeTabId.value)
+    }
+  })
+  containerResizeObserver.observe(el)
+}
+
 onMounted(() => {
   window.addEventListener('resize', handleResize)
   window.addEventListener('keydown', handleGlobalKeydown)
+  setupContainerResizeObserver()
   if (electronApi.browser) {
     electronApi.browser.onPageTitleUpdated?.(onPageTitleUpdated)
     electronApi.browser.onPageUrlUpdated?.(onPageUrlUpdated)
@@ -1069,6 +1125,8 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('keydown', handleGlobalKeydown)
+  containerResizeObserver?.disconnect()
+  containerResizeObserver = null
   stopDrag()
   // 清理搜索防抖定时器
   if (bookmarkSearchTimer) clearTimeout(bookmarkSearchTimer)

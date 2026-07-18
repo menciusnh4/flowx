@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FlowX 原型 — 发布合规预检（P0）</title>
+<style>
+/* ============ Design Tokens（完全对齐 FlowX 真实品牌）============ */
+:root{
+  --indigo:#6366f1; --indigo-600:#4f46e5; --sky:#38bdf8; --sky-600:#0ea5e9;
+  --ink:#0f172a; --ink-2:#1e293b; --slate:#475569; --muted:#64748b; --faint:#94a3b8;
+  --line:rgba(15,23,42,.08); --line-soft:rgba(15,23,42,.05);
+  --glass:rgba(255,255,255,.85); --glass-strong:#fff;
+  --bg:#f3f5fb;
+  --shadow-sm:0 2px 10px rgba(99,102,241,.06);
+  --shadow-md:0 10px 26px -8px rgba(99,102,241,.16);
+  --shadow-lg:0 22px 44px -14px rgba(99,102,241,.24);
+  --ok:#10b981; --warn:#f59e0b; --danger:#f43f5e; --info:#64748b; --blue:#3b82f6;
+  --p-douyin:#06b6d4; --p-xhs:#ff4d4f; --p-kuaishou:#f97316; --p-wechat:#10b981;
+  --r-lg:16px; --r-md:12px; --r-sm:9px;
+  --ease:cubic-bezier(.16,1,.3,1);
+  --font:'Plus Jakarta Sans','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--font);background:var(--bg);color:var(--ink-2);-webkit-font-smoothing:antialiased;font-size:14px;line-height:1.5}
+button{font-family:inherit;cursor:pointer;border:none;background:none}
+::selection{background:rgba(99,102,241,.2)}
+a{color:var(--indigo);text-decoration:none}
+
+/* ============ 外壳 ============ */
+.app{display:flex;flex-direction:row;height:100vh;overflow:hidden}
+.sidenav{width:250px;flex-shrink:0;display:flex;flex-direction:column;padding:20px 14px;gap:4px;
+  background:var(--glass);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+  border-right:1px solid var(--line);z-index:40}
+.snav-logo{display:flex;align-items:center;gap:12px;padding:4px 12px 18px}
+.snav-logo .mark{width:40px;height:40px;border-radius:13px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  font-weight:800;font-size:20px;color:#fff;background:linear-gradient(135deg,var(--indigo),var(--sky));box-shadow:var(--shadow-md)}
+.snav-logo .ln1{font-size:18px;font-weight:800;letter-spacing:-.02em;color:var(--ink);line-height:1.1}
+.snav-logo .ln2{font-size:10.5px;color:var(--faint);font-weight:600;margin-top:2px}
+.snav-menu{flex:1;display:flex;flex-direction:column;gap:3px;overflow-y:auto;padding-right:2px;margin-top:4px}
+.snav-menu::-webkit-scrollbar{width:6px}.snav-menu::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+.nav-item{display:flex;align-items:center;gap:11px;width:100%;height:44px;padding:0 13px;border-radius:13px;
+  color:var(--slate);font-weight:600;font-size:13.5px;text-align:left;transition:all .2s var(--ease);position:relative}
+.nav-item .ic{font-size:17px;width:20px;text-align:center;flex-shrink:0}
+.nav-item .label{flex:1}
+.nav-item:hover{background:rgba(99,102,241,.07);color:var(--indigo)}
+.nav-item.active{background:linear-gradient(135deg,rgba(99,102,241,.15),rgba(56,189,248,.06));color:var(--indigo);box-shadow:var(--shadow-sm)}
+.nav-item.active::before{content:"";position:absolute;left:-14px;top:50%;transform:translateY(-50%);width:4px;height:22px;border-radius:0 4px 4px 0;
+  background:linear-gradient(135deg,var(--indigo),var(--sky))}
+.snav-foot{display:flex;flex-direction:column;gap:10px;padding-top:14px;margin-top:4px;border-top:1px solid var(--line-soft)}
+.snav-user{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:13px;background:rgba(99,102,241,.07);font-weight:700;font-size:13px;color:var(--ink-2)}
+.snav-user .av{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--indigo),var(--sky));color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.snav-ver{font-size:11px;color:var(--faint);font-weight:600;text-align:center}
+
+.rightcol{flex:1;display:flex;flex-direction:column;min-width:0}
+.topbar{height:62px;flex-shrink:0;display:flex;align-items:center;gap:18px;padding:0 26px;
+  background:var(--glass);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+  border-bottom:1px solid var(--line);z-index:30}
+.top-title{font-size:16px;font-weight:800;color:var(--ink);letter-spacing:-.01em;flex-shrink:0}
+.top-search{position:relative;flex:1;max-width:400px;margin-left:auto}
+.top-search::before{content:"🔍";position:absolute;left:13px;top:50%;transform:translateY(-50%);font-size:13px;opacity:.45}
+.top-search input{width:100%;height:40px;padding:0 14px 0 38px;border:1px solid var(--line);border-radius:12px;font-size:13px;
+  background:#fff;outline:none;font-family:inherit;color:var(--ink-2);transition:all .2s var(--ease)}
+.top-search input:focus{border-color:var(--indigo);box-shadow:0 0 0 3px rgba(99,102,241,.13)}
+.win-dots{display:flex;gap:8px;padding-left:4px;flex-shrink:0}
+.win-dots span{width:12px;height:12px;border-radius:50%}
+.win-dots .r{background:#ff5f57}.win-dots .y{background:#febc2e}.win-dots .g{background:#28c840}
+.main{flex:1;overflow-y:auto;padding:26px 30px 48px}
+.sec-title{font-size:17px;font-weight:800;color:var(--ink);letter-spacing:-.01em;margin:0 0 4px}
+.sec-sub{font-size:12.5px;color:var(--muted);margin-bottom:0}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+
+/* 通用组件 */
+.panel{background:var(--glass-strong);border:1px solid var(--line);border-radius:var(--r-lg);padding:20px 22px;margin-bottom:16px;box-shadow:var(--shadow-sm)}
+.btn{display:inline-flex;align-items:center;gap:7px;height:38px;padding:0 16px;border-radius:11px;font-weight:700;font-size:13px;
+  background:#fff;border:1px solid var(--line);color:var(--ink-2);transition:all .2s var(--ease)}
+.btn:hover{border-color:rgba(99,102,241,.4);color:var(--indigo);box-shadow:var(--shadow-sm)}
+.btn.primary{background:linear-gradient(135deg,var(--indigo),var(--indigo-600));color:#fff;border-color:transparent;box-shadow:var(--shadow-md)}
+.btn.primary:hover{filter:brightness(1.05);color:#fff}
+.btn.sm{height:32px;padding:0 12px;font-size:12px;border-radius:9px}
+.btn:disabled{opacity:.55;cursor:not-allowed;pointer-events:none}
+.tag{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11.5px;font-weight:700}
+.tag.ok{background:rgba(16,185,129,.12);color:#0f9d6b}
+.tag.warn{background:rgba(245,158,11,.14);color:#b97a09}
+.tag.danger{background:rgba(244,63,94,.12);color:#e11d48}
+.tag.blue{background:rgba(39,130,246,.12);color:#2563eb}
+.tag.gray{background:#f1f5f9;color:var(--muted)}
+input.in,textarea.in{width:100%;padding:10px 13px;border:1px solid var(--line);border-radius:11px;font-size:13.5px;
+  font-family:inherit;color:var(--ink-2);background:#fff;transition:all .2s var(--ease);outline:none;resize:vertical}
+input.in:focus,textarea.in:focus{border-color:var(--indigo);box-shadow:0 0 0 3px rgba(99,102,241,.13)}
+.field{margin-bottom:15px}
+.field>label{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;color:var(--slate);margin-bottom:7px}
+.lbl-right{margin-left:auto;display:inline-flex;align-items:center;gap:8px}
+.counter{font-size:11.5px;color:var(--faint);font-weight:600}
+.pill{padding:7px 14px;border-radius:20px;font-size:12.5px;font-weight:700;background:#fff;border:1px solid var(--line);color:var(--slate);transition:all .2s}
+.pill:hover{border-color:rgba(99,102,241,.4);color:var(--indigo)}
+.pill.active{background:linear-gradient(135deg,var(--indigo),var(--indigo-600));color:#fff;border-color:transparent}
+
+/* 发布类型 / 账号选择 */
+.pub-typebar{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.pub-typebadge{display:inline-flex;align-items:center;gap:6px;padding:7px 15px;border-radius:11px;font-weight:800;font-size:13.5px;color:#fff;
+  background:linear-gradient(135deg,var(--indigo),var(--sky));box-shadow:var(--shadow-sm)}
+.pub-hint{font-size:12.5px;color:var(--muted);font-weight:600}
+.pub-wrap{display:grid;grid-template-columns:1.35fr 1fr;gap:16px;align-items:start}
+@media(max-width:1080px){.pub-wrap{grid-template-columns:1fr}}
+.pick-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.pick{display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:#fff;cursor:pointer;transition:all .2s}
+.pick:hover{border-color:rgba(99,102,241,.4)}
+.pick.on{border-color:var(--indigo);background:rgba(99,102,241,.06);box-shadow:0 0 0 3px rgba(99,102,241,.1)}
+.pick .ava{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;color:#fff;flex-shrink:0}
+.pick .pi{display:flex;flex-direction:column;gap:2px;min-width:0}
+.pick .pn{font-size:12.5px;font-weight:700;color:var(--ink);line-height:1.2}
+.pick .pf{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--muted);line-height:1.2}
+.pick .plogo{font-size:12px;line-height:1}
+
+/* toast */
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;
+  padding:12px 20px;border-radius:12px;font-size:13px;font-weight:600;opacity:0;pointer-events:none;transition:all .3s var(--ease);z-index:200;box-shadow:var(--shadow-lg)}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ============ 合规预检 组件（P0）============ */
+/* —— 顶部合规状态条（常驻，不挤压表单）—— */
+.compliance-bar{display:flex;align-items:center;gap:12px;padding:13px 16px;border-radius:var(--r-md);margin-bottom:10px;
+  border:1px solid var(--line);font-weight:700;font-size:13px;transition:all .25s var(--ease)}
+.compliance-bar .cb-ic{width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.compliance-bar .cb-txt{flex:1;line-height:1.35;min-width:0}
+.compliance-bar .cb-sub{font-size:11.5px;font-weight:600;opacity:.85;margin-top:1px}
+.compliance-bar.safe{background:rgba(16,185,129,.08);border-color:rgba(16,185,129,.25);color:#0f9d6b}
+.compliance-bar.safe .cb-ic{background:rgba(16,185,129,.15);color:#0f9d6b}
+.compliance-bar.warn{background:#fffbeb;border-color:rgba(245,158,11,.3);color:#b97a09}
+.compliance-bar.warn .cb-ic{background:rgba(245,158,11,.16);color:#b97a09}
+.compliance-bar.block{background:#fef2f2;border-color:rgba(244,63,94,.32);color:#e11d48}
+.compliance-bar.block .cb-ic{background:rgba(244,63,94,.15);color:#e11d48}
+.compliance-bar.off{background:#f1f5f9;border-color:rgba(15,23,42,.12);color:var(--muted)}
+.compliance-bar.off .cb-ic{background:rgba(148,163,184,.16);color:var(--muted)}
+/* 展开按钮 */
+.cb-toggle{margin-left:auto;flex-shrink:0;display:none;align-items:center;gap:5px;padding:6px 12px;border-radius:9px;
+  font-size:12px;font-weight:700;background:rgba(255,255,255,.72);border:1px solid rgba(15,23,42,.08);color:inherit;cursor:pointer;transition:all .2s}
+.cb-toggle.show{display:inline-flex}
+.cb-toggle:hover{background:#fff;box-shadow:var(--shadow-sm)}
+
+/* —— 集中式合规明细面板（默认折叠，受控高度，绝不挤压主表单）—— */
+.compliance-detail{display:none;margin-bottom:16px;border:1px solid var(--line);border-radius:var(--r-md);background:#fff;overflow:hidden}
+.compliance-detail.show{display:block;animation:fade .2s var(--ease)}
+.cd-head{display:flex;align-items:center;justify-content:space-between;padding:9px 14px;border-bottom:1px solid var(--line-soft);
+  font-size:12.5px;font-weight:700;color:var(--slate);background:#fafbff}
+.cd-head .cd-count{font-weight:600;color:var(--muted);font-size:11.5px}
+.cd-list{max-height:230px;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:7px}
+.cd-list::-webkit-scrollbar{width:7px}.cd-list::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+.cd-empty{padding:18px;text-align:center;color:var(--faint);font-size:12.5px}
+
+/* —— 命中条目（明细面板与弹层复用）—— */
+.hit{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-radius:10px;background:#fff;
+  border:1px solid var(--line);border-left-width:3px;animation:fade .2s var(--ease)}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.hit.high{border-left-color:var(--danger);background:#fef7f8}
+.hit.mid{border-left-color:var(--warn);background:#fffdf5}
+.hit.low{border-left-color:var(--blue);background:#f7f9ff}
+.hit .h-lv{font-size:11px;font-weight:800;padding:2px 8px;border-radius:7px;flex-shrink:0;margin-top:1px}
+.hit.high .h-lv{background:rgba(244,63,94,.12);color:#e11d48}
+.hit.mid .h-lv{background:rgba(245,158,11,.14);color:#b97a09}
+.hit.low .h-lv{background:rgba(39,130,246,.12);color:#2563eb}
+.hit .h-body{flex:1;min-width:0}
+.hit .h-word{font-weight:800;color:var(--ink);font-size:13px}
+.hit .h-word b{background:rgba(244,63,94,.16);color:#e11d48;padding:0 3px;border-radius:4px;font-weight:800}
+.hit.high .h-word b,.hit.mid .h-word b{background:rgba(244,63,94,.12)}
+.hit.mid .h-word b{background:rgba(245,158,11,.16);color:#b97a09}
+.hit .h-reason{font-size:12px;color:var(--slate);margin-top:2px;line-height:1.45}
+.hit .h-suggest{font-size:12px;color:var(--muted);margin-top:3px}
+.hit .h-suggest b{color:var(--indigo);font-weight:700}
+.hit .h-plats{display:inline-flex;gap:4px;margin-left:6px}
+.hit .h-plats span{font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:6px;color:#fff}
+.hit .h-locate{flex-shrink:0;font-size:12px;font-weight:700;color:var(--indigo);padding:5px 10px;border-radius:8px;background:rgba(99,102,241,.08);transition:all .2s}
+.hit .h-locate:hover{background:rgba(99,102,241,.16)}
+
+/* —— 字段级轻量角标（inline，点即定位，不占纵向空间）—— */
+.field-flag{display:none;align-items:center;gap:3px;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:800;cursor:pointer;transition:all .2s}
+.field-flag.show{display:inline-flex}
+.field-flag::before{content:"⚠";font-size:11px;line-height:1}
+.field-flag:hover{filter:brightness(.96)}
+.field-flag.high{background:rgba(244,63,94,.14);color:#e11d48}
+.field-flag.mid{background:rgba(245,158,11,.16);color:#b97a09}
+.field-flag.low{background:rgba(39,130,246,.14);color:#2563eb}
+
+/* 字段聚焦脉冲 */
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(244,63,94,.4)}100%{box-shadow:0 0 0 6px rgba(244,63,94,0)}}
+.in.pulse{border-color:var(--danger);animation:pulse .6s var(--ease) 2}
+
+/* 合规模式切换 */
+.mode-switch{display:inline-flex;align-items:center;gap:0;background:#f1f5f9;border-radius:11px;padding:3px}
+.mode-switch .ms{height:32px;padding:0 14px;border-radius:9px;font-size:12.5px;font-weight:700;color:var(--slate);transition:all .2s}
+.mode-switch .ms.active{background:#fff;color:var(--indigo);box-shadow:var(--shadow-sm)}
+.mode-switch .ms.armed{background:rgba(244,63,94,.14);color:#e11d48;border-color:rgba(244,63,94,.3)}
+.local-note{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);font-weight:600;margin-top:10px}
+.local-note .lk{font-size:13px}
+
+/* 发布前合规提示（可关闭，不阻断） */
+.modal-mask{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(3px)}
+.modal-mask.show{display:flex;animation:fade .2s}
+.modal{background:#fff;border-radius:var(--r-lg);padding:24px;width:460px;max-width:92vw;box-shadow:var(--shadow-lg);border-top:4px solid var(--danger)}
+.modal h3{margin:0 0 4px;font-size:17px;color:var(--ink);display:flex;align-items:center;gap:9px}
+.modal .m-sub{font-size:12.5px;color:var(--muted);margin-bottom:14px}
+.modal .m-list{display:flex;flex-direction:column;gap:8px;max-height:240px;overflow-y:auto;margin-bottom:16px}
+.modal .m-hit{display:flex;gap:9px;padding:9px 11px;border-radius:9px;background:#fef2f2;border-left:3px solid var(--danger)}
+.modal .m-hit .m-lv{font-size:11px;font-weight:800;background:rgba(244,63,94,.12);color:#e11d48;padding:2px 7px;border-radius:6px;flex-shrink:0}
+.modal .m-hit .m-txt{flex:1;font-size:12.5px;color:var(--ink-2)}
+.modal .m-hit .m-txt b{color:#e11d48;font-weight:800}
+.modal .m-acts{display:flex;gap:10px}
+.modal .m-acts .btn{flex:1;justify-content:center}
+.modal .btn.go{background:linear-gradient(135deg,var(--indigo),var(--sky));color:#fff;border-color:transparent}
+
+/* 图例 */
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:4px;font-size:11.5px;color:var(--muted);font-weight:600}
+.legend .lg{display:flex;align-items:center;gap:6px}
+.legend .dot{width:10px;height:10px;border-radius:3px}
+.legend .dot.high{background:var(--danger)}.legend .dot.mid{background:var(--warn)}.legend .dot.low{background:var(--blue)}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- 侧边栏（发布页激活）-->
+  <aside class="sidenav">
+    <div class="snav-logo"><div class="mark">F</div><div><div class="ln1">FlowX</div><div class="ln2">多平台内容发布助手</div></div></div>
+    <nav class="snav-menu">
+      <button class="nav-item"><span class="ic">🏠</span><span class="label">仪表盘</span></button>
+      <button class="nav-item"><span class="ic">👤</span><span class="label">账号管理</span></button>
+      <button class="nav-item active"><span class="ic">🚀</span><span class="label">一键发布</span></button>
+      <button class="nav-item"><span class="ic">📝</span><span class="label">草稿箱</span></button>
+      <button class="nav-item"><span class="ic">🌐</span><span class="label">浏览器</span></button>
+      <button class="nav-item"><span class="ic">⚙️</span><span class="label">系统配置</span></button>
+    </nav>
+    <div class="snav-foot"><div class="snav-user"><span class="av">A</span>管理员</div><div class="snav-ver">v1.0.3 · Electron 31</div></div>
+  </aside>
+
+  <div class="rightcol">
+    <header class="topbar">
+      <div class="top-title">发布图文 · 合规预检</div>
+      <div class="top-search"><input type="text" placeholder="搜索账号、任务、日志…"></div>
+      <div class="win-dots"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    </header>
+
+    <main class="main">
+      <div class="row">
+        <div><h1 class="sec-title">发布图文</h1><div class="sec-sub">填写内容并选择目标账号，发布前自动进行合规预检</div></div>
+        <div style="display:flex;gap:10px;align-items:center">
+          <div class="mode-switch" id="modeSwitch">
+            <button class="ms active" data-mode="on">🔔 提示开</button>
+            <button class="ms" data-mode="off">🔕 提示关</button>
+          </div>
+          <button class="btn sm">💾 存草稿</button>
+        </div>
+      </div>
+
+      <div class="pub-wrap">
+        <!-- 左：发布内容 + 合规预检 -->
+        <div class="panel">
+          <!-- 合规状态条（常驻）-->
+          <div class="compliance-bar warn" id="cbar">
+            <div class="cb-ic" id="cbarIc">⚠️</div>
+            <div class="cb-txt"><div id="cbarTxt">正在扫描…</div><div class="cb-sub" id="cbarSub"></div></div>
+            <button class="cb-toggle" id="detailToggle">查看 0 处提示 ▾</button>
+          </div>
+
+          <!-- 集中式合规明细（默认折叠，受控高度）-->
+          <div class="compliance-detail" id="detailPanel">
+            <div class="cd-head"><span>合规预检明细</span><span class="cd-count" id="cdCount"></span></div>
+            <div class="cd-list" id="detailList"></div>
+          </div>
+
+          <div class="field">
+            <label><span>标题</span><span class="lbl-right"><span class="field-flag" id="flag-title"></span><span class="counter" id="titleLim">0 / 20</span></span></label>
+            <input class="in" id="titleIn" maxlength="20" placeholder="小红书标题≤20字"
+              value="夏季穿搭第一品牌 最便宜好物推荐">
+          </div>
+
+          <div class="field">
+            <label><span>正文 / 描述</span><span class="lbl-right"><span class="field-flag" id="flag-body"></span><span class="counter" id="bodyLim">0 / 1000</span></span></label>
+            <textarea class="in" id="bodyIn" rows="5" placeholder="输入正文内容…"
+              >加微信看更多穿搭 微信围观不迷路 爆款神器必备 超赞好物推荐给你</textarea>
+          </div>
+
+          <div class="field">
+            <label><span>话题标签</span><span class="lbl-right"><span class="field-flag" id="flag-tags"></span></span></label>
+            <input class="in" id="tagsIn" placeholder="用空格分隔，如：穿搭 日常 好物" value="超赞 必入 爆款">
+          </div>
+
+          <div class="field">
+            <label>素材文件</label>
+            <div style="border:1.5px dashed var(--line);border-radius:var(--r-md);padding:20px;text-align:center;color:var(--muted);font-size:13px">
+              📎 拖拽或点击上传图片（图文支持 jpg/png/webp）
+              <div style="font-size:11.5px;margin-top:6px;color:var(--faint)">P1 阶段将在此处增加图片合规检测（端侧模型，不传原图）</div>
+            </div>
+          </div>
+
+          <!-- 图例 -->
+          <div class="legend">
+            <div class="lg"><span class="dot high"></span>高危 · 显著提示，仍可发布</div>
+            <div class="lg"><span class="dot mid"></span>中危 · 建议修改</div>
+            <div class="lg"><span class="dot low"></span>低危 · 提示</div>
+          </div>
+          <div class="local-note"><span class="lk">🔒</span> 全部检测在本机完成，词库随版内置、不上传任何数据</div>
+        </div>
+
+        <!-- 右：账号选择 -->
+        <div class="panel">
+          <h2 class="sec-title">选择账号</h2>
+          <div class="sec-sub" style="margin-bottom:12px">合规预检按所选平台差异化扫描（当前仅抖音 / 小红书）</div>
+          <div class="pick-grid" id="pickGrid"></div>
+          <div style="display:flex;gap:8px;margin-top:16px">
+            <button class="btn primary" style="flex:1;justify-content:center" id="submitBtn">🚀 发布到所选账号</button>
+            <button class="btn" id="testBtn">🧪 测试</button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- 发布前合规提示（可关闭，不阻断） -->
+<div class="modal-mask" id="gateMask">
+  <div class="modal">
+    <h3>🔴 发布前合规提示</h3>
+    <div class="m-sub" id="gateSub">发现以下高危内容，请确认是否仍要发布（仅提示，不阻断）</div>
+    <div class="m-list" id="gateList"></div>
+    <div class="m-acts">
+      <button class="btn go" id="gateForce">仍要发布</button>
+      <button class="btn" id="gateEdit">去修改</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============ 词库（P0 骨架示例，纯本地，上线前需法务审定高危词）============ */
+const DICT = {
+  douyin:{
+    high:[ {w:'微信',s:'平台禁止导流至站外，请删除联系方式'},{w:'加微信',s:'删除站外联系方式'},{w:'第一品牌',s:'头部品牌'},{w:'国家级',s:'需核实资质后表述'},{w:'最便宜',s:'性价比高'},{w:'绝对正品',s:'官方正品'},{w:'秒杀全网最低',s:'限时优惠'} ],
+    mid:[ {w:'爆款',s:'热门款'},{w:'神器',s:''},{w:'天花板',s:''},{w:'全网第一',s:'同品类领先'} ],
+    low:[ {w:'超赞',s:''},{w:'必入',s:''} ]
+  },
+  xhs:{
+    high:[ {w:'微信',s:'小红书禁止导流至微信'},{w:'加我微信',s:'删除站外联系方式'},{w:'第一',s:'头部'},{w:'100%有效',s:'效果因人而异'},{w:'保证',s:'效果因人而异'},{w:'国家级',s:'需核实资质后表述'} ],
+    mid:[ {w:'绝绝子',s:''},{w:'必备',s:''},{w:'天花板',s:''},{w:'最便宜',s:'性价比高'} ],
+    low:[ {w:'超好用',s:''},{w:'推荐',s:''},{w:'神器',s:''} ]
+  }
+};
+const PLAT_NAME={douyin:'抖音',xhs:'小红书'};
+const PLAT_COLOR={douyin:'var(--p-douyin)',xhs:'var(--p-xhs)'};
+
+/* 提示模式开关（提前声明，供 scan 使用） */
+let mode='on';
+
+/* ============ 账号 ============ */
+const accounts=[
+  {nm:'种草号',pl:'xhs',sel:true},
+  {nm:'美妆日记',pl:'douyin',sel:true},
+  {nm:'美食家',pl:'kuaishou',sel:false},
+  {nm:'视频号主',pl:'wechat',sel:false},
+];
+function renderPicks(){
+  const g=document.getElementById('pickGrid');g.innerHTML='';
+  accounts.forEach((a,i)=>{
+    g.insertAdjacentHTML('beforeend',`
+    <div class="pick ${a.sel?'on':''}" data-i="${i}" onclick="togglePick(${i})">
+      <div class="ava" style="background:${PLAT_COLOR[a.pl]}">${a.nm.slice(0,1)}</div>
+      <div class="pi"><div class="pn">${a.nm}</div><div class="pf"><span class="plogo">${a.pl==='xhs'?'📕':a.pl==='douyin'?'🎵':'⚡'}</span>${PLAT_NAME[a.pl]||a.pl}</div></div>
+    </div>`);
+  });
+}
+function togglePick(i){accounts[i].sel=!accounts[i].sel;renderPicks();scan();}
+renderPicks();
+
+/* ============ 扫描 ============ */
+function activePlatforms(){return accounts.filter(a=>a.sel).map(a=>a.pl).filter(p=>DICT[p]);}
+function scanField(text,plats){
+  const hits=[];
+  plats.forEach(p=>{
+    ['high','mid','low'].forEach(lv=>{
+      DICT[p][lv].forEach(rule=>{
+        const idx=text.indexOf(rule.w);
+        if(idx>=0){hits.push({lv,word:rule.w,suggest:rule.s,plat:p,start:idx,end:idx+rule.w.length});}
+      });
+    });
+  });
+  return hits;
+}
+function scan(){
+  const plats=activePlatforms();
+  const fields={
+    title:{el:document.getElementById('titleIn'),flag:document.getElementById('flag-title'),lim:document.getElementById('titleLim'),max:20},
+    body:{el:document.getElementById('bodyIn'),flag:document.getElementById('flag-body'),lim:document.getElementById('bodyLim'),max:1000},
+    tags:{el:document.getElementById('tagsIn'),flag:document.getElementById('flag-tags'),lim:null,max:200},
+  };
+  let total={high:0,mid:0,low:0};
+  let allHits=[];
+  for(const k in fields){
+    const f=fields[k];const v=f.el.value;
+    if(f.lim)f.lim.textContent=`${v.length} / ${f.max}`;
+    // 提示关（fail-open）：不扫描、不渲染任何提示
+    const hits = mode==='on' ? scanField(v,plats) : [];
+    // 字段轻量角标（inline，点即定位，不占纵向空间）
+    const lv = hits.some(h=>h.lv==='high')?'high':hits.some(h=>h.lv==='mid')?'mid':hits.length?'low':'';
+    if(lv){
+      f.flag.className='field-flag show '+lv;
+      f.flag.textContent=hits.length;
+      f.flag.setAttribute('onclick',`locate('${k}')`);
+    }else{
+      f.flag.className='field-flag';
+      f.flag.textContent='';
+      f.flag.removeAttribute('onclick');
+    }
+    hits.forEach(h=>{total[h.lv]++;allHits.push({...h,field:k});});
+  }
+
+  // 状态条
+  const bar=document.getElementById('cbar');
+  const ic=document.getElementById('cbarIc'),txt=document.getElementById('cbarTxt'),sub=document.getElementById('cbarSub');
+  const platLabel=plats.map(p=>PLAT_NAME[p]).join(' / ')||'无（请选择账号）';
+  if(mode==='off'){
+    bar.className='compliance-bar off';
+    ic.textContent='🔕';txt.textContent='合规提示已关闭（fail-open）';
+    sub.textContent=`${platLabel} · 关闭后不再扫描与提示`;
+  }else if(total.high){
+    bar.className='compliance-bar block';
+    ic.textContent='🔴';txt.textContent=`发现 ${total.high} 处高危违禁词，请重点关注（仍可发布）`;
+    sub.textContent=`${platLabel} · 中危 ${total.mid} · 低危 ${total.low}（提示模式，不阻断）`;
+  }else if(total.mid||total.low){
+    bar.className='compliance-bar warn';
+    ic.textContent='⚠️';txt.textContent=`发现 ${total.mid} 处中危、${total.low} 处低危提示`;
+    sub.textContent=`${platLabel} · 建议修改后再发布`;
+  }else{
+    bar.className='compliance-bar safe';
+    ic.textContent='✅';txt.textContent='合规预检通过，未发现风险词';
+    sub.textContent=`${platLabel} · 可安全发布`;
+  }
+
+  // 集中式合规明细（折叠面板，受控高度，绝不挤压表单）
+  const dl=document.getElementById('detailList');
+  const toggle=document.getElementById('detailToggle');
+  if(mode==='on' && allHits.length){
+    dl.innerHTML=allHits.map(h=>{
+      const lvTxt={high:'高危',mid:'中危',low:'低危'}[h.lv];
+      const sug=h.suggest?`建议改为：<b>${h.suggest}</b>`:'建议手动调整表述';
+      const reason = h.suggest && h.suggest.includes('删除') ? h.suggest
+        : (h.lv==='high' ? '平台违禁/导流风险' : '极限词或夸大宣传风险');
+      return `<div class="hit ${h.lv}">
+        <span class="h-lv">${lvTxt}</span>
+        <div class="h-body">
+          <div class="h-word">命中「${h.word}」<span class="h-plats"><span style="background:${PLAT_COLOR[h.pl]}">${PLAT_NAME[h.pl]}</span></span></div>
+          <div class="h-reason">${reason}</div>
+          <div class="h-suggest">${sug}</div>
+        </div>
+        <button class="h-locate" onclick="locate('${h.field}')">定位</button>
+      </div>`;
+    }).join('');
+    document.getElementById('cdCount').textContent=`高危 ${total.high} · 中危 ${total.mid} · 低危 ${total.low}`;
+    toggle.classList.add('show');
+    toggle.textContent=`查看 ${allHits.length} 处提示 ▾`;
+  }else{
+    dl.innerHTML = mode==='on' ? '<div class="cd-empty">未发现风险词 ✓</div>' : '';
+    toggle.classList.remove('show');
+  }
+  window.__allHits=allHits;
+}
+
+/* 定位：聚焦字段并脉冲 */
+function locate(field){
+  const map={title:'titleIn',body:'bodyIn',tags:'tagsIn'};
+  const el=document.getElementById(map[field]);if(!el)return;
+  el.focus();el.scrollIntoView({behavior:'smooth',block:'center'});
+  el.classList.remove('pulse');void el.offsetWidth;el.classList.add('pulse');
+}
+
+/* 明细面板展开/收起 */
+document.getElementById('detailToggle').addEventListener('click',()=>{
+  document.getElementById('detailPanel').classList.toggle('show');
+});
+
+/* ============ 提交：发布前提示（不阻断） ============ */
+let confirmOffTimer=null;
+document.getElementById('modeSwitch').addEventListener('click',e=>{
+  const b=e.target.closest('.ms');if(!b)return;
+  const target=b.dataset.mode;
+  const offBtn=document.querySelector('#modeSwitch .ms[data-mode="off"]');
+  // 防误关二次确认：点「提示关」后需再次点「确认关闭？」才生效
+  if(target==='off' && mode!=='off'){
+    if(offBtn.dataset.armed!=='1'){
+      offBtn.dataset.armed='1';
+      offBtn.textContent='确认关闭？';
+      offBtn.classList.add('armed');
+      clearTimeout(confirmOffTimer);
+      confirmOffTimer=setTimeout(()=>{
+        offBtn.dataset.armed='';offBtn.textContent='🔕 提示关';offBtn.classList.remove('armed');
+      },2000);
+      return;
+    }
+  }
+  // 取消 armed 态
+  offBtn.dataset.armed='';offBtn.textContent='🔕 提示关';offBtn.classList.remove('armed');
+  mode=target;
+  document.querySelectorAll('#modeSwitch .ms').forEach(x=>x.classList.toggle('active',x===b));
+  document.getElementById('detailPanel').classList.remove('show');
+  scan();
+});
+document.getElementById('submitBtn').addEventListener('click',()=>{
+  scan();
+  const highs=window.__allHits.filter(h=>h.lv==='high');
+  if(highs.length && mode==='on'){
+    document.getElementById('gateList').innerHTML=highs.map(h=>{
+      const sug=h.suggest?` → ${h.suggest}`:'';
+      return `<div class="m-hit"><span class="m-lv">高危</span><div class="m-txt">「<b>${h.word}</b>」 · ${PLAT_NAME[h.pl]}${sug}</div></div>`;
+    }).join('');
+    document.getElementById('gateSub').textContent=`发现 ${highs.length} 处高危内容，请确认是否仍要发布（仅提示，不阻断）`;
+    document.getElementById('gateMask').classList.add('show');
+    return;
+  }
+  if(highs.length && mode==='off'){toast('提示已关闭（fail-open），继续发布');return;}
+  toast('已提交发布任务（预检通过）');
+});
+document.getElementById('testBtn').addEventListener('click',()=>toast('测试发布：仅验证表单，不真正发布'));
+document.getElementById('gateForce').addEventListener('click',()=>{
+  document.getElementById('gateMask').classList.remove('show');
+  toast('已提交发布任务（高危已确认仍要发布）');
+});
+document.getElementById('gateEdit').addEventListener('click',()=>{
+  document.getElementById('gateMask').classList.remove('show');
+  const firstHigh=window.__allHits.find(h=>h.lv==='high');
+  if(firstHigh)locate(firstHigh.field);
+});
+
+/* toast */
+let toastT;function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2400);}
+
+/* 实时扫描绑定 */
+['titleIn','bodyIn','tagsIn'].forEach(id=>{
+  const el=document.getElementById(id);
+  el.addEventListener('input',scan);
+});
+scan();
+</script>
+</body>
+</html>

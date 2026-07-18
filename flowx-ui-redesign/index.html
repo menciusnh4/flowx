@@ -133,6 +133,55 @@ input.in:focus,textarea.in:focus,select.in:focus{border-color:var(--indigo);box-
 .chip.env{background:rgba(99,102,241,.1);color:var(--indigo)}
 .acct .acts{display:flex;gap:8px;border-top:1px solid var(--line-soft);padding-top:11px}
 
+/* ============ 视图切换（平铺 / 列表） ============ */
+.vt-group{display:flex;gap:0;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:#fff;margin-left:6px}
+.vt-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;font-size:12.5px;font-weight:700;color:var(--slate);
+  background:transparent;border:none;cursor:pointer;transition:all .2s var(--ease);border-right:1px solid var(--line)}
+.vt-btn:last-child{border-right:none}
+.vt-btn .vt-ic{font-size:14px;line-height:1}
+.vt-btn:hover{color:var(--indigo);background:rgba(99,102,241,.06)}
+.vt-btn.active{background:linear-gradient(135deg,var(--indigo),var(--indigo-600));color:#fff}
+
+/* ============ 列表视图 ============ */
+.acct-list{background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;box-shadow:var(--shadow-sm)}
+.alist-head{display:grid;grid-template-columns:1.6fr .9fr .7fr .7fr 1.3fr 1.1fr .9fr;gap:10px;align-items:center;
+  padding:11px 16px;background:#fafbfc;border-bottom:1px solid var(--line);font-size:11.5px;font-weight:800;
+  color:var(--muted);letter-spacing:.02em;text-transform:uppercase}
+.alist-row{display:grid;grid-template-columns:1.6fr .9fr .7fr .7fr 1.3fr 1.1fr .9fr;gap:10px;align-items:center;
+  padding:12px 16px;border-bottom:1px solid var(--line-soft);font-size:12.5px;color:var(--ink-2);transition:background .15s var(--ease)}
+.alist-row:last-child{border-bottom:none}
+.alist-row:hover{background:rgba(99,102,241,.04)}
+.alist-row .al-name{display:flex;align-items:center;gap:10px;font-weight:700;color:var(--ink)}
+.alist-row .al-avatar{width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff;flex-shrink:0}
+.alist-row .al-plat{display:flex;align-items:center;gap:6px;font-weight:600}
+.alist-row .al-plat-ic{width:22px;height:22px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;flex-shrink:0}
+.alist-row .al-fans{font-weight:700;color:var(--ink)}
+.alist-row .al-env{font-size:11.5px;color:var(--muted);font-weight:600}
+.alist-row .al-chips{display:flex;flex-wrap:wrap;gap:4px}
+.alist-row .al-chips .chip{font-size:10.5px;padding:2px 7px}
+.alist-row .al-acts{display:flex;gap:6px}
+
+/* ============ 分页 ============ */
+.pager{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:18px;padding:14px 18px;
+  background:var(--glass-strong);border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--shadow-sm);flex-wrap:wrap}
+.pager-info{font-size:12.5px;color:var(--muted);font-weight:600;white-space:nowrap}
+.pager-info b{color:var(--ink);font-weight:800}
+.pager-ctrl{display:flex;align-items:center;gap:4px}
+.pg-btn{min-width:34px;height:34px;padding:0 8px;border-radius:9px;border:1px solid var(--line);background:#fff;
+  font-size:12.5px;font-weight:700;color:var(--slate);cursor:pointer;transition:all .18s var(--ease);
+  display:inline-flex;align-items:center;justify-content:center;line-height:1}
+.pg-btn:hover:not(:disabled){border-color:rgba(99,102,241,.4);color:var(--indigo);background:rgba(99,102,241,.04)}
+.pg-btn.active{background:linear-gradient(135deg,var(--indigo),var(--indigo-600));color:#fff;border-color:transparent;box-shadow:var(--shadow-sm)}
+.pg-btn:disabled{opacity:.4;cursor:not-allowed}
+.pg-ellipsis{padding:0 4px;color:var(--faint);font-weight:700;font-size:13px}
+.pager-size{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:600}
+.pg-select{height:32px;padding:0 26px 0 10px;border:1px solid var(--line);border-radius:9px;font-size:12.5px;font-weight:700;
+  color:var(--ink-2);background:#fff;cursor:pointer;outline:none;transition:all .18s var(--ease);
+  appearance:none;-webkit-appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 8px center}
+.pg-select:focus{border-color:var(--indigo);box-shadow:0 0 0 3px rgba(99,102,241,.13)}
+
 /* 筛选条 */
 .filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
 .pill{padding:7px 14px;border-radius:20px;font-size:12.5px;font-weight:700;background:#fff;border:1px solid var(--line);color:var(--slate);transition:all .2s}
@@ -352,8 +401,40 @@ input.in:focus,textarea.in:focus,select.in:focus{border-color:var(--indigo);box-
         <button class="pill active">全部</button><button class="pill">抖音</button><button class="pill">小红书</button><button class="pill">快手</button><button class="pill">微信视频号</button>
         <span class="spacer"></span>
         <button class="pill">📁 分类：全部</button><button class="pill">🩺 健康：正常</button>
+        <div class="vt-group">
+          <button class="vt-btn active" id="vtGrid" onclick="setAcctView('grid')" title="平铺视图"><span class="vt-ic">▦</span>平铺</button>
+          <button class="vt-btn" id="vtList" onclick="setAcctView('list')" title="列表视图"><span class="vt-ic">≡</span>列表</button>
+        </div>
       </div>
+      <!-- 平铺（卡片网格） -->
       <div class="grid acct-grid" id="acctGrid"></div>
+      <!-- 列表（紧凑行） -->
+      <div class="acct-list" id="acctList" style="display:none">
+        <header class="alist-head">
+          <span class="al-c al-name">账号</span>
+          <span class="al-c al-plat">平台</span>
+          <span class="al-c al-fans">粉丝</span>
+          <span class="al-c al-st">状态</span>
+          <span class="al-c al-cats">分类</span>
+          <span class="al-c al-env">隔离环境</span>
+          <span class="al-c al-ops">操作</span>
+        </header>
+        <div id="acctListBody"></div>
+      </div>
+      <!-- 分页 -->
+      <div class="pager" id="acctPager">
+        <div class="pager-info">共 <b id="pgTotal">23</b> 个账号，第 <b id="pgCur">1</b>/<b id="pgMax">3</b> 页</div>
+        <div class="pager-ctrl" id="pgCtrl"></div>
+        <div class="pager-size">
+          <span>每页</span>
+          <select class="pg-select" id="pgSize" onchange="changePageSize(this.value)">
+            <option value="10" selected>10</option>
+            <option value="20">20</option>
+            <option value="50">50</option>
+          </select>
+          <span>条</span>
+        </div>
+      </div>
     </section>
 
     <!-- ===================== 一键发布 ===================== -->
@@ -621,12 +702,65 @@ const accounts=[
   {nm:'资讯头条',pl:'toutiao',fans:'1.4万',status:'正常',env:'默认环境',cats:['资讯']},
   {nm:'视频号主',pl:'wechat',fans:'5.3万',status:'正常',env:'默认环境',cats:['生活']},
   {nm:'穿搭达人',pl:'xhs',fans:'9.8万',status:'正常',env:'主账号防关联配置',cats:['穿搭']},
+  {nm:'搞笑日常',pl:'douyin',fans:'45.6万',status:'正常',env:'主账号防关联配置',cats:['搞笑']},
+  {nm:'手账生活',pl:'xhs',fans:'3.2万',status:'正常',env:'默认环境',cats:['手账','生活']},
+  {nm:'街舞少年',pl:'kuaishou',fans:'22.1万',status:'正常',env:'默认环境',cats:['舞蹈','音乐']},
+  {nm:'数码评测',pl:'douyin',fans:'8.9万',status:'正常',env:'数码专用环境',cats:['数码','科技']},
+  {nm:'读书笔记',pl:'zhihu',fans:'1.1万',status:'正常',env:'默认环境',cats:['读书']},
+  {nm:'财经观察',pl:'toutiao',fans:'6.7万',status:'正常',env:'默认环境',cats:['财经']},
+  {nm:'宠物日记',pl:'xhs',fans:'18.4万',status:'正常',env:'默认环境',cats:['宠物','生活']},
+  {nm:'健身教练',pl:'douyin',fans:'27.3万',status:'正常',env:'健身环境',cats:['健身']},
+  {nm:'咖啡日常',pl:'xhs',fans:'5.6万',status:'正常',env:'默认环境',cats:['咖啡','生活']},
+  {nm:'历史说书',pl:'zhihu',fans:'4.2万',status:'已过期',env:'默认环境',cats:['历史']},
+  {nm:'萌宠乐园',pl:'kuaishou',fans:'33.8万',status:'正常',env:'默认环境',cats:['宠物']},
+  {nm:'科技前沿',pl:'toutiao',fans:'9.1万',status:'正常',env:'默认环境',cats:['科技']},
+  {nm:'美食探店',pl:'douyin',fans:'51.2万',status:'正常',env:'主账号防关联配置',cats:['美食','探店']},
+  {nm:'手工达人',pl:'xhs',fans:'7.8万',status:'正常',env:'默认环境',cats:['手工','生活']},
+  {nm:'音乐分享',pl:'wechat',fans:'3.4万',status:'正常',env:'默认环境',cats:['音乐']},
 ];
 
-/* 账号卡渲染 */
+/* ============ 账号渲染：视图切换 + 分页 ============ */
+let acctViewMode='grid';   /* 'grid' | 'list' */
+let acctPage=1;            /* 当前页 */
+let acctPageSize=10;       /* 每页条数 */
+
+/* 切换视图 */
+function setAcctView(m){
+  acctViewMode=m;
+  document.getElementById('vtGrid').classList.toggle('active', m==='grid');
+  document.getElementById('vtList').classList.toggle('active', m==='list');
+  document.getElementById('acctGrid').style.display = m==='grid' ? '' : 'none';
+  document.getElementById('acctList').style.display = m==='list' ? '' : 'none';
+  renderAccounts();
+}
+
+/* 每页条数切换 */
+function changePageSize(v){
+  acctPageSize=parseInt(v,10)||10;
+  acctPage=1;
+  renderAccounts();
+}
+
+/* 跳转页码 */
+function goToPage(p){
+  const max=Math.ceil(accounts.length/acctPageSize)||1;
+  if(p<1) p=1; if(p>max) p=max;
+  acctPage=p;
+  renderAccounts();
+}
+
+/* 渲染当前页 */
 function renderAccounts(){
-  const g=document.getElementById('acctGrid');g.innerHTML='';
-  accounts.forEach(a=>{
+  const total=accounts.length;
+  const max=Math.ceil(total/acctPageSize)||1;
+  if(acctPage>max) acctPage=max;
+  const start=(acctPage-1)*acctPageSize;
+  const pageData=accounts.slice(start, start+acctPageSize);
+
+  /* —— 平铺视图 —— */
+  const g=document.getElementById('acctGrid');
+  g.innerHTML='';
+  pageData.forEach(a=>{
     const p=platforms.find(x=>x.id===a.pl);
     const stCls=a.status==='正常'?'ok':'danger';
     g.insertAdjacentHTML('beforeend',`
@@ -640,6 +774,58 @@ function renderAccounts(){
         <button class="btn sm danger" onclick="toast('删除账号')">删除</button></div>
     </div>`);
   });
+
+  /* —— 列表视图 —— */
+  const lb=document.getElementById('acctListBody');
+  lb.innerHTML='';
+  pageData.forEach(a=>{
+    const p=platforms.find(x=>x.id===a.pl);
+    const stCls=a.status==='正常'?'ok':'danger';
+    lb.insertAdjacentHTML('beforeend',`
+    <div class="alist-row">
+      <span class="al-c al-name"><span class="al-avatar" style="background:${p.color}">${p.emoji}</span>${a.nm}</span>
+      <span class="al-c al-plat"><span class="al-plat-ic" style="background:${p.color}">${p.emoji}</span>${p.name}</span>
+      <span class="al-c al-fans">${a.fans}</span>
+      <span class="al-c al-st"><span class="tag ${stCls}">${a.status}</span></span>
+      <span class="al-c al-cats al-chips">${a.cats.map(c=>`<span class="chip">${c}</span>`).join('')}</span>
+      <span class="al-c al-env">${a.env}</span>
+      <span class="al-c al-ops">
+        <button class="btn sm" onclick="toast('打开编辑账号')">编辑</button>
+        <button class="btn sm danger" onclick="toast('删除账号')">删除</button>
+      </span>
+    </div>`);
+  });
+
+  /* —— 分页信息 —— */
+  document.getElementById('pgTotal').textContent=total;
+  document.getElementById('pgCur').textContent=acctPage;
+  document.getElementById('pgMax').textContent=max;
+
+  /* —— 页码按钮 —— */
+  const ctrl=document.getElementById('pgCtrl');
+  let html='';
+  html+=`<button class="pg-btn" onclick="goToPage(1)" ${acctPage<=1?'disabled':''} title="首页">«</button>`;
+  html+=`<button class="pg-btn" onclick="goToPage(${acctPage-1})" ${acctPage<=1?'disabled':''} title="上一页">‹</button>`;
+
+  /* 页码数字：始终显示首页、末页、当前页±1，其余用省略号 */
+  const pages=[];
+  if(max<=7){
+    for(let i=1;i<=max;i++) pages.push(i);
+  } else {
+    pages.push(1);
+    if(acctPage>3) pages.push('...');
+    for(let i=Math.max(2,acctPage-1); i<=Math.min(max-1,acctPage+1); i++) pages.push(i);
+    if(acctPage<max-2) pages.push('...');
+    pages.push(max);
+  }
+  pages.forEach(p=>{
+    if(p==='...'){ html+=`<span class="pg-ellipsis">…</span>`; }
+    else { html+=`<button class="pg-btn ${p===acctPage?'active':''}" onclick="goToPage(${p})">${p}</button>`; }
+  });
+
+  html+=`<button class="pg-btn" onclick="goToPage(${acctPage+1})" ${acctPage>=max?'disabled':''} title="下一页">›</button>`;
+  html+=`<button class="pg-btn" onclick="goToPage(${max})" ${acctPage>=max?'disabled':''} title="末页">»</button>`;
+  ctrl.innerHTML=html;
 }
 renderAccounts();
 

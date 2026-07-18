@@ -1,0 +1,205 @@
+{
+  "platform": "知乎",
+  "version": "1.0",
+  "update_date": "2026-07-18",
+  "categories": [
+    {
+      "category": "引流导流类",
+      "description": "知乎平台严格限制的外部引流词汇",
+      "words": [
+        {
+          "word": "加V",
+          "risk_level": "高",
+          "reason": "引导添加微信",
+          "suggestion": "主页简介留言 / 站内私信沟通"
+        },
+        {
+          "word": "私信我",
+          "risk_level": "高",
+          "reason": "诱导私信交流",
+          "suggestion": "站内信交流 / 评论区讨论"
+        },
+        {
+          "word": "看主页",
+          "risk_level": "中",
+          "reason": "引导查看个人资料",
+          "suggestion": "详见我的动态 / 其他回答"
+        },
+        {
+          "word": "详情见评论",
+          "risk_level": "中",
+          "reason": "评论区导流",
+          "suggestion": "补充内容放在评论区探讨"
+        },
+        {
+          "word": "公众号",
+          "risk_level": "高",
+          "reason": "引导关注其他平台",
+          "suggestion": "我的同名专栏 / 站内关注"
+        },
+        {
+          "word": "知识星球",
+          "risk_level": "中",
+          "reason": "第三方平台导流",
+          "suggestion": "我的付费圈子 / 会员社群"
+        },
+        {
+          "word": "小报童",
+          "risk_level": "中",
+          "reason": "付费社群导流",
+          "suggestion": "我的订阅专栏"
+        },
+        {
+          "word": "链接在简介",
+          "risk_level": "高",
+          "reason": "个人资料页导流",
+          "suggestion": "更多信息见个人动态"
+        },
+        {
+          "word": "扫码进群",
+          "risk_level": "高",
+          "reason": "外部群组导流",
+          "suggestion": "加入站内交流社群"
+        },
+        {
+          "word": "完整版私信",
+          "risk_level": "高",
+          "reason": "诱导私信获取内容",
+          "suggestion": "完整内容已更新在主帖"
+        }
+      ]
+    },
+    {
+      "category": "内容质量类",
+      "description": "影响知乎内容推荐和曝光的词汇",
+      "words": [
+        {
+          "word": "震惊",
+          "risk_level": "高",
+          "reason": "标题党关键词",
+          "suggestion": "值得关注"
+        },
+        {
+          "word": "竟然",
+          "risk_level": "中",
+          "reason": "标题党倾向词",
+          "suggestion": "出乎意料"
+        },
+        {
+          "word": "万万没想到",
+          "risk_level": "中",
+          "reason": "标题党倾向词",
+          "suggestion": "意料之外"
+        },
+        {
+          "word": "必须知道",
+          "risk_level": "中",
+          "reason": "制造焦虑型标题",
+          "suggestion": "建议了解"
+        },
+        {
+          "word": "99%的人都不知道",
+          "risk_level": "高",
+          "reason": "典型标题党",
+          "suggestion": "多数人容易忽略"
+        },
+        {
+          "word": "不转不是中国人",
+          "risk_level": "高",
+          "reason": "道德绑架式标题",
+          "suggestion": "欢迎分享给有需要的朋友"
+        },
+        {
+          "word": "看完沉默了",
+          "risk_level": "中",
+          "reason": "情绪操纵标题",
+          "suggestion": "让人深思"
+        },
+        {
+          "word": "深度好文",
+          "risk_level": "低",
+          "reason": "自我吹捧倾向",
+          "suggestion": "一篇有信息量的长文"
+        },
+        {
+          "word": "建议收藏",
+          "risk_level": "低",
+          "reason": "互动引导词",
+          "suggestion": "方便回看可收藏"
+        },
+        {
+          "word": "干货满满",
+          "risk_level": "低",
+          "reason": "常见运营话术",
+          "suggestion": "内容较实用"
+        }
+      ]
+    },
+    {
+      "category": "社区规范类",
+      "description": "违反知乎社区规范的敏感词汇",
+      "words": [
+        {
+          "word": "引战",
+          "risk_level": "高",
+          "reason": "引发对立争议",
+          "suggestion": "理性讨论不同观点"
+        },
+        {
+          "word": "拉踩",
+          "risk_level": "高",
+          "reason": "拉一踩一引发争议",
+          "suggestion": "客观对比各自优缺点"
+        },
+        {
+          "word": "洗地",
+          "risk_level": "中",
+          "reason": "攻击性网络用语",
+          "suggestion": "中立分析事件"
+        },
+        {
+          "word": "水军",
+          "risk_level": "中",
+          "reason": "指控性词汇",
+          "suggestion": "刷屏评论"
+        },
+        {
+          "word": "杠精",
+          "risk_level": "中",
+          "reason": "人身攻击倾向",
+          "suggestion": "观点相左的朋友"
+        },
+        {
+          "word": "键盘侠",
+          "risk_level": "中",
+          "reason": "标签化攻击",
+          "suggestion": "网友"
+        },
+        {
+          "word": "带节奏",
+          "risk_level": "中",
+          "reason": "操控舆论导向",
+          "suggestion": "影响舆论走向"
+        },
+        {
+          "word": "碰瓷",
+          "risk_level": "中",
+          "reason": "恶意关联炒作",
+          "suggestion": "关联热度话题"
+        },
+        {
+          "word": "蹭热度",
+          "risk_level": "低",
+          "reason": "负面评价用词",
+          "suggestion": "结合热点"
+        },
+        {
+          "word": "营销号",
+          "risk_level": "中",
+          "reason": "账号性质负面标签",
+          "suggestion": "内容账号"
+        }
+      ]
+    }
+  ]
+}
