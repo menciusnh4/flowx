@@ -3,7 +3,9 @@ import path from 'path';
 import { BrowserEnvService } from './BrowserEnvService';
 import { getMainWindow } from '../windows/MainWindow';
 import { addHistory } from './BrowserHistoryService';
-import { extractContentFromView, extractContentFromElement, startElementSelector, stopElementSelector, getElementInfoAtPoint } from './ContentExtractor';
+import { extractContentFromView, extractContentFromElement, startElementSelector, stopElementSelector, getElementInfoAtPoint, extractWithCustomRule } from './ContentExtractor';
+import { siteRuleManager } from './SiteRuleManager';
+import { elementPicker } from './ElementPicker';
 
 /**
  * 清理 URL：移除首尾的反引号、引号等特殊字符（复制粘贴时常见）
@@ -270,6 +272,139 @@ export async function createBrowserView(options?: { url?: string; envId?: string
       },
     }));
 
+    // ========== 自定义规则相关菜单项 ==========
+    const currentUrl = wc.getURL();
+    const currentPublishType = (global as any).__currentPublishType as string | undefined;
+    const customRules = siteRuleManager.getEnabledCustomRules();
+
+    if (customRules.length > 0) {
+      menu.append(new MenuItem({ type: 'separator' }));
+
+      // 分组标题：使用自定义规则提取
+      menu.append(new MenuItem({
+        label: '使用自定义规则提取',
+        enabled: false,
+      }));
+
+      const { siteMatchTypeMatch, siteMatchOnly, typeMatchOnly, others } =
+        siteRuleManager.getRulesForContextMenu(currentUrl, currentPublishType as any);
+
+      // 直接展示匹配的规则（一级菜单）
+      const matchedRules = [...siteMatchTypeMatch, ...siteMatchOnly];
+      const uniqueMatched = Array.from(new Map(matchedRules.map(r => [r.id, r])).values());
+      const matchedList = Array.from(uniqueMatched).slice(0, 5); // 最多显示5个直接展示
+
+      if (matchedList.length > 0) {
+        matchedList.forEach((rule, index) => {
+          const isStar = index < siteMatchTypeMatch.length;
+          menu.append(new MenuItem({
+            label: isStar ? `⭐ ${rule.name}` : rule.name,
+            click: async () => {
+              try {
+                const result = await extractWithCustomRule(viewId, rule.id);
+                if (result) {
+                  notifyRender('browser:extractResult', { viewId, result });
+                } else {
+                  notifyRender('browser:extractError', { viewId, error: '该规则在此页面提取失败' });
+                }
+              } catch (err) {
+                notifyRender('browser:extractError', { viewId, error: (err as Error).message });
+              }
+            },
+          }));
+        });
+      }
+
+      // 全部自定义规则（二级菜单）
+      const allSorted = [...siteMatchTypeMatch, ...siteMatchOnly, ...typeMatchOnly, ...others];
+      const allUnique = Array.from(new Map(allSorted.map(r => [r.id, r])).values());
+
+      if (allUnique.length > 0) {
+        menu.append(new MenuItem({
+          label: '全部自定义规则',
+          submenu: allUnique.map(rule => ({
+            label: rule.name,
+            click: async () => {
+              try {
+                const result = await extractWithCustomRule(viewId, rule.id);
+                if (result) {
+                  notifyRender('browser:extractResult', { viewId, result });
+                } else {
+                  notifyRender('browser:extractError', { viewId, error: '该规则在此页面提取失败' });
+                }
+              } catch (err) {
+                notifyRender('browser:extractError', { viewId, error: (err as Error).message });
+              }
+            },
+          })),
+        }));
+      }
+    }
+
+    // 添加自定义规则
+    menu.append(new MenuItem({
+      label: '➕ 添加自定义规则',
+      submenu: [
+        {
+          label: '📌 拾取标题元素',
+          click: async () => {
+            await elementPicker.startPicker(viewId, 'title', 'single');
+            notifyRender('browser:pickerStarted', { viewId, fieldType: 'title' });
+          },
+        },
+        {
+          label: '📝 拾取正文元素',
+          click: async () => {
+            await elementPicker.startPicker(viewId, 'content', 'single');
+            notifyRender('browser:pickerStarted', { viewId, fieldType: 'content' });
+          },
+        },
+        {
+          label: '🖼️  拾取图片元素',
+          click: async () => {
+            await elementPicker.startPicker(viewId, 'image', 'multi');
+            notifyRender('browser:pickerStarted', { viewId, fieldType: 'image' });
+          },
+        },
+        {
+          label: '🏷️ 拾取话题标签',
+          click: async () => {
+            await elementPicker.startPicker(viewId, 'tags', 'multi');
+            notifyRender('browser:pickerStarted', { viewId, fieldType: 'tags' });
+          },
+        },
+        {
+          label: '👤 拾取作者元素',
+          click: async () => {
+            await elementPicker.startPicker(viewId, 'byline', 'single');
+            notifyRender('browser:pickerStarted', { viewId, fieldType: 'byline' });
+          },
+        },
+        {
+          label: '📅 拾取日期元素',
+          click: async () => {
+            await elementPicker.startPicker(viewId, 'date', 'single');
+            notifyRender('browser:pickerStarted', { viewId, fieldType: 'date' });
+          },
+        },
+        {
+          label: '🗑️  拾取移除元素',
+          click: async () => {
+            await elementPicker.startPicker(viewId, 'remove', 'multi');
+            notifyRender('browser:pickerStarted', { viewId, fieldType: 'remove' });
+          },
+        },
+        { type: 'separator' },
+        {
+          label: '✏️  完整规则编辑器',
+          click: () => {
+            // 通知渲染进程打开规则编辑器，创建新规则
+            notifyRender('browser:openRuleEditor', { viewId, url: currentUrl, mode: 'create' });
+          },
+        },
+      ],
+    }));
+
     menu.append(new MenuItem({ type: 'separator' }));
 
     menu.append(new MenuItem({
@@ -328,6 +463,19 @@ export async function createBrowserView(options?: { url?: string; envId?: string
     if (message === '__FLOX_SELECT_CANCEL__') {
       await stopElementSelector(viewId);
       notifyRender('browser:selectorCancelled', { viewId });
+    }
+    // 拾取器结果
+    if (message.startsWith('__FLOWX_PICKER_RESULT__:')) {
+      try {
+        const data = JSON.parse(message.replace('__FLOWX_PICKER_RESULT__:', ''));
+        notifyRender('browser:pickerResult', { viewId, result: data });
+      } catch (err) {
+        console.error('[BrowserService] 处理拾取结果失败:', err);
+      }
+    }
+    // 拾取器被取消
+    if (message === '__FLOWX_PICKER_CANCEL__') {
+      notifyRender('browser:pickerCancelled', { viewId });
     }
   });
 

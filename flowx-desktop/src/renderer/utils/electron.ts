@@ -25,6 +25,9 @@ import type {
   BrowserHistoryItem,
   ExtractedContent,
   ExtractedImage,
+  CustomSiteRule,
+  PickerFieldType,
+  PickerResult,
 } from '../../types';
 
 type StatusCb = (evt: unknown) => void;
@@ -345,6 +348,43 @@ export const electronApi = {
       return invokeElectron('browser.getImageDataUrl', 'browser:getImageDataUrl', filePath);
     },
 
+    // 自定义站点规则
+    async listCustomRules(): Promise<CustomSiteRule[]> {
+      return invokeElectron('browser.listCustomRules', 'browser:listCustomRules');
+    },
+    async getCustomRule(id: string): Promise<CustomSiteRule | null> {
+      return invokeElectron('browser.getCustomRule', 'browser:getCustomRule', id);
+    },
+    async createCustomRule(data: Omit<CustomSiteRule, 'id' | 'createdAt' | 'updatedAt' | 'useCount'>): Promise<CustomSiteRule> {
+      return invokeElectron('browser.createCustomRule', 'browser:createCustomRule', data);
+    },
+    async updateCustomRule(id: string, patch: Partial<CustomSiteRule>): Promise<CustomSiteRule | null> {
+      return invokeElectron('browser.updateCustomRule', 'browser:updateCustomRule', id, patch);
+    },
+    async deleteCustomRule(id: string): Promise<boolean> {
+      return invokeElectron('browser.deleteCustomRule', 'browser:deleteCustomRule', id);
+    },
+    async toggleCustomRule(id: string): Promise<boolean> {
+      return invokeElectron('browser.toggleCustomRule', 'browser:toggleCustomRule', id);
+    },
+    async testCustomRule(
+      viewId: string,
+      rule: Partial<CustomSiteRule> & { contentSelector: string },
+    ): Promise<ExtractedContent | null> {
+      return invokeElectron('browser.testCustomRule', 'browser:testCustomRule', viewId, rule);
+    },
+    async applyCustomRule(viewId: string, ruleId: string): Promise<ExtractedContent | null> {
+      return invokeElectron('browser.applyCustomRule', 'browser:applyCustomRule', viewId, ruleId);
+    },
+
+    // 元素拾取器
+    async startPicker(viewId: string, fieldType: PickerFieldType, mode?: 'single' | 'multi'): Promise<boolean> {
+      return invokeElectron('browser.startPicker', 'browser:startPicker', viewId, fieldType, mode);
+    },
+    async stopPicker(viewId: string): Promise<boolean> {
+      return invokeElectron('browser.stopPicker', 'browser:stopPicker', viewId);
+    },
+
     onPageTitleUpdated(cb: (data: { viewId: string; title: string }) => void): () => void {
       const e = getElectronOrThrow() as { browser?: { onPageTitleUpdated: (cb: never) => () => void } };
       return e.browser?.onPageTitleUpdated?.(cb as never) ?? (() => { /* noop */ });
@@ -388,6 +428,18 @@ export const electronApi = {
     onSelectorCancelled(cb: (data: { viewId: string }) => void): () => void {
       const e = getElectronOrThrow() as { browser?: { onSelectorCancelled: (cb: never) => () => void } };
       return e.browser?.onSelectorCancelled?.(cb as never) ?? (() => { /* noop */ });
+    },
+    onPickerResult(cb: (data: { viewId: string; result: PickerResult }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onPickerResult: (cb: never) => () => void } };
+      return e.browser?.onPickerResult?.(cb as never) ?? (() => { /* noop */ });
+    },
+    onPickerStarted(cb: (data: { viewId: string; fieldType: PickerFieldType }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onPickerStarted: (cb: never) => () => void } };
+      return e.browser?.onPickerStarted?.(cb as never) ?? (() => { /* noop */ });
+    },
+    onPickerCancelled(cb: (data: { viewId: string }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onPickerCancelled: (cb: never) => () => void } };
+      return e.browser?.onPickerCancelled?.(cb as never) ?? (() => { /* noop */ });
     },
 
     removePageTitleUpdatedListener(cb: (data: { viewId: string; title: string }) => void): void {

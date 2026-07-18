@@ -941,7 +941,35 @@ function iconOf(platform?: string): string {
           />
         </el-form-item>
 
-        <el-form-item v-if="contentType !== 'article'" label="素材">
+        <el-form-item v-if="contentType === 'image'" label="素材">
+          <div class="image-upload-actions">
+            <el-button @click="pickMediaFiles">选择图片</el-button>
+            <el-button
+              v-if="mediaFiles.length > 0"
+              type="danger"
+              plain
+              size="small"
+              @click="clearMediaFiles"
+            >清空图片</el-button>
+            <span v-if="mediaFiles.length > 0" style="color:#909399; font-size:12px;">
+              已选择 {{ mediaFiles.length }} 张图片
+            </span>
+          </div>
+          <div class="image-grid" v-if="mediaFiles.length > 0">
+            <div v-for="(f, idx) in mediaFiles" :key="idx" class="image-item">
+              <div class="image-thumb">
+                <img v-if="imageUrlCache[f]" :src="imageUrlCache[f]" :alt="'图片' + (idx + 1)" />
+                <div v-else class="image-loading">加载中...</div>
+              </div>
+              <div class="image-actions">
+                <span class="image-index">{{ idx + 1 }}</span>
+                <el-button size="small" type="danger" link @click="removeMediaFile(f)">删除</el-button>
+              </div>
+            </div>
+          </div>
+        </el-form-item>
+
+        <el-form-item v-if="contentType === 'video'" label="素材">
           <el-button @click="pickMediaFiles">选择文件</el-button>
           <span v-if="mediaFiles.length > 0" style="margin-left:8px; color:#909399; font-size:12px;">
             已选择 {{ mediaFiles.length }} 个文件
@@ -1190,6 +1218,12 @@ function iconOf(platform?: string): string {
   margin: 0;
 }
 .article-cover-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.image-upload-actions {
   display: flex;
   align-items: center;
   gap: 8px;

@@ -64,7 +64,7 @@ export function setupLogger() {
   log.transports.file.level = 'info';
   log.transports.file.maxSize = 20 * 1024 * 1024; // 单文件最大 20MB
   log.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}';
-  log.transports.file.resolvePath = (variables: any) => {
+  log.transports.file.resolvePathFn = (variables: any) => {
     const dateStr = getDateStr();
     return path.join(logsDir, `main-${dateStr}.log`);
   };
@@ -76,7 +76,7 @@ export function setupLogger() {
   publishLogger.transports.file.maxSize = 30 * 1024 * 1024; // 单文件最大 30MB
   publishLogger.transports.file.format =
     '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] [{processType}] {text}';
-  publishLogger.transports.file.resolvePath = (variables: any) => {
+  publishLogger.transports.file.resolvePathFn = (variables: any) => {
     const dateStr = getDateStr();
     return path.join(logsDir, `publish-${dateStr}.log`);
   };

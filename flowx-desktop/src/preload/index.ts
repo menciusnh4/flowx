@@ -24,6 +24,12 @@ import type {
   BrowserHistoryItem,
   ExtractedContent,
   ExtractedImage,
+  CustomSiteRule,
+  PickerFieldType,
+  PickerResult,
+  RuleDraft,
+  RuleTestResult,
+  PublishContentType,
 } from '../types';
 
 // Preload 脚本：通过 contextBridge 暴露安全 API
@@ -204,6 +210,29 @@ contextBridge.exposeInMainWorld('electron', {
     downloadImages: (imageUrls: string[], envId?: string | null): Promise<string[]> => invoke('browser:downloadImages', imageUrls, envId),
     getImageDataUrl: (filePath: string): Promise<string> => invoke('browser:getImageDataUrl', filePath),
 
+    // 自定义站点规则
+    listCustomRules: (): Promise<CustomSiteRule[]> => invoke('browser:listCustomRules'),
+    getCustomRule: (id: string): Promise<CustomSiteRule | null> => invoke('browser:getCustomRule', id),
+    createCustomRule: (data: Omit<CustomSiteRule, 'id' | 'createdAt' | 'updatedAt' | 'useCount'>): Promise<CustomSiteRule> =>
+      invoke('browser:createCustomRule', data),
+    updateCustomRule: (id: string, patch: Partial<CustomSiteRule>): Promise<CustomSiteRule | null> =>
+      invoke('browser:updateCustomRule', id, patch),
+    deleteCustomRule: (id: string): Promise<boolean> => invoke('browser:deleteCustomRule', id),
+    toggleCustomRule: (id: string): Promise<boolean> => invoke('browser:toggleCustomRule', id),
+    testCustomRule: (viewId: string, rule: Partial<CustomSiteRule> & { contentSelector: string }): Promise<ExtractedContent | null> =>
+      invoke('browser:testCustomRule', viewId, rule),
+    applyCustomRule: (viewId: string, ruleId: string): Promise<ExtractedContent | null> =>
+      invoke('browser:applyCustomRule', viewId, ruleId),
+
+    // 元素拾取器
+    startPicker: (viewId: string, fieldType: PickerFieldType, mode?: 'single' | 'multi'): Promise<boolean> =>
+      invoke('browser:startPicker', viewId, fieldType, mode),
+    stopPicker: (viewId: string): Promise<boolean> => invoke('browser:stopPicker', viewId),
+
+    // 发布类型同步
+    setCurrentPublishType: (type: PublishContentType): Promise<boolean> =>
+      invoke('browser:setCurrentPublishType', type),
+
     // 订阅页面状态更新
     onPageTitleUpdated: (cb: (data: { viewId: string; title: string }) => void): (() => void) => {
       const handler = (_event: unknown, payload: { viewId: string; title: string }) => cb(payload);
@@ -259,6 +288,23 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_event: unknown, payload: { viewId: string }) => cb(payload);
       ipcRenderer.on('browser:selectorCancelled', handler);
       return () => ipcRenderer.removeListener('browser:selectorCancelled', handler);
+    },
+
+    // 拾取器事件
+    onPickerStarted: (cb: (data: { viewId: string; fieldType: PickerFieldType }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string; fieldType: PickerFieldType }) => cb(payload);
+      ipcRenderer.on('browser:pickerStarted', handler);
+      return () => ipcRenderer.removeListener('browser:pickerStarted', handler);
+    },
+    onPickerResult: (cb: (data: { viewId: string; result: PickerResult }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string; result: PickerResult }) => cb(payload);
+      ipcRenderer.on('browser:pickerResult', handler);
+      return () => ipcRenderer.removeListener('browser:pickerResult', handler);
+    },
+    onPickerCancelled: (cb: (data: { viewId: string }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string }) => cb(payload);
+      ipcRenderer.on('browser:pickerCancelled', handler);
+      return () => ipcRenderer.removeListener('browser:pickerCancelled', handler);
     },
 
     // 移除监听器的便捷方法
