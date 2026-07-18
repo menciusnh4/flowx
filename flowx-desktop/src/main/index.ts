@@ -5,6 +5,7 @@ import { createMainWindow, getMainWindow, getAppIcon } from './windows/MainWindo
 import { setupLogger, logger } from './utils/logger';
 import { initStore } from './store/SecureStore';
 import { AccountService } from './services/AccountService';
+import { BrowserEnvService } from './services/BrowserEnvService';
 import { PublishEngine } from './services/PublishEngine';
 import { ApiServer } from './services/ApiServer';
 
@@ -90,6 +91,26 @@ async function bootstrap() {
 
   // 初始化存储（加密）
   initStore();
+
+  // 全局代理账密静默授权兜底（session 级监听已在 BrowserEnvService.applyEnvironment 中挂载，
+  // 此处作为全局兜底：当某些 session 未挂监听时，按 host:port 匹配代理配置自动填充账密）
+  app.on('login', (event, _webContents, _details, authInfo, callback) => {
+    if (!authInfo.isProxy) return;
+    const proxies = BrowserEnvService.listProxies();
+    for (const proxy of proxies) {
+      if (
+        proxy.host === authInfo.host &&
+        proxy.port === authInfo.port &&
+        proxy.username &&
+        proxy.password
+      ) {
+        event.preventDefault();
+        callback(proxy.username, proxy.password);
+        logger.info(`[ProxyAuth] 全局代理认证静默填充: ${proxy.host}:${proxy.port} (user=${proxy.username})`);
+        return;
+      }
+    }
+  });
 
   // 初始化业务服务
   AccountService.init();

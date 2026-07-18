@@ -329,6 +329,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh, Link, Monitor, Setting, Folder, Delete, Search } from '@element-plus/icons-vue';
 import { useAccountStore } from '../stores/account';
 import { useEnvStore } from '../stores/env';
+import { useWorkspaceStore } from '../stores/workspace';
 import { electronApi } from '../utils/electron';
 import type { AccountInfo, AccountCategory } from '../../types';
 
@@ -382,6 +383,7 @@ function platChipStyle(p: string): Record<string, string> {
 
 const accountStore = useAccountStore();
 const envStore = useEnvStore();
+const workspaceStore = useWorkspaceStore();
 
 const authVisible = ref(false);
 const authPlatform = ref<string>('xiaohongshu');
@@ -571,16 +573,19 @@ async function refresh() {
   ElMessage.success('账号列表已刷新');
 }
 
-// 用已保存的登录态打开平台创作中心
+// 用已保存的登录态打开平台创作中心（M3：内嵌主窗口，替代弹窗）
 async function openCreator(row: AccountInfo) {
   openingId.value = row.id;
   try {
-    const r = await electronApi.openCreator(row.id);
-    if (r.ok) {
-      ElMessage.success(
-        `已打开创作中心（注入 cookies=${r.injected}，跳过反爬 cookie=${r.skipped}，失败=${r.failed}）`,
-      );
-    } else {
+    // 1) 在全局任务选项卡内打开/激活该账号的创作中心 tab（渲染端）
+    workspaceStore.openAccountTab(row.id, {
+      title: row.nickname,
+      icon: PLATFORM_EMOJI[row.platform] || '📕',
+      envBadge: row.envId ? '🔒' : undefined,
+    });
+    // 2) 通知主进程预创建/复用内嵌隔离视图
+    const r = await electronApi.openAccountTab(row.id);
+    if (!r.ok) {
       ElMessage.error(`打开失败: ${r.error || '未知错误'}`);
     }
   } catch (e) {
@@ -589,6 +594,19 @@ async function openCreator(row: AccountInfo) {
     openingId.value = '';
   }
 }
+
+/** 平台 → tab 图标 emoji（与信息条/任务条视觉一致） */
+const PLATFORM_EMOJI: Record<string, string> = {
+  xiaohongshu: '📕',
+  douyin: '🎵',
+  kuaishou: '⚡',
+  bilibili: '📺',
+  wechat_channels: '🎬',
+  wechat_official: '💬',
+  weibo: '🔶',
+  zhihu: '💡',
+  toutiao: '📰',
+};
 
 async function remove(row: AccountInfo) {
   try {

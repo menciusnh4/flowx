@@ -68,6 +68,11 @@ export const electronApi = {
     return invokeElectron('account.openCreator', 'account:openCreator', accountId);
   },
 
+  /** M3：以「内嵌主窗口」方式打开创作中心（替代弹窗），主进程预创建隔离视图 */
+  async openAccountTab(accountId: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+    return invokeElectron('account.openAccountTab', 'account:openAccountTab', accountId);
+  },
+
   // 分类管理
   async listCategories(): Promise<AccountCategory[]> {
     return invokeElectron('account.listCategories', 'account:listCategories');
@@ -415,6 +420,41 @@ export const electronApi = {
     },
     async setSettings(patch: { promptEnabled?: boolean }): Promise<ComplianceSettings> {
       return invokeElectron('compliance.setSettings', 'compliance:setSettings', patch);
+    },
+  },
+
+  // 账号创作中心（内嵌主窗口，DOM <webview> 方案）
+  workspaceWebview: {
+    async ensure(accountId: string, title: string): Promise<{ ok: boolean; url?: string; error?: string; env?: { ok: boolean; reason?: string }; userAgent?: string }> {
+      return invokeElectron('workspaceWebview.ensure', 'workspaceWebview:ensure', accountId, title);
+    },
+    async close(accountId: string): Promise<void> {
+      return invokeElectron('workspaceWebview.close', 'workspaceWebview:close', accountId);
+    },
+    async getGuestPreloadPath(): Promise<string> {
+      return invokeElectron('workspaceWebview.getGuestPreloadPath', 'workspaceWebview:getGuestPreloadPath');
+    },
+    /** 向主进程注册弹窗拦截（webview dom-ready 后调用，传入 getWebContentsId() 返回的 wcId 和 accountId） */
+    async registerPopups(wcId: number, accountId: string): Promise<void> {
+      return invokeElectron('workspaceWebview.registerPopups', 'workspaceWebview:registerPopups', wcId, accountId);
+    },
+    /** 监听主进程回传的新 inner tab 请求（竞品方案：主进程拦截弹窗 → IPC 回传渲染层建 tab，含 accountId 用于多账号过滤） */
+    onNewInnerTab(callback: (data: { url: string; referrer?: string; accountId: string }) => void): () => void {
+      const electron = (window as any).electron;
+      if (!electron?.workspaceWebview?.onNewInnerTab) return () => {};
+      return electron.workspaceWebview.onNewInnerTab((data: any) => callback(data));
+    },
+  },
+
+  // 任务选项卡布局持久化（M4：存盘 / 恢复）
+  // 注意：preload 暴露的命名空间是 window.electron.workspaceState.{save,load}
+  //       invokeElectron 的第二个参数 pathA 必须与之匹配（namespace:method）
+  workspaceState: {
+    async save(state: unknown): Promise<void> {
+      return invokeElectron('workspaceState.save', 'workspaceState:save', state);
+    },
+    async load(): Promise<unknown> {
+      return invokeElectron('workspaceState.load', 'workspaceState:load');
     },
   },
 

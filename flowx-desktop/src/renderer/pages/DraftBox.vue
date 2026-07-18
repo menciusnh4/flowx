@@ -3,10 +3,12 @@ import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useDraftStore } from '../stores/draft'
+import { useWorkspaceStore } from '../stores/workspace'
 import type { PublishDraft, ContentType } from '../../types'
 
 const router = useRouter()
 const draftStore = useDraftStore()
+const workspaceStore = useWorkspaceStore()
 
 const loading = ref(false)
 const activeTab = ref<'all' | ContentType>('all')
@@ -76,13 +78,16 @@ function editDraft(draft: PublishDraft) {
     draft.contentType === 'image' || draft.contentType === 'article'
       ? draft.contentType
       : 'video'
+  // 右侧由任务选项卡驱动：开独立草稿 tab，draftId 走 props（不丢参数）
   router.push({ path: `/publish/${type}`, query: { draftId: draft.id } })
+  workspaceStore.openDraftTab({ id: draft.id, contentType: type, title: draft.title })
 }
 
 // 在浏览器中打开（如果有 sourceUrl）
 function openInBrowser(draft: PublishDraft) {
   if (draft.sourceUrl) {
     router.push({ path: '/browser', query: { url: draft.sourceUrl } })
+    workspaceStore.openSystemTab('/browser', { url: draft.sourceUrl })
   }
 }
 
@@ -106,6 +111,7 @@ async function deleteDraft(draft: PublishDraft) {
 // 新建草稿
 function newDraft() {
   router.push('/publish/video')
+  workspaceStore.openSystemTab('/publish/video')
 }
 </script>
 

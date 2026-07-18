@@ -123,12 +123,17 @@ export async function createMainWindow(): Promise<BrowserWindow> {
     icon: appIcon,
     webPreferences: {
       preload: preloadPath,
-      sandbox: true,
+      // 关键约束：<webview> 标签在 sandboxed 渲染进程中不被 Electron 支持，
+      // 必须关闭 sandbox 才能用 webview 内嵌创作中心（否则 webview 不被升级、右侧空白）。
+      // 安全由 contextIsolation + contextBridge（preload 仅暴露受限 API）+ nodeIntegration:false 兜底。
+      sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
       nodeIntegrationInWorker: false,
       webSecurity: true,
       spellcheck: false,
+      // 允许渲染层用 <webview> 标签内嵌创作中心（第三方平台），替代原生 WebContentsView 层
+      webviewTag: true,
     },
   });
 
@@ -153,6 +158,20 @@ export async function createMainWindow(): Promise<BrowserWindow> {
   }
 
   mainWindow.once('ready-to-show', () => mainWindow?.show());
+
+  // 主窗口 DevTools：F12 / Ctrl+Shift+I → 以 detach 独立窗口打开，
+  // 避免被右侧创作中心原生 WebContentsView 层级遮挡（docked 模式会被盖住）。
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'F12' && input.type === 'keyDown') {
+      event.preventDefault();
+      if (mainWindow!.webContents.isDevToolsOpened()) mainWindow!.webContents.closeDevTools();
+      else mainWindow!.webContents.openDevTools({ mode: 'detach' });
+    } else if (input.key === 'I' && input.control && input.shift && input.type === 'keyDown') {
+      event.preventDefault();
+      if (mainWindow!.webContents.isDevToolsOpened()) mainWindow!.webContents.closeDevTools();
+      else mainWindow!.webContents.openDevTools({ mode: 'detach' });
+    }
+  });
 
   // 如果首次加载失败，给出中文诊断页 + 刷新按钮，避免白屏
   mainWindow.webContents.on('did-fail-load', (_e, _code, _desc, url) => {

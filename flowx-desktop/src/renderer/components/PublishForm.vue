@@ -267,6 +267,8 @@ onMounted(async () => {
         selectedIds[id] = true
       })
     }
+    // 建立脏检测基线（M4：未保存关闭确认）
+    resetBaseline()
   } catch (e) {
     console.error('[PublishForm] init failed', e)
   }
@@ -292,6 +294,33 @@ const currentAccounts = computed(() => {
 const publishFilterCategoryId = ref<string>('')
 const publishTimeType = ref<'now' | 'scheduled'>('now')
 const scheduledTime = ref<Date | null>(null)
+
+// ============ 脏标记（M4：未保存关闭确认） ============
+/** 序列化当前表单关键字段，用于脏检测比对 */
+function snapshot(): string {
+  return JSON.stringify({
+    contentType: contentType.value,
+    title: title.value,
+    mediaFiles: [...mediaFiles.value].sort(),
+    content: content.value,
+    summary: summary.value,
+    coverImage: coverImage.value,
+    tagsRaw: tagsRaw.value,
+    markdownContent: markdownContent.value,
+    contentMode: contentMode.value,
+    publishTimeType: publishTimeType.value,
+    scheduledTime: scheduledTime.value ? scheduledTime.value.getTime() : null,
+    publishFilterCategoryId: publishFilterCategoryId.value,
+    selectedIds: Object.keys(selectedIds).filter((k) => selectedIds[k]).sort(),
+  })
+}
+/** 基线：当前为「干净」状态。草稿加载/初始化后调用以重建基线 */
+const baseline = ref('')
+function resetBaseline() {
+  baseline.value = snapshot()
+}
+/** 相对基线是否有改动（基线未建立前视为干净） */
+const isDirty = computed(() => baseline.value !== '' && snapshot() !== baseline.value)
 
 const visibleAccounts = computed(() => {
   const list = currentAccounts.value
@@ -817,6 +846,8 @@ function fillForm(data: Partial<PublishRequest>) {
     data.accountIds.forEach((id) => { selectedIds[id] = true })
   }
   notifyChange()
+  // 草稿/外部数据载入后重建基线，避免「刚加载」就被判为脏（M4）
+  resetBaseline()
 }
 
 /** 获取当前表单数据 */
@@ -945,7 +976,7 @@ async function clearForm() {
   ElMessage.success('已清空表单')
 }
 
-defineExpose({ fillForm, getFormData, insertTextAtCursor, addImages, insertImagePlaceholder })
+defineExpose({ fillForm, getFormData, insertTextAtCursor, addImages, insertImagePlaceholder, isDirty })
 
 // ============ 工具函数 ============
 function platformName(p?: string): string {

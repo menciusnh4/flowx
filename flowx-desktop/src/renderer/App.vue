@@ -109,42 +109,28 @@
 
     <!-- ============ 内容区 ============ -->
     <div class="content">
-      <header class="topbar">
-        <div class="topbar-title">{{ currentTitle }}</div>
-        <el-input
-          v-model="search"
-          class="topbar-search"
-          placeholder="搜索…"
-          :prefix-icon="Search"
-          clearable
-        />
-        <div class="win-dots">
-          <i class="r"></i><i class="y"></i><i class="g"></i>
-        </div>
-      </header>
-
-      <main class="app-main">
-        <router-view v-slot="{ Component }">
-          <transition name="fade" mode="out-in">
-            <component :is="Component" />
-          </transition>
-        </router-view>
-      </main>
+      <!-- M1：顶部常驻任务选项卡栏（搜索 / 窗口点已迁入） -->
+      <WorkspaceTabBar />
+      <!-- M1：按 tabId 实例渲染，切换不卸载（状态保持核心） -->
+      <WorkspaceView />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Search } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
 import { electronApi } from './utils/electron';
+import { useWorkspaceStore } from './stores/workspace';
+import WorkspaceTabBar from './components/WorkspaceTabBar.vue';
+import WorkspaceView from './components/WorkspaceView.vue';
 
 const route = useRoute();
 const router = useRouter();
 const version = ref<string>('');
-const search = ref('');
 const settingsOpen = ref(true);
+const tabStore = useWorkspaceStore();
 
 const primaryNav = [
   { index: '/dashboard', label: '仪表盘', icon: '🏠' },
@@ -180,13 +166,15 @@ const workbenchOpen = ref(true);
 const isPubActive = computed(() => route.path.startsWith('/publish'));
 const isSettingsActive = computed(() => route.path.startsWith('/settings'));
 const isWorkbenchActive = computed(() => route.path === '/drafts' || route.path === '/browser');
-const currentTitle = computed(() => (route.meta?.title as string) || 'FlowX');
 
 function go(index: string) {
   if (index.startsWith('/publish')) pubOpen.value = true;
   if (index.startsWith('/settings')) settingsOpen.value = true;
   if (index === '/drafts' || index === '/browser') workbenchOpen.value = true;
+  // URL 同步（深链/高亮）+ 任务 tab 开/激活
   router.push(index);
+  const ok = tabStore.openSystemTab(index);
+  if (!ok) ElMessage.warning(`任务页签已达上限（${tabStore.MAX}）`);
 }
 function togglePub() {
   pubOpen.value = !pubOpen.value;
@@ -199,6 +187,8 @@ function toggleWorkbench() {
 }
 
 onMounted(async () => {
+  // 不再恢复上次的选项卡状态；每次启动只开默认仪表盘
+  tabStore.ensureDefault();
   try {
     const info = await electronApi.getSystemInfo();
     version.value = info.version;
@@ -206,4 +196,6 @@ onMounted(async () => {
     version.value = '0.1.0';
   }
 });
+
+// 不再自动保存/恢复任务选项卡状态（用户要求完全去掉自动恢复）
 </script>

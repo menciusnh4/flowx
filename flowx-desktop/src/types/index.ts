@@ -473,3 +473,19 @@ export interface ExtractedContent {
   /** 是否仅提取了图片（无文本内容） */
   isImageOnly?: boolean;
 }
+
+/** 账号创作中心内嵌 webview 共享类型（主进程 / 渲染进程） */
+export interface WorkspaceWebviewTab {
+  id: string;
+  title: string;
+  url: string;
+  isLoading: boolean;
+}
+
+/** 占位矩形（窗口坐标，原点 0,0） */
+export interface WorkspaceWebviewRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}

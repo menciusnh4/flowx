@@ -1,5 +1,6 @@
 import { safeInvoke } from './index';
 import { AccountService } from '../services/AccountService';
+import { workspaceWebViewController } from '../services/WorkspaceWebViewController';
 import { PLATFORMS, listPlatforms } from '../services/PlatformRegistry';
 import type { PlatformType } from '../../types';
 
@@ -31,8 +32,15 @@ export function registerAccountIpc(): void {
   // 手动刷新 token
   safeInvoke('account:refresh', (id: string) => AccountService.refreshToken(id));
 
-  // 用已保存登录态打开平台创作中心窗口（验证登录态）
+  // 用已保存登录态打开平台创作中心窗口（验证登录态）—— 过渡期保留，M3 起入口改为内嵌
   safeInvoke('account:openCreator', (id: string) => AccountService.openCreatorPlatform(id));
+
+  // M3：以「内嵌主窗口 WebContentsView」方式打开创作中心（替代弹窗），并预创建隔离视图
+  safeInvoke('account:openAccountTab', (id: string) => {
+    const cred = AccountService.getCredential(id);
+    const title = cred?.nickname || '创作中心';
+    return workspaceWebViewController.ensure(id, title);
+  });
 
   // 单个账号健康检测（静默检测，不弹用户可编辑的窗口）
   safeInvoke('account:healthCheck', (id: string) => AccountService.checkAccountHealth(id));

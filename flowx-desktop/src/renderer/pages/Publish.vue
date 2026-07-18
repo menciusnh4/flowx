@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { usePublishStore } from '../stores/publish'
 import { useAccountStore } from '../stores/account'
 import { useDraftStore } from '../stores/draft'
+import { useWorkspaceStore } from '../stores/workspace'
 import { electronApi } from '../utils/electron'
 import type { PublishRequest, PlatformType, PublishDraft } from '../../types'
 import PublishForm from '../components/PublishForm.vue'
@@ -13,9 +14,13 @@ const route = useRoute()
 const accountStore = useAccountStore()
 const publishStore = usePublishStore()
 const draftStore = useDraftStore()
+const workspaceStore = useWorkspaceStore()
 
-// 根据路由派生内容类型：/publish/video|image|article
+// 任务选项卡模式下由 tab 透传 contentType（区分视频/图文/文章），优先级高于路由；
+// 直接深链（无 tab）时回退到 route.path 推断，保证向后兼容
+const props = defineProps<{ contentType?: 'video' | 'image' | 'article'; draftId?: string }>()
 const formContentType = computed<'video' | 'image' | 'article'>(() => {
+  if (props.contentType) return props.contentType
   if (route.path === '/publish/image') return 'image'
   if (route.path === '/publish/article') return 'article'
   return 'video'
@@ -30,6 +35,18 @@ const openTaskIds = ref<string[]>([])
 
 // ============ PublishForm 引用 ============
 const publishFormRef = ref<InstanceType<typeof PublishForm> | null>(null)
+
+// ============ M4：脏标记 → 任务选项卡关闭确认 ============
+// 发布页有未保存内容时，通知工作区 store 打脏点（tab 关闭时弹确认）
+// 用 activeId 而非 sys:${route.path}：草稿 tab 的 id 是 draft:${id}，必须打在真实 tab 上
+watch(
+  () => publishFormRef.value?.isDirty,
+  (d) => {
+    if (typeof d !== 'boolean') return
+    workspaceStore.markDirty(workspaceStore.activeId, d)
+  },
+  { immediate: true },
+)
 
 // ============ 初始化 ============
 onMounted(async () => {
@@ -48,8 +65,8 @@ onMounted(async () => {
   }
   console.log('[Publish.vue] init done. accountsCount=', accountStore.accounts.length)
 
-  // 如果 URL 带了 draftId，加载草稿
-  const draftId = route.query.draftId as string
+  // 如果带了 draftId（tab.props 或 URL 深链），加载草稿
+  const draftId = props.draftId ?? (route.query.draftId as string)
   if (draftId) {
     await loadDraft(draftId)
   }

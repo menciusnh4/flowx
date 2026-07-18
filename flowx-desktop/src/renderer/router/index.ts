@@ -28,6 +28,13 @@ export const router = createRouter({
   routes,
 });
 
+/** 路径 → 组件加载器；供 WorkspaceView 按 tab.route 解析页面组件（与 <router-view> 解耦） */
+export const routeComponentMap: Record<string, RouteRecordRaw['component']> = Object.fromEntries(
+  routes
+    .filter((r) => r.path && (r as any).component && !(r as any).redirect)
+    .map((r) => [r.path as string, (r as any).component]),
+);
+
 router.beforeEach((to, _from, next) => {
   if (to.meta?.title) {
     document.title = `${to.meta.title as string} - FlowX`;

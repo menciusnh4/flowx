@@ -2,7 +2,6 @@
    FlowX 设计系统 · 全局样式（清新科技风 · 靛蓝→天蓝）
    落地自 flowx-ui-redesign 原型，对齐 feature/ui-redesign
    ============================================================ */
-@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 
 :root {
   /* ---- 品牌渐变 ---- */

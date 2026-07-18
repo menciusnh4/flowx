@@ -43,7 +43,15 @@ export default defineConfig(({ command }) => {
       },
     },
     plugins: [
-      vue(),
+      vue({
+        template: {
+          compilerOptions: {
+            // 让 Vue 把 <webview> 当作原生自定义元素编译，而非尝试解析为组件。
+            // 否则 Electron 的 webview 标签升级机制不触发，创作中心内嵌区域会空白。
+            isCustomElement: (tag) => tag === 'webview',
+          },
+        },
+      }),
       raiseDevServerMaxListeners(),
       electron([
         {
@@ -71,7 +79,7 @@ export default defineConfig(({ command }) => {
           },
         },
         {
-          // preload 脚本
+          // preload 脚本（主窗口）
           entry: 'src/preload/index.ts',
           onstart(options) {
             // 热更新：preload 重编译后重载窗口
@@ -84,6 +92,26 @@ export default defineConfig(({ command }) => {
               minify: false,
               rollupOptions: {
                 external: ['electron'],
+              },
+            },
+          },
+        },
+        {
+          // 创作中心 <webview> 访客预加载脚本（Guest Preload）
+          // 运行在 webview 的独立 Guest Process，sandbox 兼容（仅 contextBridge + ipcRenderer.sendToHost）。
+          // 宿主渲染层通过 :preload 指向其绝对路径；本条目只负责构建产物，不重启窗口。
+          entry: 'src/main/preload/workspace-guest.ts',
+          onstart() {
+            // 仅重新构建产物，不触发主窗口 reload（避免创作中心 webview 重建丢状态）
+          },
+          vite: {
+            build: {
+              outDir: 'dist-electron/preload-guest',
+              sourcemap: true,
+              minify: false,
+              rollupOptions: {
+                external: ['electron'],
+                output: { format: 'cjs' },
               },
             },
           },

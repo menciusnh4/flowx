@@ -77,6 +77,9 @@ contextBridge.exposeInMainWorld('electron', {
       failed: number;
       error?: string;
     }> => invoke('account:openCreator', id),
+    /** M3：以「内嵌主窗口」方式打开创作中心 */
+    openAccountTab: (id: string): Promise<{ ok: boolean; url?: string; error?: string }> =>
+      invoke('account:openAccountTab', id),
     /** 静默检测单个账号的登录态 */
     healthCheck: (id: string): Promise<AccountInfo | null> => invoke('account:healthCheck', id),
     /** 静默检测所有账号 */
@@ -353,6 +356,26 @@ contextBridge.exposeInMainWorld('electron', {
     },
   },
 
+  // ========== 账号创作中心（内嵌主窗口，DOM <webview> 方案）==========
+  workspaceWebview: {
+    ensure: (accountId: string, title: string): Promise<{ ok: boolean; url?: string; error?: string; env?: { ok: boolean; reason?: string }; userAgent?: string }> =>
+      invoke('workspace-webview:ensure', accountId, title),
+    close: (accountId: string): Promise<void> =>
+      invoke('workspace-webview:close', accountId),
+    /** 返回创作中心 <webview> 的访客预加载脚本绝对路径（沙箱兼容，用于登录监控/统计抓取/DOM 体检） */
+    getGuestPreloadPath: (): Promise<string> =>
+      invoke('workspace:getGuestPreloadPath'),
+    /** 向主进程注册弹窗拦截（webview dom-ready 后调用，传入 getWebContentsId() 返回的 wcId 和 accountId） */
+    registerPopups: (wcId: number, accountId: string): Promise<void> =>
+      invoke('workspace-webview:registerPopups', wcId, accountId),
+    /** 监听主进程回传的新 inner tab 请求（含 accountId 用于多账号过滤） */
+    onNewInnerTab: (callback: (data: { url: string; referrer?: string; accountId: string }) => void) => {
+      const listener = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('workspace:new-inner-tab', listener);
+      return () => { ipcRenderer.removeListener('workspace:new-inner-tab', listener); };
+    },
+  },
+
   // ========== 更新 ==========
   update: {
     check: (): Promise<UpdateInfo> => invoke('update:check'),
@@ -392,6 +415,12 @@ contextBridge.exposeInMainWorld('electron', {
     setSettings: (patch: { promptEnabled?: boolean }): Promise<ComplianceSettings> =>
       invoke('compliance:setSettings', patch),
   },
+
+  // ========== 任务选项卡布局持久化（M4） ==========
+  workspaceState: {
+    save: (state: unknown): Promise<void> => invoke('workspace:saveState', state),
+    load: (): Promise<unknown> => invoke('workspace:loadState'),
+  },
 });
 
 // 便于在 Vue 组件中做类型推断
@@ -419,6 +448,7 @@ declare global {
           failed: number;
           error?: string;
         }>;
+        openAccountTab: (id: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
         healthCheck: (id: string) => Promise<AccountInfo | null>;
         healthCheckAll: () => Promise<AccountInfo[]>;
         setHealthCheckInterval: (intervalMs: number, initialDelayMs?: number) => Promise<boolean>;
@@ -473,6 +503,25 @@ declare global {
       update: {
         check: () => Promise<UpdateInfo>;
       };
+      workspaceWebview: {
+        ensure: (accountId: string, title: string) => Promise<{ ok: boolean; url?: string; error?: string; userAgent?: string }>;
+        getGuestPreloadPath: () => Promise<string>;
+        activate: (accountId: string) => Promise<void>;
+        deactivateAll: () => Promise<void>;
+        setRect: (accountId: string, rect: { x: number; y: number; width: number; height: number }) => Promise<void>;
+        close: (accountId: string) => Promise<void>;
+        back: (accountId: string) => Promise<void>;
+        forward: (accountId: string) => Promise<void>;
+        reload: (accountId: string) => Promise<void>;
+        home: (accountId: string) => Promise<void>;
+        newTab: (accountId: string) => Promise<void>;
+        activateInner: (accountId: string, tabId: string) => Promise<void>;
+        closeInner: (accountId: string, tabId: string) => Promise<void>;
+        onTabsUpdate: (cb: (data: { accountId: string; tabs: Array<{ id: string; title: string; url: string; isLoading: boolean }>; activeId: string }) => void) => () => void;
+        onUrlUpdate: (cb: (data: { accountId: string; tabId: string; url: string; title: string }) => void) => () => void;
+        onWindowResize: (cb: () => void) => () => void;
+        onEnvStatus: (cb: (data: { accountId: string; ok: boolean; reason?: string }) => void) => () => void;
+      };
       env: {
         listProxies: () => Promise<ProxyConfig[]>;
         createProxy: (data: Omit<ProxyConfig, 'id' | 'createdAt'>) => Promise<ProxyConfig>;
@@ -489,6 +538,10 @@ declare global {
         scan: (req: ComplianceScanRequest) => Promise<ComplianceResult>;
         getSettings: () => Promise<ComplianceSettings>;
         setSettings: (patch: { promptEnabled?: boolean }) => Promise<ComplianceSettings>;
+      };
+      workspaceState: {
+        save: (state: unknown) => Promise<void>;
+        load: () => Promise<unknown>;
       };
     };
   }

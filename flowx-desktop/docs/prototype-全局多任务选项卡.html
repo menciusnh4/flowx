@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FlowX · 全局多任务选项卡 · 交互原型</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+/* ============================================================
+   FlowX 设计系统 Token（对齐 src/renderer/assets/styles.css）
+   ============================================================ */
+:root{
+  --brand-indigo:#6366f1; --brand-sky:#38bdf8;
+  --brand-grad:linear-gradient(135deg,#6366f1 0%,#38bdf8 100%);
+  --brand-grad-soft:linear-gradient(135deg,rgba(99,102,241,.14),rgba(56,189,248,.06));
+  --bg:#f6f7fc; --surface:#ffffff; --surface-2:#fbfcfe;
+  --line:#eceef5; --line-strong:#e2e5ef;
+  --ink:#1f2433; --slate:#4b5165; --muted:#8b91a7; --faint:#aeb4c7;
+  --success:#10b981; --warning:#f59e0b; --danger:#f43f5e; --info:#6366f1;
+  --r-sm:10px; --r-md:14px; --r-lg:20px; --r-xl:24px; --r-pill:999px;
+  --shadow-xs:0 1px 2px rgba(31,36,51,.04);
+  --shadow-sm:0 1px 2px rgba(31,36,51,.04),0 2px 6px rgba(79,70,229,.05);
+  --shadow-md:0 4px 14px rgba(79,70,229,.08),0 2px 4px rgba(31,36,51,.04);
+  --shadow-lg:0 14px 36px rgba(79,70,229,.12),0 4px 10px rgba(31,36,51,.05);
+  --ease:cubic-bezier(.16,1,.3,1); --t:.25s;
+  --font-sans:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  --font-display:'Baloo 2',var(--font-sans);
+  --sidebar-w:250px; --taskbar-h:48px;
+}
+[data-theme="dark"]{
+  --bg:#0f1117; --surface:#181b24; --surface-2:#1f2330;
+  --line:#262a36; --line-strong:#323748;
+  --ink:#e8eaf2; --slate:#aeb4c7; --muted:#8b91a7; --faint:#6b7088;
+  --brand-grad-soft:linear-gradient(135deg,rgba(99,102,241,.22),rgba(56,189,248,.10));
+  --shadow-xs:0 1px 2px rgba(0,0,0,.3);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.3),0 2px 6px rgba(0,0,0,.2);
+  --shadow-md:0 4px 14px rgba(0,0,0,.35),0 2px 4px rgba(0,0,0,.25);
+  --shadow-lg:0 14px 36px rgba(0,0,0,.45),0 4px 10px rgba(0,0,0,.3);
+  --bg-grad:none;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;font-family:var(--font-sans);color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased;overflow:hidden}
+body{transition:background var(--t) var(--ease),color var(--t) var(--ease)}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+
+/* ============================================================ Shell */
+.app-shell{display:flex;height:100vh;width:100vw;overflow:hidden}
+
+/* ---------- Sidebar（保持不动） ---------- */
+.sidebar{width:var(--sidebar-w);flex-shrink:0;height:100vh;display:flex;flex-direction:column;
+  padding:18px 14px;gap:6px;background:var(--surface);border-right:1px solid var(--line);z-index:20}
+.sidebar-logo{display:flex;align-items:center;gap:12px;padding:4px 10px 18px}
+.logo-mark{width:40px;height:40px;border-radius:13px;display:flex;align-items:center;justify-content:center;
+  font-family:var(--font-display);font-weight:800;font-size:20px;color:#fff;background:var(--brand-grad);box-shadow:var(--shadow-md)}
+.logo-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+.logo-text .name{font-family:var(--font-display);font-size:18px;font-weight:800;letter-spacing:-.02em;
+  background:var(--brand-grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;line-height:1.1}
+.logo-text small{font-size:10.5px;color:var(--faint);font-weight:600}
+.nav-group{display:flex;flex-direction:column;gap:4px}
+.nav-label{font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--faint);text-transform:uppercase;padding:10px 12px 4px}
+.nav-item{display:flex;align-items:center;gap:11px;height:42px;padding:0 12px;border-radius:var(--r-sm);
+  color:var(--slate);font-weight:600;font-size:13.5px;transition:all var(--t) var(--ease);position:relative;user-select:none;width:100%;text-align:left}
+.nav-item .ic{width:20px;display:inline-flex;justify-content:center;font-size:17px;flex-shrink:0}
+.nav-item .caret{margin-left:auto;font-size:11px;transition:transform var(--t) var(--ease);color:var(--faint)}
+.nav-item:hover{background:rgba(99,102,241,.07);color:var(--brand-indigo)}
+.nav-item.active{background:var(--brand-grad-soft);color:var(--brand-indigo)}
+.nav-item.active::before{content:'';position:absolute;left:-14px;top:9px;bottom:9px;width:4px;border-radius:0 4px 4px 0;background:var(--brand-grad)}
+.nav-sub{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--t) var(--ease)}
+.nav-sub.open{grid-template-rows:1fr}
+.nav-sub-inner{overflow:hidden;display:flex;flex-direction:column;gap:2px}
+.nav-sub-item{display:flex;align-items:center;gap:9px;height:36px;margin-left:16px;padding:0 12px;border-radius:8px;
+  color:var(--slate);font-size:13px;font-weight:500;transition:all .15s var(--ease);width:calc(100% - 16px);text-align:left}
+.nav-sub-item .dot{width:6px;height:6px;border-radius:50%;background:var(--line-strong);flex-shrink:0}
+.nav-sub-item:hover{background:rgba(99,102,241,.06);color:var(--brand-indigo)}
+.nav-sub-item.active{background:rgba(99,102,241,.1);color:var(--brand-indigo);font-weight:600}
+.nav-sub-item.active .dot{background:var(--brand-indigo)}
+.sidebar-foot{margin-top:auto;display:flex;flex-direction:column;gap:10px;padding:14px 12px 10px;border-top:1px solid var(--line)}
+.side-user{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:13px;background:rgba(99,102,241,.07);font-weight:700;font-size:13px}
+.side-avatar{width:30px;height:30px;border-radius:9px;background:var(--brand-grad);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;flex-shrink:0}
+.side-ver{font-size:11px;color:var(--faint);font-weight:600;text-align:center}
+.theme-toggle{display:flex;align-items:center;gap:8px;justify-content:center;height:34px;border-radius:10px;border:1px solid var(--line);color:var(--slate);font-size:12.5px;font-weight:600;transition:all .15s var(--ease)}
+.theme-toggle:hover{border-color:var(--brand-indigo);color:var(--brand-indigo)}
+
+/* ---------- Main ---------- */
+.main{flex:1;min-width:0;height:100vh;display:flex;flex-direction:column}
+
+/* ===== 任务选项卡条（48px，与搜索框同行） ===== */
+.taskbar{height:var(--taskbar-h);flex-shrink:0;display:flex;align-items:center;gap:8px;
+  padding:0 12px 0 8px;background:rgba(255,255,255,.72);backdrop-filter:blur(20px);
+  -webkit-backdrop-filter:blur(20px);border-bottom:1px solid var(--line);position:relative;z-index:10}
+[data-theme="dark"] .taskbar{background:rgba(24,27,36,.72)}
+.task-tabs{flex:1;min-width:0;display:flex;align-items:center;gap:4px;overflow-x:auto;overflow-y:hidden;
+  scrollbar-width:none;padding:0 4px;position:relative}
+.task-tabs::-webkit-scrollbar{display:none}
+.task-tabs::before,.task-tabs::after{content:'';position:absolute;top:0;bottom:0;width:24px;pointer-events:none;z-index:2}
+.task-tabs::before{left:0;background:linear-gradient(90deg,var(--surface),transparent)}
+.task-tabs::after{right:0;background:linear-gradient(270deg,var(--surface),transparent)}
+[data-theme="dark"] .task-tabs::before{background:linear-gradient(90deg,var(--surface),transparent)}
+[data-theme="dark"] .task-tabs::after{background:linear-gradient(270deg,var(--surface),transparent)}
+
+.task-tab{height:32px;flex-shrink:0;display:flex;align-items:center;gap:7px;padding:0 10px 0 12px;
+  border-radius:var(--r-sm) var(--r-sm) 0 0;min-width:88px;max-width:180px;
+  font-size:13px;font-weight:600;color:var(--slate);background:transparent;transition:all .15s var(--ease);position:relative;white-space:nowrap}
+.task-tab .tab-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.task-tab:hover{background:rgba(99,102,241,.06);color:var(--brand-indigo)}
+.task-tab.active{background:var(--surface);color:var(--ink);font-weight:700;
+  box-shadow:0 2px 0 0 var(--surface),0 -2px 0 0 transparent}
+.task-tab.active::after{content:'';position:absolute;left:8px;right:8px;bottom:-1px;height:2px;border-radius:2px;background:var(--brand-grad)}
+.task-tab .tab-close{width:18px;height:18px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;
+  font-size:13px;color:var(--faint);opacity:0;transition:all .15s var(--ease);flex-shrink:0}
+.task-tab:hover .tab-close{opacity:1}
+.task-tab .tab-close:hover{background:rgba(244,63,94,.12);color:var(--danger)}
+.task-tab .unsaved-dot{width:7px;height:7px;border-radius:50%;background:var(--warning);flex-shrink:0}
+/* 账号 tab */
+.task-tab.account{padding-left:10px}
+.task-tab .plat{width:16px;height:16px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:#fff;flex-shrink:0}
+.plat.douyin{background:#000}.plat.xhs{background:#ff2442}.plat.wechat{background:#07c160}
+.env-badge{height:18px;padding:0 7px;border-radius:var(--r-pill);background:rgba(16,185,129,.12);
+  color:var(--success);font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:3px;flex-shrink:0;cursor:default}
+.env-badge.warn{background:rgba(245,158,11,.14);color:var(--warning)}
+.task-add{width:26px;height:26px;border-radius:8px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;
+  font-size:18px;color:var(--muted);transition:all .15s var(--ease)}
+.task-add:hover{background:rgba(99,102,241,.08);color:var(--brand-indigo)}
+.task-add:disabled{opacity:.4;cursor:not-allowed}
+
+.taskbar-search{width:280px;max-width:32vw;flex-shrink:0;height:32px;border-radius:var(--r-pill);
+  background:var(--surface-2);box-shadow:0 0 0 1px var(--line) inset;display:flex;align-items:center;gap:8px;padding:0 14px;color:var(--muted);font-size:13px}
+.taskbar-search:focus-within{box-shadow:0 0 0 1px var(--brand-indigo) inset}
+.taskbar-search input{border:none;background:none;outline:none;flex:1;font-family:inherit;font-size:13px;color:var(--ink)}
+
+/* ---------- Content ---------- */
+.content{flex:1;min-height:0;position:relative;background:var(--bg);overflow:hidden}
+.view{position:absolute;inset:0;padding:24px;overflow-y:auto;overflow-x:hidden;display:none}
+.view.active{display:block;animation:fade .18s ease}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.section-title{font-family:var(--font-display);font-size:17px;font-weight:700;color:var(--ink);margin:0 0 14px;letter-spacing:-.01em}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);padding:18px;margin-bottom:18px;box-shadow:var(--shadow-xs)}
+.muted{color:var(--muted)}
+
+/* dashboard cards */
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;margin-bottom:18px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);padding:18px;box-shadow:var(--shadow-xs)}
+.stat .k{font-size:12.5px;color:var(--muted);font-weight:600;margin-bottom:8px}
+.stat .v{font-family:var(--font-display);font-size:28px;font-weight:800;color:var(--ink);letter-spacing:-.02em}
+.stat .v .up{font-size:13px;color:var(--success);font-weight:700;margin-left:6px}
+
+/* publish form */
+.form-row{margin-bottom:16px}
+.form-row label{display:block;font-size:13px;font-weight:600;color:var(--slate);margin-bottom:7px}
+.f-input{width:100%;height:40px;border-radius:var(--r-sm);border:1px solid var(--line);background:var(--surface-2);
+  padding:0 14px;font-family:inherit;font-size:13.5px;color:var(--ink);transition:all .15s var(--ease)}
+.f-input:focus{outline:none;border-color:var(--brand-indigo);box-shadow:0 0 0 3px rgba(99,102,241,.12);background:var(--surface)}
+textarea.f-input{height:auto;min-height:160px;padding:12px 14px;resize:vertical;line-height:1.6}
+.tag-input{display:flex;flex-wrap:wrap;gap:8px;padding:10px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface-2)}
+.tag{height:26px;padding:0 10px;border-radius:var(--r-pill);background:var(--brand-grad-soft);color:var(--brand-indigo);font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:6px}
+.tag b{font-weight:700;cursor:pointer}
+.cover-drop{height:120px;border-radius:var(--r-sm);border:1.5px dashed var(--line-strong);display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:13px;background:var(--surface-2)}
+.btn-primary{height:40px;padding:0 22px;border-radius:var(--r-sm);background:var(--brand-grad);color:#fff;font-weight:700;font-size:13.5px;
+  box-shadow:var(--shadow-sm);transition:all .15s var(--ease)}
+.btn-primary:hover{transform:translateY(-1px);box-shadow:var(--shadow-md)}
+.btn-ghost{height:40px;padding:0 18px;border-radius:var(--r-sm);border:1px solid var(--line);color:var(--slate);font-weight:600;font-size:13.5px;background:var(--surface)}
+.btn-ghost:hover{border-color:var(--brand-indigo);color:var(--brand-indigo)}
+
+/* draft list */
+.draft{display:flex;gap:14px;align-items:center;padding:14px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--surface);margin-bottom:12px;box-shadow:var(--shadow-xs);transition:all .15s var(--ease)}
+.draft:hover{box-shadow:var(--shadow-md);transform:translateY(-2px);border-color:var(--line-strong)}
+.draft .thumb{width:64px;height:64px;border-radius:10px;background:var(--brand-grad-soft);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:22px}
+.draft .meta{min-width:0;flex:1}
+.draft .meta h4{font-size:14px;font-weight:700;color:var(--ink);margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.draft .meta p{font-size:12.5px;color:var(--muted)}
+.draft .stat-pill{font-size:11.5px;font-weight:600;color:var(--success);background:rgba(16,185,129,.1);padding:3px 9px;border-radius:var(--r-pill)}
+
+/* account grid */
+.acc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+.acc-card{border:1px solid var(--line);border-radius:var(--r-md);background:var(--surface);padding:16px;box-shadow:var(--shadow-xs);transition:all .15s var(--ease)}
+.acc-card:hover{box-shadow:var(--shadow-md);transform:translateY(-2px);border-color:var(--line-strong)}
+.acc-top{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.acc-ava{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px;font-weight:800;flex-shrink:0}
+.acc-top .nm{font-size:14.5px;font-weight:700;color:var(--ink)}
+.acc-top .pl{font-size:12px;color:var(--muted)}
+.acc-meta{display:flex;gap:8px;margin-bottom:14px}
+.acc-meta .m{flex:1;text-align:center;background:var(--surface-2);border-radius:10px;padding:8px 4px}
+.acc-meta .m .n{font-family:var(--font-display);font-weight:800;font-size:16px;color:var(--ink)}
+.acc-meta .m .l{font-size:11px;color:var(--muted)}
+.acc-card .btn-primary{width:100%}
+
+/* ===== 账号创作中心视图 ===== */
+.acc-workspace{position:absolute;inset:0;display:none;flex-direction:column}
+.acc-workspace.active{display:flex}
+.acc-infobar{height:40px;flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 16px;background:var(--surface-2);border-bottom:1px solid var(--line)}
+.acc-infobar .ava{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:800}
+.acc-infobar .nm{font-size:14px;font-weight:700;color:var(--ink)}
+.acc-infobar .pl{font-size:12px;color:var(--muted)}
+.acc-infobar .spacer{margin-left:auto}
+.acc-infobar .ibtn{width:28px;height:28px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;font-size:15px;color:var(--slate);transition:all .15s var(--ease)}
+.acc-infobar .ibtn:hover{background:rgba(99,102,241,.1);color:var(--brand-indigo)}
+.inner-tabs{height:36px;flex-shrink:0;display:flex;align-items:center;gap:4px;padding:0 12px;background:var(--surface);border-bottom:1px solid var(--line)}
+.inner-tab{height:28px;padding:0 12px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--slate);transition:all .15s var(--ease);display:flex;align-items:center;gap:6px}
+.inner-tab:hover{background:rgba(99,102,241,.06);color:var(--brand-indigo)}
+.inner-tab.active{color:var(--brand-indigo);font-weight:700;box-shadow:inset 0 -2px 0 var(--brand-indigo)}
+.inner-add{height:28px;padding:0 10px;border-radius:8px;font-size:12px;font-weight:600;color:var(--muted);transition:all .15s var(--ease)}
+.inner-add:hover{background:rgba(99,102,241,.06);color:var(--brand-indigo)}
+.webview{flex:1;min-height:0;position:relative;background:var(--surface-2);display:flex;align-items:center;justify-content:center;overflow:hidden}
+.webview .fake-page{width:100%;height:100%;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:var(--muted);text-align:center;padding:24px}
+.webview .fake-page.show{display:flex}
+.webview .fake-page .big{width:88px;height:88px;border-radius:24px;background:var(--brand-grad-soft);display:flex;align-items:center;justify-content:center;font-size:38px}
+.webview .fake-page h3{font-size:16px;color:var(--ink);font-weight:700}
+.webview .url-bar{position:absolute;top:12px;left:50%;transform:translateX(-50%);height:30px;padding:0 14px;border-radius:var(--r-pill);
+  background:var(--surface);box-shadow:var(--shadow-sm);display:flex;align-items:center;gap:8px;font-size:12px;color:var(--slate);max-width:80%}
+.webview .url-bar .lock{color:var(--success)}
+
+/* empty state */
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--muted);gap:12px;text-align:center}
+.empty .ic{width:72px;height:72px;border-radius:20px;background:var(--brand-grad-soft);display:flex;align-items:center;justify-content:center;font-size:32px}
+
+/* tooltip */
+.env-tip{position:fixed;z-index:100;background:var(--ink);color:#fff;font-size:12px;line-height:1.7;padding:10px 12px;border-radius:10px;
+  box-shadow:var(--shadow-lg);pointer-events:none;opacity:0;transform:translateY(4px);transition:all .15s var(--ease);max-width:240px}
+.env-tip.show{opacity:1;transform:translateY(0)}
+.env-tip .row{display:flex;gap:8px}
+.env-tip .row b{color:#a5b4fc;font-weight:700}
+
+/* modal */
+.modal-mask{position:fixed;inset:0;background:rgba(15,17,23,.4);backdrop-filter:blur(2px);display:none;align-items:center;justify-content:center;z-index:200}
+.modal-mask.show{display:flex;animation:fade .15s ease}
+.modal{width:360px;background:var(--surface);border-radius:var(--r-lg);padding:24px;box-shadow:var(--shadow-lg)}
+.modal h3{font-size:16px;font-weight:700;color:var(--ink);margin-bottom:8px}
+.modal p{font-size:13.5px;color:var(--slate);line-height:1.6;margin-bottom:20px}
+.modal .acts{display:flex;gap:10px;justify-content:flex-end}
+
+/* toast */
+.toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;
+  font-size:13px;font-weight:600;padding:11px 18px;border-radius:var(--r-pill);box-shadow:var(--shadow-lg);opacity:0;
+  transition:all .2s var(--ease);z-index:300;pointer-events:none}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* demo hint */
+.demo-hint{position:fixed;right:18px;bottom:18px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);
+  box-shadow:var(--shadow-md);padding:12px 14px;font-size:12px;color:var(--slate);max-width:240px;z-index:50;line-height:1.7}
+.demo-hint b{color:var(--brand-indigo)}
+.demo-hint .x{position:absolute;top:6px;right:8px;color:var(--faint);cursor:pointer;font-size:14px}
+</style>
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- ===== 左侧竖栏（保持不动） ===== -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">F</div>
+      <div class="logo-text"><span class="name">FlowX</span><small>矩阵创作中枢</small></div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">总览</div>
+      <button class="nav-item" data-nav="dashboard"><span class="ic">🏠</span>仪表盘</button>
+      <button class="nav-item" data-nav="accounts"><span class="ic">👤</span>账号管理</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">创作</div>
+      <button class="nav-item" data-nav="workbench" data-expand="wb"><span class="ic">🧰</span>工作台<span class="caret">▶</span></button>
+      <div class="nav-sub" id="sub-wb">
+        <div class="nav-sub-inner">
+          <button class="nav-sub-item" data-nav="drafts"><span class="dot"></span>草稿箱</button>
+          <button class="nav-sub-item" data-nav="browser"><span class="dot"></span>浏览器</button>
+        </div>
+      </div>
+      <button class="nav-item" data-nav="publish" data-expand="pb"><span class="ic">🚀</span>一键发布<span class="caret">▶</span></button>
+      <div class="nav-sub" id="sub-pb">
+        <div class="nav-sub-inner">
+          <button class="nav-sub-item" data-nav="pub-video"><span class="dot"></span>发布视频</button>
+          <button class="nav-sub-item" data-nav="pub-article"><span class="dot"></span>发布文章</button>
+          <button class="nav-sub-item" data-nav="pub-graph"><span class="dot"></span>发布图文</button>
+          <button class="nav-sub-item" data-nav="history"><span class="dot"></span>历史</button>
+        </div>
+      </div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">系统</div>
+      <button class="nav-item" data-nav="settings"><span class="ic">⚙️</span>系统配置</button>
+    </div>
+    <div class="sidebar-foot">
+      <div class="theme-toggle" id="themeToggle">🌙 <span id="themeLabel">深色</span></div>
+      <div class="side-user"><div class="side-avatar">运</div>运营小七</div>
+      <div class="side-ver">v2.4.0 · P1</div>
+    </div>
+  </aside>
+
+  <!-- ===== 主区 ===== -->
+  <div class="main">
+    <!-- 任务选项卡条 -->
+    <div class="taskbar">
+      <div class="task-tabs" id="taskTabs"></div>
+      <button class="task-add" id="taskAdd" title="新建任务页">＋</button>
+      <div class="taskbar-search">🔍<input placeholder="搜索账号 / 内容 / 功能…" /></div>
+    </div>
+    <!-- 内容区 -->
+    <div class="content" id="content">
+      <!-- 系统视图容器（每个已开 tab 常驻挂载，切换不卸载 → 状态保留） -->
+      <div id="systemViews"></div>
+      <!-- 账号创作中心视图容器 -->
+      <div id="accountViews"></div>
+      <!-- 空状态兜底（全部关闭时） -->
+      <div class="view" id="emptyView" style="display:none">
+        <div class="empty">
+          <div class="ic">🗂️</div>
+          <h3>没有打开的任务页</h3>
+          <p class="muted">从左侧菜单点开任意功能，或点击「＋」新建。<br/>默认已为你打开「仪表盘」。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- env tooltip -->
+<div class="env-tip" id="envTip"></div>
+<!-- unsaved modal -->
+<div class="modal-mask" id="modal">
+  <div class="modal">
+    <h3>内容未保存</h3>
+    <p>「<span id="modalName"></span>」中还有未提交的内容，确定要关闭这个任务页吗？</p>
+    <div class="acts">
+      <button class="btn-ghost" id="modalCancel">取消</button>
+      <button class="btn-primary" id="modalClose" style="background:var(--danger)">关闭</button>
+    </div>
+  </div>
+</div>
+<!-- toast -->
+<div class="toast" id="toast"></div>
+<!-- demo hint -->
+<div class="demo-hint" id="demoHint">
+  <span class="x" id="hintX">×</span>
+  <b>原型交互提示</b><br/>
+  · 点左侧菜单→顶部开/激活任务页<br/>
+  · 在「发布文章」输入文字，切到别的页再切回，内容不丢<br/>
+  · 账号管理→「进入创作中心」开账号页<br/>
+  · 悬停账号页 🔒 看隔离明细<br/>
+  · 关闭含未保存内容的页会弹确认
+</div>
+
+<script>
+/* ============================================================
+   原型交互逻辑（演示状态保持 + 任务选项卡核心行为）
+   ============================================================ */
+const MAX_TABS = 20;
+const $ = (s,r=document)=>r.querySelector(s);
+const $$ = (s,r=document)=>[...r.querySelectorAll(s)];
+
+/* nav → 系统视图渲染器 */
+const navMeta = {
+  dashboard:{label:'仪表盘',icon:'🏠'},
+  accounts:{label:'账号管理',icon:'👤'},
+  drafts:{label:'草稿箱',icon:'📝'},
+  browser:{label:'浏览器',icon:'🌐'},
+  'pub-video':{label:'发布视频',icon:'🎬'},
+  'pub-article':{label:'发布文章',icon:'📝'},
+  'pub-graph':{label:'发布图文',icon:'🖼️'},
+  history:{label:'历史',icon:'🕘'},
+  settings:{label:'系统配置',icon:'⚙️'},
+};
+const unsavedRoutes = new Set(['pub-article','drafts']); // 演示：这些页可含未保存内容
+
+/* 账号样本（用于「进入创作中心」） */
+const accountSamples = [
+  {id:'a1',name:'美妆日记·小鹿',plat:'xhs',platName:'小红书',fans:'12.3万',posts:'386',likes:'98.6万',env:'代理A·UA伪装',envOk:true},
+  {id:'a2',name:'潮流穿搭官',plat:'douyin',platName:'抖音',fans:'45.1万',posts:'1203',likes:'302万',env:'代理B·UA伪装',envOk:true},
+];
+
+/* 状态 */
+let tabs = [];        // {id,kind:'system'|'account',route?,accountId?,label,icon,plat?,env?,envOk?,unsaved}
+let activeId = null;
+let seq = 0;
+
+function uid(){return 't'+(++seq);}
+
+function addSystemTab(route){
+  const m = navMeta[route]; if(!m) return;
+  const exist = tabs.find(t=>t.kind==='system'&&t.route===route);
+  if(exist){ activate(exist.id); return; }
+  if(tabs.length>=MAX_TABS){ toast('最多同时打开 '+MAX_TABS+' 个任务页'); return; }
+  const id = uid();
+  tabs.push({id,kind:'system',route,label:m.label,icon:m.icon,unsaved:false});
+  mountSystemView(route,id);
+  activate(id);
+  renderTaskbar(); renderSidebarActive();
+}
+function addAccountTab(accountId){
+  const a = accountSamples.find(x=>x.id===accountId); if(!a) return;
+  const exist = tabs.find(t=>t.kind==='account'&&t.accountId===accountId);
+  if(exist){ activate(exist.id); return; }
+  if(tabs.length>=MAX_TABS){ toast('最多同时打开 '+MAX_TABS+' 个任务页'); return; }
+  const id = uid();
+  tabs.push({id,kind:'account',accountId,label:a.name+' 创作中心',plat:a.plat,env:a.env,envOk:a.envOk,unsaved:false});
+  mountAccountView(a,id);
+  activate(id);
+  renderTaskbar(); renderSidebarActive();
+}
+
+/* 视图挂载（常驻，不卸载） */
+function mountSystemView(route,id){
+  const v = document.createElement('div');
+  v.className='view'; v.id='sys-'+id; v.dataset.tab=id;
+  v.innerHTML = renderSystemPage(route);
+  $('#systemViews').appendChild(v);
+  // 标记未保存：演示用，发布文章/草稿箱默认带未保存点（模拟已编辑）
+  if(unsavedRoutes.has(route)){
+    const t = tabs.find(x=>x.id===id); if(t) t.unsaved=true;
+  }
+}
+function mountAccountView(a,id){
+  const w = document.createElement('div');
+  w.className='acc-workspace'; w.id='acc-'+id; w.dataset.tab=id;
+  w.innerHTML = renderAccountWorkspace(a);
+  $('#accountViews').appendChild(w);
+  bindAccountInner(w,a);
+}
+
+function activate(id){
+  activeId = id;
+  $$('.view').forEach(v=>v.classList.remove('active'));
+  $$('.acc-workspace').forEach(v=>v.classList.remove('active'));
+  const t = tabs.find(x=>x.id===id);
+  if(t.kind==='system'){ $('#sys-'+id).classList.add('active'); }
+  else { $('#acc-'+id).classList.add('active'); }
+  toggleEmpty(false);
+  renderTaskbar(); renderSidebarActive();
+}
+function closeTab(id){
+  const t = tabs.find(x=>x.id===id); if(!t) return;
+  if(t.unsaved){ pendingClose=id; openModal(t.label); return; }
+  doClose(id);
+}
+function doClose(id){
+  const idx = tabs.findIndex(x=>x.id===id);
+  const t = tabs[idx];
+  // 卸载视图
+  const node = t.kind==='system'? $('#sys-'+id):$('#acc-'+id);
+  if(node) node.remove();
+  tabs.splice(idx,1);
+  if(activeId===id){
+    if(tabs.length===0){ activeId=null; toggleEmpty(true); }
+    else { const next = tabs[Math.min(idx,tabs.length-1)]; activate(next.id); }
+  }
+  renderTaskbar(); renderSidebarActive();
+}
+
+/* ===== 任务条渲染 ===== */
+function renderTaskbar(){
+  const wrap = $('#taskTabs'); wrap.innerHTML='';
+  tabs.forEach(t=>{
+    const el = document.createElement('div');
+    el.className='task-tab'+(t.kind==='account'?' account':'')+(t.id===activeId?' active':'');
+    el.dataset.id=t.id;
+    let inner='';
+    if(t.kind==='account'){
+      const cls = t.plat==='xhs'?'xhs':t.plat==='douyin'?'douyin':'wechat';
+      const ico = t.plat==='xhs'?'📕':t.plat==='douyin'?'🎵':'💬';
+      inner += `<span class="plat ${cls}">${ico}</span>`;
+      inner += `<span class="tab-label">${t.label}</span>`;
+      const bcls = t.envOk?'env-badge':'env-badge warn';
+      const bloc = t.envOk?'🔒 '+t.env:'⚠ 未配置隔离';
+      inner += `<span class="${bcls}" data-env="${t.id}">${bloc}</span>`;
+    } else {
+      inner += `<span>${t.icon}</span><span class="tab-label">${t.label}</span>`;
+      if(t.unsaved) inner += `<span class="unsaved-dot" title="有未保存内容"></span>`;
+    }
+    inner += `<span class="tab-close" data-close="${t.id}">×</span>`;
+    el.innerHTML = inner;
+    wrap.appendChild(el);
+  });
+  $('#taskAdd').disabled = tabs.length>=MAX_TABS;
+  // 绑定
+  $$('.task-tab',wrap).forEach(el=>{
+    el.addEventListener('click',e=>{
+      if(e.target.dataset.close) return;
+      activate(el.dataset.id);
+    });
+    const c = el.querySelector('.tab-close');
+    c.addEventListener('click',e=>{e.stopPropagation();closeTab(el.dataset.id);});
+    const env = el.querySelector('[data-env]');
+    if(env) env.addEventListener('mouseenter',e=>showEnvTip(e,t));
+    if(env) env.addEventListener('mouseleave',hideEnvTip);
+  });
+}
+
+/* ===== 侧栏激活态 ===== */
+function renderSidebarActive(){
+  const cur = tabs.find(t=>t.id===activeId);
+  $$('.nav-item,.nav-sub-item').forEach(b=>b.classList.remove('active'));
+  if(cur && cur.kind==='system'){
+    const b = $(`.nav-sub-item[data-nav="${cur.route}"],.nav-item[data-nav="${cur.route}"]`);
+    if(b) b.classList.add('active');
+    if(['drafts','browser'].includes(cur.route)) $('#sub-wb').classList.add('open');
+    if(['pub-video','pub-article','pub-graph','history'].includes(cur.route)) $('#sub-pb').classList.add('open');
+  }
+}
+
+/* ===== 系统页面渲染 ===== */
+function renderSystemPage(route){
+  switch(route){
+    case 'dashboard': return `
+      <h2 class="section-title">仪表盘</h2>
+      <div class="stat-grid">
+        <div class="stat"><div class="k">已连接账号</div><div class="v">8 <span class="up">+2</span></div></div>
+        <div class="stat"><div class="k">本周发布</div><div class="v">142 <span class="up">+18%</span></div></div>
+        <div class="stat"><div class="k">总曝光</div><div class="v">2.3M</div></div>
+        <div class="stat"><div class="k">待处理草稿</div><div class="v">6</div></div>
+      </div>
+      <div class="panel"><h3 class="section-title" style="margin-bottom:10px">最近发布</h3>
+        <p class="muted">（演示）切换任务页不会重新加载本页 —— 矩阵发布概览常驻。</p></div>`;
+    case 'accounts': return `
+      <h2 class="section-title">账号管理</h2>
+      <div class="acc-grid">
+        ${accountSamples.map(a=>`
+        <div class="acc-card">
+          <div class="acc-top">
+            <div class="acc-ava" style="background:${a.plat==='xhs'?'#ff2442':'#000'}">${a.plat==='xhs'?'📕':'🎵'}</div>
+            <div><div class="nm">${a.name}</div><div class="pl">${a.platName}</div></div>
+          </div>
+          <div class="acc-meta">
+            <div class="m"><div class="n">${a.fans}</div><div class="l">粉丝</div></div>
+            <div class="m"><div class="n">${a.posts}</div><div class="l">作品</div></div>
+            <div class="m"><div class="n">${a.likes}</div><div class="l">获赞</div></div>
+          </div>
+          <button class="btn-primary" data-enter="${a.id}">进入创作中心 🔒 ${a.env}</button>
+        </div>`).join('')}
+      </div>`;
+    case 'pub-article': return `
+      <h2 class="section-title">发布文章</h2>
+      <div class="panel">
+        <div class="form-row"><label>标题</label><input class="f-input" placeholder="输入文章标题…（试试输入后切走再切回）" /></div>
+        <div class="form-row"><label>正文</label><textarea class="f-input" placeholder="写下你的内容…"></textarea></div>
+        <div class="form-row"><label>话题标签</label>
+          <div class="tag-input"><span class="tag">#好物推荐 <b>×</b></span><span class="tag">#种草 <b>×</b></span><span class="tag" style="background:var(--surface-2);color:var(--muted)">+ 添加</span></div>
+        </div>
+        <div class="form-row"><label>封面</label><div class="cover-drop">点击或拖拽上传封面图</div></div>
+        <div style="display:flex;gap:10px;margin-top:18px">
+          <button class="btn-primary">保存草稿</button><button class="btn-ghost">定时发布</button>
+        </div>
+      </div>`;
+    case 'drafts': return `
+      <h2 class="section-title">草稿箱</h2>
+      ${['春季穿搭合集','新品开箱测评','周末探店 vlog'].map((t,i)=>`
+      <div class="draft"><div class="thumb">📄</div>
+        <div class="meta"><h4>${t}</h4><p>编辑于 ${['10:24','昨天','3天前'][i]} · 约 ${[820,460,1530][i]} 字</p></div>
+        <span class="stat-pill">● 草稿</span></div>`).join('')}`;
+    case 'settings': return `<h2 class="section-title">系统配置</h2>
+      <div class="panel"><p class="muted">环境 / 代理 / 接口 / 日志 配置（原型占位）。此页状态同样常驻保留。</p></div>`;
+    default: return `<h2 class="section-title">${navMeta[route]?.label||route}</h2>
+      <div class="panel"><p class="muted">该模块原型占位。</p></div>`;
+  }
+}
+
+/* ===== 账号创作中心工作区 ===== */
+function renderAccountWorkspace(a){
+  const cls = a.plat==='xhs'?'xhs':a.plat==='douyin'?'douyin':'wechat';
+  const ico = a.plat==='xhs'?'📕':a.plat==='douyin'?'🎵':'💬';
+  const envHtml = a.envOk?`🔒 ${a.env}`:`⚠ 未配置隔离`;
+  const envCls = a.envOk?'env-badge':'env-badge warn';
+  return `
+    <div class="acc-infobar">
+      <div class="ava ${cls}">${ico}</div>
+      <span class="nm">${a.name}</span><span class="pl">· ${a.platName} · ${a.fans}粉丝</span>
+      <span class="spacer"></span>
+      <span class="${envCls}">${envHtml}</span>
+      <button class="ibtn" title="刷新">↻</button>
+      <button class="ibtn" title="在浏览器打开">↗</button>
+    </div>
+    <div class="inner-tabs" data-inner>
+      <div class="inner-tab active" data-ip="home">创作首页</div>
+      <div class="inner-tab" data-ip="notes">笔记管理</div>
+      <div class="inner-tab" data-ip="data">数据分析</div>
+      <div class="inner-tab" data-ip="new">新开网页</div>
+      <div class="inner-add">＋ 新开网页</div>
+    </div>
+    <div class="webview">
+      <div class="url-bar"><span class="lock">🔒</span> creator.${a.plat==='xhs'?'xiaohongshu':'douyin'}.com · 隔离会话（${a.env}）</div>
+      <div class="fake-page show" data-fp="home"><div class="big">🏠</div><h3>创作服务平台首页</h3><p>账号「${a.name}」的${a.platName}创作首页（WebContentsView 物理隔离渲染）</p></div>
+      <div class="fake-page" data-fp="notes"><div class="big">📒</div><h3>笔记管理</h3><p>该账号的笔记列表 / 编辑（inner tab 独立页面）</p></div>
+      <div class="fake-page" data-fp="data"><div class="big">📊</div><h3>数据分析</h3><p>粉丝 / 阅读 / 互动数据看板</p></div>
+      <div class="fake-page" data-fp="new"><div class="big">➕</div><h3>新开网页</h3><p>在此账号隔离会话内新开一个网页</p></div>
+    </div>`;
+}
+function bindAccountInner(w,a){
+  const inner = w.querySelector('[data-inner]');
+  inner.addEventListener('click',e=>{
+    const tab = e.target.closest('.inner-tab'); if(!tab) return;
+    $$('.inner-tab',inner).forEach(t=>t.classList.remove('active'));
+    tab.classList.add('active');
+    $$('.fake-page',w).forEach(f=>f.classList.remove('show'));
+    w.querySelector(`.fake-page[data-fp="${tab.dataset.ip}"]`).classList.add('show');
+  });
+}
+
+/* ===== 环境 tooltip ===== */
+function showEnvTip(e,t){
+  const tip = $('#envTip');
+  const a = accountSamples.find(x=>x.id===t.accountId);
+  tip.innerHTML = `<div style="font-weight:700;margin-bottom:6px">${t.label}</div>
+    <div class="row"><b>隔离：</b>物理沙盒会话</div>
+    <div class="row"><b>代理：</b>代理${a.envOk?'A':'未配置'}</div>
+    <div class="row"><b>Cookie：</b>persist:account_${a.id}</div>
+    <div class="row"><b>UA：</b>${a.envOk?'设备 UA 伪装':'默认'}</div>`;
+  const r = e.target.getBoundingClientRect();
+  tip.style.left = Math.min(r.left, window.innerWidth-250)+'px';
+  tip.style.top = (r.bottom+8)+'px';
+  tip.classList.add('show');
+}
+function hideEnvTip(){$('#envTip').classList.remove('show');}
+
+/* ===== Modal / Toast ===== */
+let pendingClose=null;
+function openModal(name){ $('#modalName').textContent=name; $('#modal').classList.add('show'); }
+function closeModal(){ $('#modal').classList.remove('show'); pendingClose=null; }
+$('#modalCancel').onclick=closeModal;
+$('#modalClose').onclick=()=>{ if(pendingClose) doClose(pendingClose); closeModal(); };
+$('#modal').addEventListener('click',e=>{ if(e.target.id==='modal') closeModal(); });
+let toastT;
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2200); }
+
+/* ===== 空状态 ===== */
+function toggleEmpty(show){
+  const empty = $('#emptyView');
+  if(show){ empty.style.display='block'; $$('.view').forEach(v=>v.classList.remove('active')); $$('.acc-workspace').forEach(v=>v.classList.remove('active')); }
+  else empty.style.display='none';
+}
+
+/* ===== 侧栏交互 ===== */
+$$('.nav-item,.nav-sub-item').forEach(b=>{
+  b.addEventListener('click',()=>{
+    const expand = b.dataset.expand;
+    if(expand){ const sub=$('#sub-'+expand); sub.classList.toggle('open'); b.classList.toggle('expanded'); return; }
+    const nav = b.dataset.nav;
+    if(nav==='accounts'||nav==='drafts'||nav==='browser'||nav==='pub-video'||nav==='pub-article'||nav==='pub-graph'||nav==='history'||nav==='dashboard'||nav==='settings'||nav==='workbench'||nav==='publish'){
+      if(nav==='workbench'||nav==='publish') return; // 仅展开
+      addSystemTab(nav);
+    }
+  });
+});
+// 账号页「进入创作中心」
+$('#systemViews').addEventListener('click',e=>{
+  const btn = e.target.closest('[data-enter]'); if(!btn) return;
+  addAccountTab(btn.dataset.enter);
+});
+// ＋ 新建
+$('#taskAdd').onclick=()=>{ if(tabs.length>=MAX_TABS){toast('最多同时打开 '+MAX_TABS+' 个任务页');return;} addSystemTab('dashboard'); };
+
+/* 主题切换 */
+$('#themeToggle').onclick=()=>{
+  const cur=document.documentElement.getAttribute('data-theme');
+  const next=cur==='light'?'dark':'light';
+  document.documentElement.setAttribute('data-theme',next);
+  $('#themeLabel').textContent=next==='light'?'深色':'浅色';
+  $('#themeToggle').firstChild.textContent=next==='light'?'🌙 ':'☀️ ';
+};
+
+/* hint 关闭 */
+$('#hintX').onclick=()=>$('#demoHint').style.display='none';
+
+/* ===== 初始：打开仪表盘 ===== */
+addSystemTab('dashboard');
+</script>
+</body>
+</html>

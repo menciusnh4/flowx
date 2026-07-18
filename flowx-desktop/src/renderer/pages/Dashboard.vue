@@ -70,6 +70,7 @@ import { computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAccountStore } from '../stores/account';
 import { usePublishStore } from '../stores/publish';
+import { useWorkspaceStore } from '../stores/workspace';
 import iconXiaohongshu from '../assets/xiaohongshu.svg';
 import iconDouyin from '../assets/douyin.svg';
 import iconKuaishou from '../assets/kuaishou.svg';
@@ -99,9 +100,12 @@ function getPlatformIcon(p: string): string {
 const router = useRouter();
 const accountStore = useAccountStore();
 const publishStore = usePublishStore();
+const workspaceStore = useWorkspaceStore();
 
 function go(path: string) {
+  // 右侧由全局任务选项卡驱动：跳转务必同时开/激活系统 tab，否则左侧高亮切了右侧不动
   router.push(path);
+  workspaceStore.openSystemTab(path);
 }
 
 const stats = computed(() => [

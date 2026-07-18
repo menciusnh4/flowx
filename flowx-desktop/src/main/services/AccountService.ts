@@ -939,6 +939,38 @@ export class AccountService {
     }
   }
 
+  /**
+   * 从 session 同步最新 cookies 到加密存储（防抖存盘）。
+   * 由 WorkspaceWebViewController 的 cookies.on('changed') 防抖触发，
+   * 确保用户在创作中心重新登录后 Cookie 自动持久化，下次启动免重新登录。
+   */
+  static async syncCookiesFromSession(accountId: string, sess: Electron.Session): Promise<void> {
+    const list = this.loadCredentials();
+    const idx = list.findIndex((c) => c.id === accountId);
+    if (idx < 0) return;
+    const cred = list[idx];
+    const freshCookies = await sess.cookies.get({});
+    // 保留 remark cookie（备注字段存在 cookie 里）
+    const remarkCookie = cred.cookies.find((x) => x.name === '__flowx_remark__');
+    const mergedCookies: AccountCredential['cookies'] = freshCookies
+      .filter((c) => !!c.value && !c.name.startsWith('__flowx_'))
+      .map((c) => ({
+        name: c.name,
+        value: encrypt(c.value!),
+        domain: c.domain || '',
+        path: c.path || '/',
+        secure: c.secure || false,
+        httpOnly: c.httpOnly || false,
+        sameSite: (c.sameSite as any) || 'unspecified',
+        expirationDate: c.expirationDate ? Math.floor(c.expirationDate * 1000) : undefined,
+      }));
+    if (remarkCookie) mergedCookies.push(remarkCookie);
+    list[idx].cookies = mergedCookies;
+    list[idx].authorizedAt = Date.now();
+    this.saveCredentials(list);
+    logger.info(`[Account] Cookie 防抖存盘完成: ${cred.nickname} (${accountId}), ${mergedCookies.length} 条`);
+  }
+
   // ============================= 存储层 =============================
   private static loadCredentials(): AccountCredential[] {
     const store = getStore();
@@ -1159,7 +1191,13 @@ export class AccountService {
 //   · 还原完整的 secure/httpOnly/sameSite/expires 属性
 //   · 跳过注入会失败的 anti-bot cookie（acw_tc 等），它们会自动重新生成
 // =======================================================================
+/** 标记当前正在注入 cookies 的账号（防止 cookies.on('changed') 把注入操作误判为用户变更而频繁存盘） */
+export const injectingAccounts = new Set<string>();
+
 export async function injectAccountCookies(accountId: string, targetUrl?: string): Promise<{ ok: number; fail: number; skipped: number }> {
+  injectingAccounts.add(accountId);
+  // 延迟移除标记：注入完成后 2 秒内的 cookies.on('changed') 视为注入副作用，不触发存盘
+  setTimeout(() => injectingAccounts.delete(accountId), 2000);
   const cred = AccountService.getCredential(accountId);
   if (!cred) return { ok: 0, fail: 0, skipped: 0 };
 

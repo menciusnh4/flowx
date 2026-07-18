@@ -296,8 +296,9 @@ export class BrowserEnvService {
    * 在 Session 会话中应用绑定的浏览器指纹 UA 及代理 IP 出网环境
    * @param sess Electron 的 Session 实例
    * @param envId 绑定的浏览器环境 id
+   * @returns 隔离应用结果；ok=false 表示隔离失效（环境/代理丢失），已回退本机直连
    */
-  static async applyEnvironment(sess: any, envId?: string | null): Promise<void> {
+  static async applyEnvironment(sess: any, envId?: string | null): Promise<{ ok: boolean; reason?: string }> {
     if (!envId) {
       // 若没有绑定环境，清空当前的代理设置，保持默认环境出网
       try {
@@ -321,13 +322,13 @@ export class BrowserEnvService {
         sess.setUserAgent(fallbackUA);
         logger.info(`[BrowserEnv] 为未绑定环境的 Session 注入兜底 UA: "${fallbackUA}"`);
       }
-      return;
+      return { ok: true };
     }
 
     const env = this.listEnvironments().find((e) => e.id === envId);
     if (!env) {
       logger.warn(`[BrowserEnv] 未找到绑定的环境配置: ${envId}`);
-      return;
+      return { ok: false, reason: '绑定的隔离环境配置已不存在，已回退本机直连' };
     }
 
     // 1. 设置特定的浏览器指纹 User-Agent
@@ -343,7 +344,7 @@ export class BrowserEnvService {
         const proxyRules = `${proxy.type}://${proxy.host}:${proxy.port}`;
         try {
           await sess.setProxy({ proxyRules });
-          
+
           // 每次配置前先清理之前的旧认证监听器，防范内存泄露
           sess.removeAllListeners('login');
 
@@ -358,11 +359,20 @@ export class BrowserEnvService {
             logger.info(`[BrowserEnv] 代理认证登录监听器已绑定: username="${proxy.username}"`);
           }
           logger.info(`[BrowserEnv] Session 已绑定代理出网环境: ${proxyRules}`);
+          return { ok: true };
         } catch (err) {
           logger.error(`[BrowserEnv] 代理设置失败 (${proxyRules}):`, err);
+          return { ok: false, reason: '代理 IP 配置无效，已回退本机直连' };
         }
       } else {
         logger.warn(`[BrowserEnv] 环境绑定的代理 IP 数据已丢失: proxyId=${env.proxyId}`);
+        // 代理数据丢失 → 回退直连，避免用错误的出网 IP
+        try {
+          await sess.setProxy({ mode: 'direct' });
+        } catch {
+          /* ignore */
+        }
+        return { ok: false, reason: '绑定的代理 IP 已失效，已回退本机直连' };
       }
     } else {
       // 若没有绑定代理 IP，重置为直接连接
@@ -371,6 +381,7 @@ export class BrowserEnvService {
       } catch (err) {
         logger.warn('[BrowserEnv] 重置直连代理失败', err);
       }
+      return { ok: true };
     }
   }
 }

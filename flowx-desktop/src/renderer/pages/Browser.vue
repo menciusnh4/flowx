@@ -9,6 +9,7 @@ import type { BrowserEnvironment, PublishRequest, BrowserBookmark, BrowserHistor
 
 const route = useRoute()
 const envStore = useEnvStore()
+const props = defineProps<{ url?: string }>()
 
 // 发布表单 ref
 const publishFormRef = ref<InstanceType<typeof PublishForm> | null>(null)
@@ -214,7 +215,7 @@ async function initBrowser() {
     environments.value = envStore.environments
 
     // 从 URL 参数获取初始 URL（从草稿箱等地方跳转过来时会带 url 参数）
-    const initialUrl = (route.query.url as string) || 'https://www.baidu.com'
+    const initialUrl = (props.url ?? (route.query.url as string)) || 'https://www.baidu.com'
 
     // 初始创建一个标签
     await createTab(initialUrl)
@@ -226,6 +227,14 @@ async function initBrowser() {
     ElMessage.error('浏览器初始化失败')
   }
 }
+
+// 从草稿箱等带 url 跳转到浏览器 tab 时，props.url 变化则导航到该网页
+watch(
+  () => props.url,
+  (u) => {
+    if (u && activeTabId.value) navigateTo(u)
+  },
+)
 
 // ========== 视图 bounds 管理 ==========
 
