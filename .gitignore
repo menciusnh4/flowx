@@ -90,3 +90,7 @@ flowx-data/
 PRD-*.md
 pm/
 flowx-ui-redesign/*.html
+
+# 历史构建残留与临时目录（不应进仓库）
+flowx-desktop/dist_old_*/
+flowx-desktop/scratch/
