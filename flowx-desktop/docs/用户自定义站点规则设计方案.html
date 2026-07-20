@@ -489,10 +489,10 @@
     <header class="header">
       <span class="tag">功能设计</span>
       <h1>用户自定义站点规则设计方案</h1>
-      <p class="subtitle">可视化元素拾取 · 规则编辑器 · 一键保存 · 导入导出</p>
+      <p class="subtitle">可视化元素拾取 · 浏览器内嵌面板 · 一键保存 · 导入导出</p>
       <div class="meta">
-        <span>📅 2026-07-18</span>
-        <span>📝 版本 1.0</span>
+        <span>📅 2026-07-20</span>
+        <span>📝 版本 1.1</span>
         <span>🏷️ 第四阶段优先功能</span>
       </div>
     </header>
@@ -505,6 +505,7 @@
         <li><a href="#data-model">数据模型设计</a></li>
         <li><a href="#manager">规则管理器</a></li>
         <li><a href="#extraction-integration">与提取流程集成</a></li>
+        <li><a href="#browser-panel">浏览器规则面板</a></li>
         <li><a href="#ui-list">规则列表 UI</a></li>
         <li><a href="#ui-editor">规则编辑器 UI</a></li>
         <li><a href="#picker">可视化元素拾取器</a></li>
@@ -512,6 +513,7 @@
         <li><a href="#context-menu">右键菜单快捷规则</a></li>
         <li><a href="#import-export">导入与导出</a></li>
         <li><a href="#ipc">IPC 通道设计</a></li>
+        <li><a href="#technical-notes">技术坑点与解决方案</a></li>
         <li><a href="#implementation">实施计划</a></li>
       </ol>
     </nav>
@@ -1067,11 +1069,147 @@ export async function extractContentFromView(viewId: string): Promise&lt;Extract
       </div>
     </section>
 
-    <!-- 5. 规则列表 UI -->
-    <section id="ui-list">
-      <h2>5. 规则列表 UI</h2>
+    <!-- 5. 浏览器规则面板 -->
+    <section id="browser-panel">
+      <h2>5. 浏览器规则面板</h2>
 
-      <h3>5.1 入口位置</h3>
+      <h3>5.1 设计背景</h3>
+
+      <p>
+        原设计中规则编辑器采用<mark class="key">右侧抽屉</mark>形式，但由于 Electron 中
+        <code>WebContentsView</code> 是原生视图层级，位于渲染进程 DOM 之上，
+        导致抽屉弹窗会被浏览器页面遮挡（z-index 问题）。
+      </p>
+
+      <div class="callout warn">
+        <div class="callout-title">⚠️ 原生视图层级问题</div>
+        <p style="margin-bottom: 0;">
+          Electron 的 <code>BrowserView</code> / <code>WebContentsView</code> 是原生窗口级别，
+          不受 CSS z-index 控制。任何渲染进程中的 DOM 元素都无法覆盖在原生视图之上。
+          因此抽屉、弹窗、Tooltip 等覆盖式 UI 在浏览器区域内无法正常显示。
+        </p>
+      </div>
+
+      <h3>5.2 解决方案：标签页式右侧面板</h3>
+
+      <p>
+        采用<mark class="key">并排布局 + 标签页切换</mark>的方案，将规则管理界面
+        与发布编辑面板整合到右侧面板中，通过 Tab 切换，从根本上避免 z-index 问题。
+      </p>
+
+      <div class="wireframe">
+<span class="wf-title">浏览器页面布局（分屏模式）</span>
+┌─────────────────────────────────────────────────────────────────┐
+│  🔍 地址栏                                [⚙️规则] [📐布局]    │
+├──────────────────────────┬──────────────────────────────────────┤
+│                          │  📝 发布编辑    ⚙️ 提取规则  [Tab]   │
+│                          ├──────────────────────────────────────┤
+│                          │                                      │
+│    浏览器 WebContents    │   右侧面板内容区                      │
+│    (原生视图)            │   - 发布表单 / 规则列表               │
+│                          │   - 规则编辑器                       │
+│                          │   - 拾取器状态提示                   │
+│                          │                                      │
+│                          │                                      │
+└──────────────────────────┴──────────────────────────────────────┘
+      </div>
+
+      <h3>5.3 右侧面板结构</h3>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon" style="background: #dbeafe; color: #1e40af;">📝</div>
+          <h3>发布编辑 Tab</h3>
+          <p>默认显示，包含发布表单、草稿保存、测试提交等功能。</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon" style="background: #f5f3ff; color: #7c3aed;">⚙️</div>
+          <h3>提取规则 Tab</h3>
+          <p>规则列表、新建/编辑规则、可视化拾取、测试应用等功能。</p>
+        </div>
+      </div>
+
+      <h3>5.4 交互流程</h3>
+
+      <h4>入口触发</h4>
+      <ul>
+        <li>点击工具栏「提取规则」按钮 → 展开右侧面板并切换到规则 Tab</li>
+        <li>右键菜单「添加自定义规则」 → 自动展开面板 + 切换到规则 Tab + 打开编辑器</li>
+        <li>右键菜单「使用自定义规则提取」 → 自动切换到发布 Tab 并填入内容</li>
+      </ul>
+
+      <h4>拾取器联动</h4>
+      <ol class="step-list">
+        <li>用户在规则编辑器中点击「拾取」按钮</li>
+        <li>拾取器启动，鼠标在浏览器页面上移动时高亮元素</li>
+        <li>拾取结果实时显示在右侧规则面板中（无需弹窗）</li>
+        <li>用户可继续拾取其他字段或保存规则</li>
+      </ol>
+
+      <h3>5.5 组件结构</h3>
+
+      <pre><code>Browser.vue
+├── 左侧：浏览器区域 (WebContentsView)
+└── 右侧：面板容器 (.right-panel)
+    ├── Tab 头 (.right-panel-tabs)
+    │   ├── 发布编辑 Tab
+    │   └── 提取规则 Tab
+    └── Tab 内容 (.tab-content)
+        ├── PublishForm.vue          (发布编辑)
+        └── BrowserRulePanel.vue     (提取规则管理)
+            ├── 规则列表
+            ├── 规则编辑器 (SiteRuleEditor.vue)
+            └── 拾取器状态提示</code></pre>
+
+      <h3>5.6 布局模式</h3>
+
+      <p>支持三种布局模式，用户可根据需要切换：</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>模式</th>
+              <th>说明</th>
+              <th>适用场景</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>browser-only</strong></td>
+              <td>仅显示浏览器，右侧面板完全隐藏</td>
+              <td>纯浏览网页时</td>
+            </tr>
+            <tr>
+              <td><strong>split</strong></td>
+              <td>左右分屏，浏览器 + 右侧面板并排显示</td>
+              <td>边浏览边编辑 / 配置规则时（默认）</td>
+            </tr>
+            <tr>
+              <td><strong>publish-only</strong></td>
+              <td>仅显示右侧面板，浏览器隐藏</td>
+              <td>专注编辑发布内容时</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout success">
+        <div class="callout-title">✅ 方案优势</div>
+        <ul style="margin-bottom: 0;">
+          <li><strong>彻底解决 z-index 问题</strong>：所有 UI 都在渲染进程 DOM 内，无原生视图层级冲突</li>
+          <li><strong>操作效率更高</strong>：规则配置与发布编辑同屏切换，无需打开关闭弹窗</li>
+          <li><strong>视觉一致性</strong>：与发布表单统一在右侧面板，用户学习成本低</li>
+          <li><strong>多任务并行</strong>：可边浏览网页边配置规则，实时验证效果</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 6. 规则列表 UI -->
+    <section id="ui-list">
+      <h2>6. 规则列表 UI</h2>
+
+      <h3>6.1 入口位置</h3>
 
       <p>
         规则管理入口设置在两处，方便不同场景访问：
@@ -1079,10 +1217,45 @@ export async function extractContentFromView(viewId: string): Promise&lt;Extract
 
       <ul>
         <li><strong>设置页</strong>：左侧导航增加"提取规则"Tab，作为完整的规则管理页面</li>
-        <li><strong>浏览器页</strong>：工具栏"布局"下拉菜单中增加"管理提取规则"选项</li>
+        <li><strong>浏览器页</strong>：工具栏增加「提取规则」按钮，点击展开右侧面板规则 Tab</li>
       </ul>
 
-      <h3>5.2 规则列表页布局</h3>
+      <h3>6.2 浏览器规则面板布局</h3>
+
+      <p>
+        浏览器内的规则面板采用<mark class="key">双层结构</mark>：
+        上层显示当前网站匹配的规则（优先展示），下层显示全部规则。
+      </p>
+
+      <div class="wireframe">
+<span class="wf-title">右侧面板 → 提取规则 Tab</span>
+┌───────────────────────────────────┐
+│  🔍 搜索规则...          [+ 新建] │
+├───────────────────────────────────┤
+│  ✅ 当前网站匹配 (2)              │
+│  ┌─────────────────────────────┐ │
+│  │ 📗 我的博客规则              │ │
+│  │    域名: example.com         │ │
+│  │    类型: 图文 / 文章         │ │
+│  │    [应用提取] [编辑] [禁用]  │ │
+│  └─────────────────────────────┘ │
+│  ┌─────────────────────────────┐ │
+│  │ 📗 备用规则                  │ │
+│  │    域名: example.com         │ │
+│  │    [应用提取] [编辑] [禁用]  │ │
+│  └─────────────────────────────┘ │
+├───────────────────────────────────┤
+│  📚 全部规则 (8)                  │
+│  ┌─────────────────────────────┐ │
+│  │ 技术论坛帖子                 │ │
+│  │    forum.tech.com   使用 5次 │ │
+│  │    [应用提取] [编辑] [删除]  │ │
+│  └─────────────────────────────┘ │
+│  ... 更多规则 ...                 │
+└───────────────────────────────────┘
+      </div>
+
+      <h3>6.3 设置页规则列表布局</h3>
 
       <div class="wireframe">
 <span class="wf-title">设置页 → 提取规则</span>
@@ -1118,7 +1291,7 @@ export async function extractContentFromView(viewId: string): Promise&lt;Extract
 └──────────────────────────────────────────────────────────────┘
       </div>
 
-      <h3>5.3 列表项操作</h3>
+      <h3>6.4 列表项操作</h3>
 
       <div class="feature-grid">
         <div class="feature-card">
@@ -1143,25 +1316,34 @@ export async function extractContentFromView(viewId: string): Promise&lt;Extract
         </div>
       </div>
 
-      <h3>5.4 内置规则查看</h3>
+      <h3>6.5 内置规则查看</h3>
       <p>
         内置规则以只读方式展示，用户可点击查看详情（各选择器的值），
         方便参考学习如何编写自定义规则。不可编辑、不可删除。
       </p>
     </section>
 
-    <!-- 6. 规则编辑器 UI -->
+    <!-- 7. 规则编辑器 UI -->
     <section id="ui-editor">
-      <h2>6. 规则编辑器 UI</h2>
+      <h2>7. 规则编辑器 UI</h2>
 
-      <h3>6.1 编辑器形式</h3>
+      <h3>7.1 编辑器形式</h3>
 
       <p>
-        规则编辑器采用<mark class="key">侧边抽屉</mark>形式，从右侧滑出，
-        不离开当前页面，方便在浏览器页面上直接编辑和测试规则。
+        规则编辑器集成在<mark class="key">浏览器右侧面板</mark>的「提取规则」Tab 中，
+        与浏览器页面并排显示，方便在浏览网页时直接编辑和测试规则，
+        从根本上避免原生视图层级遮挡问题。
       </p>
 
-      <h3>6.2 编辑器布局</h3>
+      <div class="callout">
+        <div class="callout-title">💡 设计变更说明</div>
+        <p style="margin-bottom: 0;">
+          原设计采用右侧抽屉形式，由于 Electron <code>WebContentsView</code> 原生视图层级问题，
+          抽屉会被浏览器页面遮挡。已调整为右侧面板内嵌形式，与发布表单共用 Tab 切换。
+        </p>
+      </div>
+
+      <h3>7.2 编辑器布局</h3>
 
       <div class="wireframe">
 <span class="wf-title">规则编辑器（右侧抽屉，宽度 420px）</span>
@@ -1230,7 +1412,7 @@ export async function extractContentFromView(viewId: string): Promise&lt;Extract
 └─────────────────────────────────────┘
       </div>
 
-      <h3>6.3 实时测试功能</h3>
+      <h3>7.3 实时测试功能</h3>
 
       <p>
         编辑器底部提供<mark class="key">实时测试</mark>功能，用户可以在当前浏览的页面上
@@ -1256,7 +1438,7 @@ export async function extractContentFromView(viewId: string): Promise&lt;Extract
         </ul>
       </div>
 
-      <h3>6.4 规则编辑器字段说明</h3>
+      <h3>7.4 规则编辑器字段说明</h3>
 
       <p>
         规则编辑器支持以下字段的配置，每个字段都可以通过<strong>手动输入</strong>或<strong>页面拾取</strong>两种方式填写：
@@ -1320,11 +1502,11 @@ export async function extractContentFromView(viewId: string): Promise&lt;Extract
       </div>
     </section>
 
-    <!-- 7. 可视化元素拾取器 -->
+    <!-- 8. 可视化元素拾取器 -->
     <section id="picker">
-      <h2>7. 可视化元素拾取器</h2>
+      <h2>8. 可视化元素拾取器</h2>
 
-      <h3>7.1 设计目标</h3>
+      <h3>8.1 设计目标</h3>
 
       <p>
         <mark class="key">零代码配置规则</mark>。用户无需了解 CSS 选择器，只需在页面上点击对应的元素，
@@ -1342,7 +1524,7 @@ export async function extractContentFromView(viewId: string): Promise&lt;Extract
         </ul>
       </div>
 
-      <h3>7.2 拾取模式分类</h3>
+      <h3>8.2 拾取模式分类</h3>
 
       <div class="card-grid">
         <div class="card">
@@ -1357,7 +1539,7 @@ export async function extractContentFromView(viewId: string): Promise&lt;Extract
         </div>
       </div>
 
-      <h3>7.3 拾取交互流程</h3>
+      <h3>8.3 拾取交互流程</h3>
 
       <h4>单选模式流程</h4>
 
@@ -1399,7 +1581,7 @@ flowchart TD
         <figcaption>图 3：多选模式拾取流程</figcaption>
       </figure>
 
-      <h3>7.4 拾取器 UI 表现</h3>
+      <h3>8.4 拾取器 UI 表现</h3>
 
       <h4>页面上的视觉元素</h4>
 
@@ -1452,7 +1634,7 @@ flowchart TD
 └──────────────────────────────────────────────────┘
       </div>
 
-      <h3>7.5 多选模式的通用选择器推断</h3>
+      <h3>8.5 多选模式的通用选择器推断</h3>
 
       <p>
         当用户选择 2 个以上同类元素时，系统需要自动推断出能够匹配所有已选元素的<mark class="key">最精确的通用选择器</mark>。
@@ -1525,7 +1707,7 @@ flowchart TD
         </p>
       </div>
 
-      <h3>7.6 移除元素的拾取</h3>
+      <h3>8.6 移除元素的拾取</h3>
 
       <p>
         "移除元素"字段是一个特殊的多选场景：用户可以拾取多种不同类型的噪音元素，
@@ -1548,7 +1730,7 @@ flowchart TD
 └─────────────────────────────────────────┘
       </div>
 
-      <h3>7.7 拾取器技术实现</h3>
+      <h3>8.7 拾取器技术实现</h3>
 
       <h4>与现有选择器脚本的关系</h4>
 
@@ -1588,7 +1770,7 @@ function highlightMatches(selector) {
   // 查找所有匹配元素，添加紫色虚线边框
 }</code></pre>
 
-      <h3>7.8 拾取结果回传</h3>
+      <h3>8.8 拾取结果回传</h3>
 
       <p>
         拾取完成后，结果通过 console.log 通信方式回传给主进程（与现有选择器模式一致），
@@ -1609,11 +1791,11 @@ interface PickerResult {
 console.log('__FLOX_PICKER_RESULT__:' + JSON.stringify(result));</code></pre>
     </section>
 
-    <!-- 8. 一键保存规则 -->
+    <!-- 9. 一键保存规则 -->
     <section id="quick-save">
-      <h2>8. 一键保存规则</h2>
+      <h2>9. 一键保存规则</h2>
 
-      <h3>8.1 设计目标</h3>
+      <h3>9.1 设计目标</h3>
 
       <p>
         <mark class="key">零代码门槛</mark>的规则创建方式。用户使用手动提取（选择元素提取或右键提取）后，
@@ -1621,7 +1803,7 @@ console.log('__FLOX_PICKER_RESULT__:' + JSON.stringify(result));</code></pre>
         下次访问时自动使用，无需手动编写 CSS 选择器。
       </p>
 
-      <h3>8.2 触发场景</h3>
+      <h3>9.2 触发场景</h3>
 
       <p>一键保存规则的入口出现在以下两种场景：</p>
 
@@ -1638,7 +1820,7 @@ console.log('__FLOX_PICKER_RESULT__:' + JSON.stringify(result));</code></pre>
         </div>
       </div>
 
-      <h3>8.3 交互流程</h3>
+      <h3>9.3 交互流程</h3>
 
       <figure class="diagram">
         <div class="mermaid">
@@ -1658,7 +1840,7 @@ flowchart TD
         <figcaption>图 4：一键保存规则交互流程</figcaption>
       </figure>
 
-      <h3>8.4 保存对话框</h3>
+      <h3>9.4 保存对话框</h3>
 
       <div class="wireframe">
 <span class="wf-title">保存为网站规则（弹窗，宽度 400px）</span>
@@ -1693,7 +1875,7 @@ flowchart TD
 └─────────────────────────────────────┘
       </div>
 
-      <h3>8.5 自动填充逻辑</h3>
+      <h3>9.5 自动填充逻辑</h3>
 
       <p>保存对话框中，以下字段自动填充，用户可按需调整：</p>
 
@@ -1750,7 +1932,7 @@ flowchart TD
         </p>
       </div>
 
-      <h3>8.6 重复规则检测</h3>
+      <h3>9.6 重复规则检测</h3>
 
       <p>
         保存时检测是否已存在相同域名的自定义规则：
@@ -1762,11 +1944,11 @@ flowchart TD
       </ul>
     </section>
 
-    <!-- 9. 右键菜单快捷规则 -->
+    <!-- 10. 右键菜单快捷规则 -->
     <section id="context-menu">
-      <h2>9. 右键菜单快捷规则</h2>
+      <h2>10. 右键菜单快捷规则</h2>
 
-      <h3>9.1 设计目标</h3>
+      <h3>10.1 设计目标</h3>
 
       <p>
         在浏览器页面的右键菜单中增加<mark class="key">"使用自定义规则提取"</mark>子菜单，
@@ -1784,7 +1966,7 @@ flowchart TD
         </ul>
       </div>
 
-      <h3>9.2 菜单结构</h3>
+      <h3>10.2 菜单结构</h3>
 
       <p>右键菜单中增加"使用规则提取"菜单项，包含两级结构：</p>
 
@@ -1828,7 +2010,7 @@ flowchart TD
 └──────────────────────────────────┘
       </div>
 
-      <h3>9.2.1 使用规则 vs 添加规则</h3>
+      <h3>10.2.1 使用规则 vs 添加规则</h3>
 
       <p>
         右键菜单中包含两个与自定义规则相关的入口，分别对应不同的使用场景：
@@ -1861,7 +2043,7 @@ flowchart TD
         </table>
       </div>
 
-      <h3>9.3 菜单排序逻辑</h3>
+      <h3>10.3 菜单排序逻辑</h3>
 
       <p>菜单项的排序遵循以下优先级，确保用户最可能用到的规则排在最前面：</p>
 
@@ -1929,7 +2111,7 @@ flowchart TD
         </table>
       </div>
 
-      <h3>9.4 发布类型感知</h3>
+      <h3>10.4 发布类型感知</h3>
 
       <p>
         右键菜单需要知道当前的发布类型，才能进行类型匹配。发布类型从渲染进程的发布表单中获取。
@@ -1944,7 +2126,7 @@ flowchart TD
         <li>如果无法获取发布类型（如发布表单未打开），则忽略类型匹配，只按域名排序</li>
       </ul>
 
-      <h3>9.5 规则图标与标签</h3>
+      <h3>10.5 规则图标与标签</h3>
 
       <p>每条规则在菜单中显示图标和标签，帮助用户快速识别：</p>
 
@@ -1982,7 +2164,7 @@ flowchart TD
         </table>
       </div>
 
-      <h3>9.6 点击菜单项后的行为</h3>
+      <h3>10.6 点击菜单项后的行为</h3>
 
       <ol class="step-list">
         <li>用户点击某条规则</li>
@@ -2002,7 +2184,7 @@ flowchart TD
         </p>
       </div>
 
-      <h3>9.7 菜单构建时机</h3>
+      <h3>10.7 菜单构建时机</h3>
 
       <p>
         右键菜单是在用户每次右键时<mark class="key">动态构建</mark>的，确保菜单内容始终与当前页面和规则列表同步。
@@ -2079,7 +2261,7 @@ function buildCustomRuleMenu(viewId, pageUrl, publishType) {
   return menuItems;
 }</code></pre>
 
-      <h3>9.8 空状态处理</h3>
+      <h3>10.8 空状态处理</h3>
 
       <ul>
         <li><strong>没有自定义规则时</strong>：不显示"使用自定义规则提取"菜单项</li>
@@ -2088,7 +2270,7 @@ function buildCustomRuleMenu(viewId, pageUrl, publishType) {
         <li><strong>匹配规则超过 5 条时</strong>：前 5 条放一级，剩余的放二级"更多匹配规则"</li>
       </ul>
 
-      <h3>9.9 添加自定义规则</h3>
+      <h3>10.9 添加自定义规则</h3>
 
       <p>
         在右键菜单中增加<mark class="key">"➕ 添加自定义规则"</mark>子菜单，
@@ -2291,9 +2473,9 @@ interface RuleDraft {
 
     <!-- 10. 导入与导出 -->
     <section id="import-export">
-      <h2>10. 导入与导出</h2>
+      <h2>11. 导入与导出</h2>
 
-      <h3>10.1 导出格式</h3>
+      <h3>11.1 导出格式</h3>
 
       <p>规则以 <strong>JSON 格式</strong>导出，文件扩展名为 <code>.json</code>，文件名形如 <code>flowx-rules-20260718.json</code>。</p>
 
@@ -2321,7 +2503,7 @@ interface RuleDraft {
   ]
 }</code></pre>
 
-      <h3>10.2 导出功能</h3>
+      <h3>11.2 导出功能</h3>
 
       <ul>
         <li><strong>导出全部</strong>：导出所有自定义规则</li>
@@ -2331,7 +2513,7 @@ interface RuleDraft {
 
       <p>使用 Electron 的 <code>dialog.showSaveDialog</code> 让用户选择保存位置。</p>
 
-      <h3>10.3 导入功能</h3>
+      <h3>11.3 导入功能</h3>
 
       <div class="table-wrap">
         <table>
@@ -2368,7 +2550,7 @@ interface RuleDraft {
         <li>显示导入结果：成功导入 X 条，跳过 X 条</li>
       </ol>
 
-      <h3>10.4 版本兼容</h3>
+      <h3>11.4 版本兼容</h3>
 
       <ul>
         <li>导出文件中包含 <code>version</code> 字段，标识规则格式版本</li>
@@ -2379,7 +2561,7 @@ interface RuleDraft {
 
     <!-- 11. IPC 通道设计 -->
     <section id="ipc">
-      <h2>11. IPC 通道设计</h2>
+      <h2>12. IPC 通道设计</h2>
 
       <p>
         新增以下 IPC 通道，全部放在 <code>browser:</code> 命名空间下，
@@ -2491,7 +2673,7 @@ interface RuleDraft {
         </table>
       </div>
 
-      <h3>11.1 测试规则的类型定义</h3>
+      <h3>12.1 测试规则的类型定义</h3>
 
       <pre><code>/** 测试用的规则数据（不包含 ID、时间戳等元信息） */
 interface TestRuleData {
@@ -2519,11 +2701,212 @@ interface RuleTestResult {
 }</code></pre>
     </section>
 
-    <!-- 12. 实施计划 -->
-    <section id="implementation">
-      <h2>12. 实施计划</h2>
+    <!-- 13. 技术坑点与解决方案 -->
+    <section id="technical-notes">
+      <h2>13. 技术坑点与解决方案</h2>
 
-      <h3>12.1 开发阶段划分</h3>
+      <p>
+        在实现用户自定义站点规则的过程中，遇到了几个典型的 Electron + Vue 技术坑点。
+        本节记录这些问题及其解决方案，供后续开发参考。
+      </p>
+
+      <h3>13.1 IPC 对象克隆错误</h3>
+
+      <h4>问题描述</h4>
+      <p>
+        保存规则时出现 <code>An object could not be cloned</code> 错误，
+        导致规则无法通过 IPC 从渲染进程发送到主进程。
+      </p>
+
+      <h4>原因分析</h4>
+      <p>
+        Vue 3 的响应式对象（<code>ref</code> / <code>reactive</code>）是 <code>Proxy</code> 代理对象，
+        而 Electron 的 IPC 通信使用结构化克隆算法（Structured Clone Algorithm），
+        <strong>无法克隆 Proxy 对象</strong>。直接将响应式对象通过 IPC 发送会导致克隆失败。
+      </p>
+
+      <div class="callout danger">
+        <div class="callout-title">❌ 错误写法</div>
+        <pre><code>// 直接发送响应式对象会失败
+await electronApi.browser.saveCustomRule(form.value)</code></pre>
+      </div>
+
+      <h4>解决方案</h4>
+      <p>
+        使用 Vue 的 <code>toRaw()</code> 函数将响应式对象转换为原始对象后再发送。
+        同时建议只提取需要的字段，避免传递不必要的响应式元数据。
+      </p>
+
+      <div class="callout success">
+        <div class="callout-title">✅ 正确写法</div>
+        <pre><code>import { toRaw } from 'vue'
+
+// 构建纯对象数据（去除响应式代理）
+function buildRuleData(): Partial&lt;CustomSiteRule&gt; & { contentSelector: string } {
+  const raw = toRaw(form.value)
+  const data: any = {}
+  // 只复制有效字段，跳过 undefined
+  const fields = [
+    'name', 'enabled', 'matchType', 'matchValue', 'pathPattern',
+    'contentTypes', 'contentSelector', 'titleSelector', 'bylineSelector',
+    'dateSelector', 'siteName', 'imageSelector', 'tagsSelector',
+    'removeSelectors', 'remark', 'source',
+  ]
+  for (const f of fields) {
+    const val = (raw as any)[f]
+    if (val !== undefined) {
+      data[f] = val
+    }
+  }
+  return data
+}
+
+// 发送纯对象
+await electronApi.browser.saveCustomRule(buildRuleData())</code></pre>
+      </div>
+
+      <h3>13.2 原生视图层级问题</h3>
+
+      <h4>问题描述</h4>
+      <p>
+        规则编辑器采用抽屉/弹窗形式时，会被浏览器页面（WebContentsView）遮挡，
+        无论设置多高的 z-index 都无效。
+      </p>
+
+      <h4>原因分析</h4>
+      <p>
+        Electron 的 <code>WebContentsView</code> / <code>BrowserView</code> 是<strong>原生窗口级别</strong>的视图，
+        直接由操作系统管理，不属于 Chromium 的渲染层级。
+        渲染进程中的 DOM 元素（包括弹窗、抽屉、Tooltip）都在同一个合成层中，
+        无法覆盖在原生视图之上。
+      </p>
+
+      <div class="callout warn">
+        <div class="callout-title">⚠️ Electron 视图层级</div>
+        <pre><code>┌─────────────────────────────────────┐
+│  原生窗口级别（操作系统管理）        │
+│  ┌───────────────────────────────┐  │
+│  │  WebContentsView（浏览器）    │  │  ← 在上层，无法被 DOM 覆盖
+│  └───────────────────────────────┘  │
+│  ┌───────────────────────────────┐  │
+│  │  渲染进程 DOM（HTML/CSS）     │  │  ← 在下层
+│  └───────────────────────────────┘  │
+└─────────────────────────────────────┘</code></pre>
+      </div>
+
+      <h4>解决方案</h4>
+      <p>
+        采用<strong>并排布局 + 标签页切换</strong>的方案，将规则管理界面
+        与发布编辑面板整合到右侧面板中，从根本上避免 z-index 问题。
+      </p>
+
+      <ul>
+        <li><strong>方案一（已采用）</strong>：右侧面板内嵌编辑器，与浏览器并排显示</li>
+        <li><strong>方案二</strong>：使用 <code>BrowserWindow</code> 子窗口（但会有窗口焦点问题）</li>
+        <li><strong>方案三</strong>：在 WebContentsView 内部注入 UI（但跨域页面无法注入）</li>
+      </ul>
+
+      <h3>13.3 拾取器事件链路完整性</h3>
+
+      <h4>问题描述</h4>
+      <p>
+        通过右键菜单「添加自定义规则」启动拾取器时，渲染进程收不到拾取器启动事件，
+        导致规则面板不显示、状态不同步。
+      </p>
+
+      <h4>原因分析</h4>
+      <p>
+        拾取器的启动有两条路径：
+      </p>
+      <ul>
+        <li><strong>路径一</strong>：用户在规则编辑器中点击「拾取」按钮 → 渲染进程主动调用 IPC → 状态同步</li>
+        <li><strong>路径二</strong>：用户右键菜单选择「添加自定义规则」 → 主进程直接启动拾取器 → 渲染进程未监听启动事件</li>
+      </ul>
+      <p>
+        路径二缺少 <code>pickerStarted</code> 事件的监听，导致渲染进程不知道拾取器已启动。
+      </p>
+
+      <h4>解决方案</h4>
+      <p>
+        在 preload 脚本和渲染进程中完整注册拾取器相关事件的监听器：
+      </p>
+
+      <div class="callout success">
+        <div class="callout-title">✅ 完整事件链路</div>
+        <pre><code>// preload/index.ts
+onPickerStarted: (cb) =&gt; {
+  const handler = (_event, payload) =&gt; cb(payload);
+  ipcRenderer.on('browser:pickerStarted', handler);
+  return () =&gt; ipcRenderer.removeListener('browser:pickerStarted', handler);
+},
+onPickerResult: (cb) =&gt; { ... },
+onPickerCancelled: (cb) =&gt; { ... },
+
+// Browser.vue - 挂载时注册监听
+onMounted(() =&gt; {
+  // 拾取器启动（外部触发时同步状态）
+  offPickerStarted = electronApi.browser.onPickerStarted((data) =&gt; {
+    if (data.viewId !== activeTabId.value) return
+    pickerActive.value = true
+    currentPickerField.value = data.fieldType
+    // 自动切换到规则面板
+    if (layoutMode.value === 'browser-only') {
+      layoutMode.value = 'split'
+    }
+    rightPanelTab.value = 'rules'
+  })
+})</code></pre>
+      </div>
+
+      <h3>13.4 响应式数据与 IPC 的最佳实践</h3>
+
+      <p>基于以上坑点，总结以下 Vue + Electron IPC 开发最佳实践：</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>原则</th>
+              <th>说明</th>
+              <th>示例</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>toRaw 转换</strong></td>
+              <td>发送 IPC 消息前，始终用 <code>toRaw()</code> 转换响应式对象</td>
+              <td><code>toRaw(form.value)</code></td>
+            </tr>
+            <tr>
+              <td><strong>字段提取</strong></td>
+              <td>只提取需要的字段，避免传递整个响应式对象</td>
+              <td>构建 data 对象，只包含有效字段</td>
+            </tr>
+            <tr>
+              <td><strong>双向事件</strong></td>
+              <td>主进程主动触发的操作，必须有对应的事件通知渲染进程</td>
+              <td>pickerStarted / pickerResult / pickerCancelled</td>
+            </tr>
+            <tr>
+              <td><strong>视图并排</strong></td>
+              <td>需要与 WebContentsView 交互的 UI，优先采用并排布局</td>
+              <td>右侧面板 + Tab 切换</td>
+            </tr>
+            <tr>
+              <td><strong>viewId 校验</strong></td>
+              <td>多标签页场景下，事件处理时始终校验 viewId 是否匹配当前标签</td>
+              <td><code>if (data.viewId !== activeTabId.value) return</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 14. 实施计划 -->
+    <section id="implementation">
+      <h2>14. 实施计划</h2>
+
+      <h3>14.1 开发阶段划分</h3>
 
       <p>建议分两个迭代开发，逐步交付可用功能：</p>
 
@@ -2542,7 +2925,8 @@ interface RuleTestResult {
             <li>数据模型：新增 contentTypes（适用发布类型）字段</li>
             <li>IPC：规则 CRUD + 拾取器相关通道</li>
             <li>UI：设置页 → 提取规则列表（自定义 + 内置只读）</li>
-            <li>UI：规则编辑器（右侧抽屉，表单编辑 + 实时测试 + 发布类型选择）</li>
+            <li>UI：规则编辑器（右侧面板内嵌，表单编辑 + 实时测试 + 发布类型选择）</li>
+            <li>UI：浏览器规则面板（右侧 Tab，与发布编辑并排，解决 z-index 问题）</li>
             <li>🎯 <strong>可视化元素拾取器（单选模式）</strong>：标题、正文、作者、日期</li>
             <li>🎯 <strong>可视化元素拾取器（多选模式）</strong>：图片、话题标签、移除元素</li>
             <li>🎯 <strong>通用选择器自动推断</strong>：多选时自动生成最精确的通用选择器</li>
@@ -2572,7 +2956,7 @@ interface RuleTestResult {
         </div>
       </div>
 
-      <h3>12.2 工作量预估</h3>
+      <h3>14.2 工作量预估</h3>
 
       <div class="table-wrap">
         <table>
@@ -2645,7 +3029,7 @@ interface RuleTestResult {
         </table>
       </div>
 
-      <h3>12.3 文件改动清单</h3>
+      <h3>14.3 文件改动清单</h3>
 
       <div class="table-wrap">
         <table>
@@ -2718,6 +3102,11 @@ interface RuleTestResult {
               <td>右键菜单中增加"使用自定义规则提取"和"添加自定义规则"两个子菜单</td>
             </tr>
             <tr>
+              <td><code>src/renderer/components/BrowserRulePanel.vue</code></td>
+              <td>新增</td>
+              <td>浏览器右侧规则面板（规则列表 + 编辑器 + 拾取器联动）</td>
+            </tr>
+            <tr>
               <td><code>src/renderer/components/QuickRulePicker.vue</code></td>
               <td>新增</td>
               <td>快速拾取底部浮动栏（草稿状态、继续拾取、测试、保存）</td>
@@ -2738,7 +3127,7 @@ interface RuleTestResult {
 
     <!-- Footer -->
     <footer>
-      <p><strong>文档版本</strong>：1.0 &nbsp;|&nbsp; <strong>创建日期</strong>：2026-07-18 &nbsp;|&nbsp; <strong>适用项目</strong>：FlowX Desktop</p>
+      <p><strong>文档版本</strong>：1.1 &nbsp;|&nbsp; <strong>更新日期</strong>：2026-07-20 &nbsp;|&nbsp; <strong>适用项目</strong>：FlowX Desktop</p>
     </footer>
   </div>
 
