@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, reactive, onMounted, watch, nextTick } from 'vue'
-import { ElMessage, ElMessageBox, ElInput } from 'element-plus'
+import { ElMessage, ElMessageBox, ElInput, ElImageViewer } from 'element-plus'
 import { useAccountStore } from '../stores/account'
 import { electronApi } from '../utils/electron'
 import type { PublishRequest, PlatformType } from '../../types'
@@ -410,6 +410,25 @@ const articleSummaryMaxLength = computed(() => {
 
 // ============ 图片预览缓存 ============
 const imageUrlCache = reactive<Record<string, string>>({})
+
+// ============ 图片大图预览 ============
+const imageViewerVisible = ref(false)
+const imageViewerUrlList = ref<string[]>([])
+const imageViewerInitialIndex = ref(0)
+
+function previewImage(filePath: string) {
+  const urls = mediaFiles.value
+    .filter(f => imageUrlCache[f])
+    .map(f => imageUrlCache[f])
+  const idx = mediaFiles.value.indexOf(filePath)
+  imageViewerUrlList.value = urls.length > 0 ? urls : [imageUrlCache[filePath] || filePath]
+  imageViewerInitialIndex.value = idx >= 0 ? idx : 0
+  imageViewerVisible.value = true
+}
+
+function closeImageViewer() {
+  imageViewerVisible.value = false
+}
 
 async function loadImagePreview(filePath: string): Promise<string> {
   if (imageUrlCache[filePath]) return imageUrlCache[filePath]
@@ -956,14 +975,14 @@ function iconOf(platform?: string): string {
             </span>
           </div>
           <div class="image-grid" v-if="mediaFiles.length > 0">
-            <div v-for="(f, idx) in mediaFiles" :key="idx" class="image-item">
+            <div v-for="(f, idx) in mediaFiles" :key="idx" class="image-item" @click="previewImage(f)">
               <div class="image-thumb">
                 <img v-if="imageUrlCache[f]" :src="imageUrlCache[f]" :alt="'图片' + (idx + 1)" />
                 <div v-else class="image-loading">加载中...</div>
               </div>
               <div class="image-actions">
                 <span class="image-index">{{ idx + 1 }}</span>
-                <el-button size="small" type="danger" link @click="removeMediaFile(f)">删除</el-button>
+                <el-button size="small" type="danger" link @click.stop="removeMediaFile(f)">删除</el-button>
               </div>
             </div>
           </div>
@@ -1001,7 +1020,7 @@ function iconOf(platform?: string): string {
             <span style="color:#F56C6C;">⚠️ 已选抖音账号：封面为必填项</span>
           </div>
           <div class="image-grid" v-if="mediaFiles.length > 0">
-            <div v-for="(f, idx) in mediaFiles" :key="idx" class="image-item">
+            <div v-for="(f, idx) in mediaFiles" :key="idx" class="image-item" @click="previewImage(f)">
               <div class="image-thumb">
                 <img v-if="imageUrlCache[f]" :src="imageUrlCache[f]" :alt="'图片' + (idx + 1)" />
                 <div v-else class="image-loading">加载中...</div>
@@ -1009,7 +1028,7 @@ function iconOf(platform?: string): string {
               </div>
               <div class="image-actions">
                 <span class="image-index">{{ idx + 1 }}</span>
-                <el-button size="small" type="danger" link @click="removeMediaFile(f)">删除</el-button>
+                <el-button size="small" type="danger" link @click.stop="removeMediaFile(f)">删除</el-button>
               </div>
             </div>
           </div>
@@ -1183,6 +1202,14 @@ function iconOf(platform?: string): string {
       </div>
     </div>
   </div>
+
+  <!-- 图片大图预览 -->
+  <el-image-viewer
+    v-if="imageViewerVisible"
+    :url-list="imageViewerUrlList"
+    :initial-index="imageViewerInitialIndex"
+    @close="closeImageViewer"
+  />
 </template>
 
 <style scoped>
@@ -1230,32 +1257,37 @@ function iconOf(platform?: string): string {
   flex-wrap: wrap;
 }
 .image-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
   margin-top: 12px;
 }
 .image-item {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+  width: 80px;
+  cursor: zoom-in;
+  flex-shrink: 0;
 }
 .image-thumb {
   position: relative;
-  width: 100%;
-  padding-top: 100%;
-  border-radius: 6px;
+  width: 80px;
+  height: 80px;
+  border-radius: 4px;
   overflow: hidden;
   background: #f5f7fa;
   border: 1px solid #e4e7ed;
+  transition: border-color 0.15s;
+}
+.image-item:hover .image-thumb {
+  border-color: #409eff;
 }
 .image-thumb img {
-  position: absolute;
-  top: 0;
-  left: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  display: block;
 }
 .image-loading {
   position: absolute;
@@ -1266,30 +1298,31 @@ function iconOf(platform?: string): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 11px;
   color: #909399;
   background: #f5f7fa;
 }
 .cover-badge {
   position: absolute;
-  top: 6px;
-  left: 6px;
+  top: 4px;
+  left: 4px;
   background: #409eff;
   color: #fff;
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 3px;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 2px;
   font-weight: 500;
+  line-height: 1.4;
 }
 .image-actions {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 12px;
+  font-size: 11px;
 }
 .image-index {
   color: #909399;
-  font-size: 11px;
+  font-size: 10px;
 }
 .file-list { margin-top: 8px; max-height: 160px; overflow-y: auto; }
 .file-item { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 12px; color: #606266; }

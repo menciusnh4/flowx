@@ -701,7 +701,9 @@ export class CreatorTabWindow {
     if (!tab) return;
     if (tab.view.webContents.isDestroyed()) return;
 
-    const [width, height] = this.win.getSize();
+    // 使用 getContentSize 而不是 getSize
+    // WebContentsView 的坐标系是相对于内容区域（content view）的，不包含标题栏
+    const [width, height] = this.win.getContentSize();
     const topOffset = this.tabBarHeight + this.toolbarHeight;
 
     tab.view.setBounds({
