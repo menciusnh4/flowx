@@ -108,7 +108,7 @@ export async function createBrowserView(options?: { url?: string; envId?: string
   // 添加到主窗口
   mainWin.contentView.addChildView(view);
 
-  const initialUrl = cleanUrl(options?.url || 'https://www.baidu.com');
+  const initialUrl = cleanUrl(options?.url || 'flowx-newtab://page');
   const item: ViewItem = {
     id: viewId,
     view,

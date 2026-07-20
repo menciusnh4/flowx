@@ -106,7 +106,7 @@ const canGoForward = computed(() => activeTab.value?.canGoForward ?? false)
 // ========== 标签操作 ==========
 
 /** 新建标签 */
-async function createTab(url = 'https://www.baidu.com') {
+async function createTab(url = 'flowx-newtab://page') {
   try {
     const result = await electronApi.browser.createView({ url })
     const tab: BrowserTab = {
@@ -228,7 +228,7 @@ async function initBrowser() {
     environments.value = envStore.environments
 
     // 从 URL 参数获取初始 URL（从草稿箱等地方跳转过来时会带 url 参数）
-    const initialUrl = (route.query.url as string) || 'https://www.baidu.com'
+    const initialUrl = (route.query.url as string) || 'flowx-newtab://page'
 
     // 初始创建一个标签
     await createTab(initialUrl)
@@ -295,6 +295,15 @@ async function navigateTo(url: string) {
 function handleUrlKeydown(e: KeyboardEvent | Event) {
   if ('key' in e && e.key === 'Enter') {
     navigateTo(urlInput.value)
+  }
+}
+
+async function goHome() {
+  if (!activeTabId.value) return
+  try {
+    await electronApi.browser.navigate(activeTabId.value, 'flowx-newtab://page')
+  } catch (e) {
+    console.error('[Browser.vue] goHome error', e)
   }
 }
 
@@ -1267,6 +1276,14 @@ watch(() => route.path, () => {
     <!-- 顶部工具栏 -->
     <div class="toolbar">
       <div class="nav-buttons">
+        <el-button
+          icon="House"
+          circle
+          size="small"
+          :disabled="!browserViewId"
+          @click="goHome"
+          title="主页"
+        />
         <el-button :icon="isLoading ? 'Close' : 'Refresh'" circle size="small"
           :disabled="!browserViewId"
           @click="reload"
