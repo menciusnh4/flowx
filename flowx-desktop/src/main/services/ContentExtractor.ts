@@ -534,6 +534,25 @@ async function trySiteRuleExtract(
     // ========== 同步表单元素值到 DOM ==========
     function syncFormValues(el) {
       try {
+        // 先处理元素自身（如果选择器直接选中的就是 input/textarea）
+        var selfTag = el.tagName ? el.tagName.toLowerCase() : '';
+        if (selfTag === 'input') {
+          var st = (el.type || 'text').toLowerCase();
+          if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image'].indexOf(st) < 0) {
+            var sv = el.value || '';
+            if (sv.trim()) {
+              el.textContent = sv;
+              el.setAttribute('value', sv);
+            }
+          }
+        } else if (selfTag === 'textarea') {
+          var stv = el.value || '';
+          if (stv.trim()) { el.textContent = stv; }
+        } else if (selfTag === 'select') {
+          var ssv = el.value || '';
+          var sst = el.options && el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : '';
+          if (ssv || sst) { el.textContent = sst || ssv; }
+        }
         el.querySelectorAll('input').forEach(function(input) {
           var type = (input.type || 'text').toLowerCase();
           if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image'].indexOf(type) >= 0) return;
@@ -768,7 +787,30 @@ async function tryCustomSiteRuleExtract(
     // 需要把值同步到 DOM，才能被内容提取捕获
     function syncFormValues(el) {
       try {
-        // 处理 input 元素（text、number、url、email、search、hidden 等文本类型）
+        // 先处理元素自身（如果 contentSelector 直接选中的就是 input/textarea）
+        var selfTag = el.tagName ? el.tagName.toLowerCase() : '';
+        if (selfTag === 'input') {
+          var type = (el.type || 'text').toLowerCase();
+          if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image'].indexOf(type) < 0) {
+            var val = el.value || '';
+            if (val.trim()) {
+              el.textContent = val;
+              el.setAttribute('value', val);
+            }
+          }
+        } else if (selfTag === 'textarea') {
+          var tVal = el.value || '';
+          if (tVal.trim()) {
+            el.textContent = tVal;
+          }
+        } else if (selfTag === 'select') {
+          var sVal = el.value || '';
+          var sText = el.options && el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : '';
+          if (sVal || sText) {
+            el.textContent = sText || sVal;
+          }
+        }
+        // 处理后代 input 元素
         el.querySelectorAll('input').forEach(function(input) {
           var type = (input.type || 'text').toLowerCase();
           // 跳过按钮、复选框、单选框、文件等非文本输入
@@ -1612,6 +1654,25 @@ function buildManualExtractScript(selector: string): string {
     // 同步表单元素的值到 DOM（从真实 DOM 读取 value）
     (function syncFormValues(realEl, cloneEl) {
       try {
+        // 先处理元素自身（如果选中的就是 input/textarea/select）
+        var selfTag = realEl.tagName ? realEl.tagName.toLowerCase() : '';
+        if (selfTag === 'input') {
+          var st = (realEl.type || 'text').toLowerCase();
+          if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image'].indexOf(st) < 0) {
+            var sv = realEl.value || '';
+            if (sv.trim()) {
+              cloneEl.textContent = sv;
+              cloneEl.setAttribute('value', sv);
+            }
+          }
+        } else if (selfTag === 'textarea') {
+          var stv = realEl.value || '';
+          if (stv.trim()) { cloneEl.textContent = stv; }
+        } else if (selfTag === 'select') {
+          var ssv = realEl.value || '';
+          var sst = realEl.options && realEl.options[realEl.selectedIndex] ? realEl.options[realEl.selectedIndex].text : '';
+          if (ssv || sst) { cloneEl.textContent = sst || ssv; }
+        }
         var realInputs = realEl.querySelectorAll('input');
         var cloneInputs = cloneEl.querySelectorAll('input');
         for (var i = 0; i < realInputs.length && i < cloneInputs.length; i++) {
