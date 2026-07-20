@@ -31,11 +31,17 @@ class ElementPickerService {
           window.__flowx_picker_setType(${JSON.stringify(fieldType)}, ${JSON.stringify(mode)});
         }
       `);
+      // 让 BrowserView 获取焦点
+      wc.focus();
       return true;
     }
 
     const script = this.buildPickerScript(fieldType, mode);
     await wc.executeJavaScript(script);
+
+    // 让 BrowserView 获取焦点，确保键盘事件（方向键）能被拾取器捕获
+    wc.focus();
+
     logger.info(`[ElementPicker] 启动拾取器: ${fieldType} (${mode})`);
     return true;
   }
@@ -84,6 +90,7 @@ class ElementPickerService {
   var currentMode = ${JSON.stringify(mode)};
   var selectedElements = [];  // 多选模式下已选中的元素
   var hoverEl = null;
+  var navEl = null;  // 键盘导航选中的元素
 
   // ========== 创建 UI ==========
 
@@ -115,8 +122,9 @@ class ElementPickerService {
       <span style="opacity:0.7;">${mode === 'multi' ? '多选模式：点击多个同类元素' : '单选模式：点击目标元素'}</span>
       <span id="__flowx_picker_count" style="background:#334155;padding:2px 8px;border-radius:12px;font-size:12px;">已选 0 个</span>
     </div>
-    <div style="display:flex;gap:8px;">
-      ${mode === 'multi' ? '<button id="__flowx_picker_confirm" style="background:#22c55e;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;">确认选择</button>' : ''}
+    <div style="display:flex;align-items:center;gap:16px;">
+      <span style="opacity:0.6;font-size:12px;">↑ 父元素 ↓ 子元素 ← 上一个 → 下一个</span>
+      ${mode === 'multi' ? '<button id="__flowx_picker_confirm" style="background:#22c55e;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;">确认选择 (Enter)</button>' : ''}
       <button id="__flowx_picker_cancel" style="background:#475569;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;">取消 (ESC)</button>
     </div>
   \`;
@@ -325,9 +333,96 @@ class ElementPickerService {
       e.preventDefault();
       cleanup();
       notifyCancel();
-    } else if (e.key === 'Enter' && currentMode === 'multi' && selectedElements.length >= 1) {
+    } else if (e.key === 'Enter') {
       e.preventDefault();
-      confirmSelection();
+      if (currentMode === 'multi' && selectedElements.length >= 1) {
+        confirmSelection();
+      } else if (currentMode === 'single' && navEl) {
+        // 单选模式：用方向键选中后按 Enter 确认
+        selectElement(navEl);
+      }
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      handleArrowKey(e.key);
+    }
+  }
+
+  // 选中指定元素（完成拾取）
+  function selectElement(target) {
+    if (!target || target === document.body) return;
+    var selector = getUniqueSelector(target);
+    var previewText = (target.textContent || '').trim().slice(0, 80);
+    cleanup();
+    notifyResult({
+      pickerType: currentFieldType,
+      selector: selector,
+      mode: 'single',
+      selectedCount: 1,
+      previewText: previewText,
+    });
+  }
+
+  // 方向键导航
+  function handleArrowKey(key) {
+    // 如果还没有导航元素，用当前悬停元素或 body 的第一个子元素开始
+    if (!navEl || !document.body.contains(navEl)) {
+      navEl = hoverEl && hoverEl !== document.body ? hoverEl : document.body.firstElementChild;
+    }
+    if (!navEl) return;
+
+    var nextEl = null;
+
+    if (key === 'ArrowUp') {
+      // 向上：父元素
+      nextEl = navEl.parentElement;
+      if (nextEl && nextEl === document.documentElement) nextEl = null;
+    } else if (key === 'ArrowDown') {
+      // 向下：第一个可用的子元素
+      nextEl = navEl.firstElementChild;
+      while (nextEl && !isElementUsable(nextEl)) {
+        nextEl = nextEl.nextElementSibling;
+      }
+    } else if (key === 'ArrowLeft') {
+      // 向左：上一个兄弟元素
+      nextEl = navEl.previousElementSibling;
+      while (nextEl && !isElementUsable(nextEl)) {
+        nextEl = nextEl.previousElementSibling;
+      }
+    } else if (key === 'ArrowRight') {
+      // 向右：下一个兄弟元素
+      nextEl = navEl.nextElementSibling;
+      while (nextEl && !isElementUsable(nextEl)) {
+        nextEl = nextEl.nextElementSibling;
+      }
+    }
+
+    if (nextEl && nextEl !== document.documentElement && nextEl !== document.body) {
+      navEl = nextEl;
+      hoverEl = nextEl;
+      updateOverlay(navEl, hoverOverlay, 'blue');
+      // 滚动到视图中
+      scrollIntoViewIfNeeded(navEl);
+    }
+  }
+
+  // 判断元素是否可用（跳过脚本、样式等不可见元素）
+  function isElementUsable(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var tag = el.tagName.toLowerCase();
+    if (tag === 'script' || tag === 'style' || tag === 'noscript' || tag === 'template') return false;
+    var style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    var rect = el.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) return false;
+    return true;
+  }
+
+  // 滚动到视图中（如果需要）
+  function scrollIntoViewIfNeeded(el) {
+    var rect = el.getBoundingClientRect();
+    var vh = window.innerHeight;
+    if (rect.top < 0 || rect.bottom > vh) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }
 
