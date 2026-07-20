@@ -444,6 +444,10 @@ export const electronApi = {
       const e = getElectronOrThrow() as { browser?: { onPickerCancelled: (cb: never) => () => void } };
       return e.browser?.onPickerCancelled?.(cb as never) ?? (() => { /* noop */ });
     },
+    onOpenRuleEditor(cb: (data: { viewId: string; url: string; mode: 'create' | 'edit' }) => void): () => void {
+      const e = getElectronOrThrow() as { browser?: { onOpenRuleEditor: (cb: never) => () => void } };
+      return e.browser?.onOpenRuleEditor?.(cb as never) ?? (() => { /* noop */ });
+    },
 
     removePageTitleUpdatedListener(cb: (data: { viewId: string; title: string }) => void): void {
       const e = getElectronOrThrow() as { browser?: { removePageTitleUpdatedListener: (cb: never) => void } };

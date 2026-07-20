@@ -1,24 +1,16 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref, computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import { electronApi } from '../utils/electron'
 import SiteRuleEditor from './SiteRuleEditor.vue'
-import type { CustomSiteRule, RuleDraft, PickerFieldType, ExtractedContent } from '../../types'
+import type { CustomSiteRule, ExtractedContent } from '../../types'
 
 const props = defineProps<{
   currentUrl: string
   viewId: string | null
-  draft: RuleDraft | null
-  pickerActive: boolean
-  currentPickerField: PickerFieldType | null
 }>()
 
 const emit = defineEmits<{
-  (e: 'start-picker', fieldType: PickerFieldType, mode: 'single' | 'multi'): void
-  (e: 'test-draft'): void
-  (e: 'save-draft'): void
-  (e: 'cancel-draft'): void
-  (e: 'open-editor'): void
   (e: 'apply-rule', payload: { rule: CustomSiteRule; result: ExtractedContent }): void
 }>()
 
@@ -70,20 +62,6 @@ const otherRules = computed(() => {
   return result
 })
 
-// 已拾取字段数量
-const pickedCount = computed(() => {
-  if (!props.draft) return 0
-  let count = 0
-  if (props.draft.titleSelector) count++
-  if (props.draft.contentSelector) count++
-  if (props.draft.imageSelector) count++
-  if (props.draft.tagsSelector) count++
-  if (props.draft.bylineSelector) count++
-  if (props.draft.dateSelector) count++
-  if (props.draft.removeSelectors.length > 0) count++
-  return count
-})
-
 // 加载规则
 async function loadRules() {
   loading.value = true
@@ -133,18 +111,24 @@ async function toggleRule(rule: CustomSiteRule) {
 }
 
 // 删除规则
-async function deleteRule(rule: CustomSiteRule) {
+const deleteConfirmVisible = ref(false)
+const ruleToDelete = ref<CustomSiteRule | null>(null)
+
+function confirmDelete(rule: CustomSiteRule) {
+  ruleToDelete.value = rule
+  deleteConfirmVisible.value = true
+}
+
+async function doDelete() {
+  if (!ruleToDelete.value) return
   try {
-    await ElMessageBox.confirm(`确定删除规则"${rule.name}"吗？`, '确认删除', {
-      type: 'warning',
-    })
-    await electronApi.browser.deleteCustomRule(rule.id)
+    await electronApi.browser.deleteCustomRule(ruleToDelete.value.id)
     ElMessage.success('删除成功')
+    deleteConfirmVisible.value = false
+    ruleToDelete.value = null
     await loadRules()
   } catch (e: any) {
-    if (e !== 'cancel') {
-      ElMessage.error(e.message || '删除失败')
-    }
+    ElMessage.error(e.message || '删除失败')
   }
 }
 
@@ -171,30 +155,12 @@ function onSaved() {
   loadRules()
 }
 
-// 获取字段标签
-function getFieldLabel(field: PickerFieldType): string {
-  const map: Record<PickerFieldType, string> = {
-    content: '正文',
-    title: '标题',
-    image: '图片',
-    tags: '标签',
-    byline: '作者',
-    date: '日期',
-    remove: '排除元素',
-  }
-  return map[field] || field
-}
-
-// 拾取字段列表
-const pickerFields: { key: PickerFieldType; label: string; mode: 'single' | 'multi'; icon: string }[] = [
-  { key: 'title', label: '标题', mode: 'single', icon: 'Edit' },
-  { key: 'content', label: '正文', mode: 'single', icon: 'Document' },
-  { key: 'image', label: '图片', mode: 'multi', icon: 'Picture' },
-  { key: 'tags', label: '标签', mode: 'multi', icon: 'PriceTag' },
-  { key: 'byline', label: '作者', mode: 'single', icon: 'User' },
-  { key: 'date', label: '日期', mode: 'single', icon: 'Calendar' },
-  { key: 'remove', label: '排除元素', mode: 'multi', icon: 'Close' },
-]
+// 暴露方法给父组件
+defineExpose({
+  openCreate,
+  openEdit,
+  loadRules,
+})
 
 // 组件挂载时加载规则
 onMounted(() => {
@@ -204,90 +170,7 @@ onMounted(() => {
 
 <template>
   <div class="rule-panel">
-    <!-- 草稿模式 -->
-    <div v-if="draft" class="draft-section">
-      <div class="draft-header">
-        <div class="draft-title">
-          <el-icon color="#409eff"><MagicStick /></el-icon>
-          <span>快速拾取模式</span>
-          <el-tag size="small" type="info">{{ pickedCount }} 个字段</el-tag>
-        </div>
-        <el-button size="small" text type="danger" @click="emit('cancel-draft')">
-          取消
-        </el-button>
-      </div>
-
-      <div class="draft-name">
-        <el-input
-          :model-value="draft.name"
-          placeholder="规则名称（如：xxx文章提取）"
-          size="small"
-          @input="(v) => { if (draft) draft.name = v as string }"
-        />
-      </div>
-
-      <!-- 拾取字段按钮 -->
-      <div class="picker-buttons">
-        <div
-          v-for="field in pickerFields"
-          :key="field.key"
-          class="picker-btn"
-          :class="{
-            active: currentPickerField === field.key,
-            picked: (draft as any)[field.key] || (field.key === 'remove' && draft.removeSelectors.length > 0),
-          }"
-          @click="emit('start-picker', field.key, field.mode)"
-        >
-          <span class="picker-label">{{ field.label }}</span>
-          <span class="picker-status">
-            <template v-if="(draft as any)[field.key] || (field.key === 'remove' && draft.removeSelectors.length > 0)">
-              <el-icon color="#67c23a"><CircleCheck /></el-icon>
-            </template>
-            <template v-else-if="currentPickerField === field.key">
-              <el-icon class="picking"><Aim /></el-icon>
-            </template>
-            <template v-else>
-              <el-icon color="#c0c4cc"><Plus /></el-icon>
-            </template>
-          </span>
-        </div>
-      </div>
-
-      <!-- 已拾取的选择器预览 -->
-      <div v-if="pickedCount > 0" class="picked-preview">
-        <div
-          v-for="field in pickerFields"
-          :key="'prev-' + field.key"
-          v-show="(draft as any)[field.key] || (field.key === 'remove' && draft.removeSelectors.length > 0)"
-          class="picked-item"
-        >
-          <span class="picked-label">{{ field.label }}：</span>
-          <code class="picked-selector">
-            {{ field.key === 'remove' ? draft.removeSelectors.join(', ') : (draft as any)[field.key] }}
-          </code>
-        </div>
-      </div>
-
-      <!-- 操作按钮 -->
-      <div class="draft-actions">
-        <el-button size="small" @click="emit('open-editor')">
-          <el-icon><Setting /></el-icon>&nbsp;完整编辑
-        </el-button>
-        <el-button size="small" type="warning" @click="emit('test-draft')" :disabled="!draft.contentSelector">
-          <el-icon><View /></el-icon>&nbsp;测试提取
-        </el-button>
-        <el-button size="small" type="primary" @click="emit('save-draft')" :disabled="!draft.contentSelector">
-          <el-icon><Check /></el-icon>&nbsp;保存规则
-        </el-button>
-      </div>
-
-      <!-- 提示信息 -->
-      <div v-if="pickerActive" class="picker-tip">
-        <el-icon color="#e6a23c"><Warning /></el-icon>
-        <span>请在浏览器页面点击选择{{ currentPickerField ? getFieldLabel(currentPickerField) : '元素' }}，按 Esc 取消</span>
-      </div>
-    </div>
-
+    <div class="panel-scroll-content">
     <!-- 顶部操作区 -->
     <div class="panel-actions">
       <el-input
@@ -348,7 +231,7 @@ onMounted(() => {
     </div>
 
     <!-- 无匹配提示 -->
-    <div v-if="matchedRules.length === 0 && currentUrl && !draft" class="no-match-hint">
+    <div v-if="matchedRules.length === 0 && currentUrl" class="no-match-hint">
       <el-icon color="#e6a23c"><Warning /></el-icon>
       <span>当前网站暂无匹配规则</span>
       <el-button type="primary" size="small" link @click="openCreate">
@@ -397,12 +280,30 @@ onMounted(() => {
             <el-button size="small" :type="rule.enabled ? 'warning' : 'success'" @click="toggleRule(rule)">
               {{ rule.enabled ? '禁用' : '启用' }}
             </el-button>
-            <el-button size="small" type="danger" @click="deleteRule(rule)">删除</el-button>
+            <el-button size="small" type="danger" @click="confirmDelete(rule)">删除</el-button>
           </div>
         </div>
 
         <div v-if="otherRules.length === 0 && !loading" class="empty-hint">
           暂无规则
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <!-- 删除确认遮罩 -->
+    <div v-if="deleteConfirmVisible" class="confirm-mask" @click.self="deleteConfirmVisible = false">
+      <div class="confirm-box">
+        <div class="confirm-header">
+          <el-icon color="#f56c6c" size="22px"><Warning /></el-icon>
+          <span class="confirm-title">确认删除</span>
+        </div>
+        <div class="confirm-body">
+          确定删除规则"{{ ruleToDelete?.name }}"吗？
+        </div>
+        <div class="confirm-footer">
+          <el-button size="small" @click="deleteConfirmVisible = false">取消</el-button>
+          <el-button size="small" type="danger" @click="doDelete">删除</el-button>
         </div>
       </div>
     </div>
@@ -424,161 +325,25 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 12px;
-  gap: 12px;
-  overflow-y: auto;
+  position: relative;
   box-sizing: border-box;
 }
 
-/* ========== 草稿模式 ========== */
-.draft-section {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  background: #ecf5ff;
-  border: 1px solid #b3d8ff;
-  border-radius: 8px;
-}
-
-.draft-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.draft-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 600;
-  font-size: 14px;
-  color: #409eff;
-}
-
-.draft-name {
-  margin-top: 2px;
-}
-
-.picker-buttons {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-}
-
-.picker-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 4px;
-  background: #fff;
-  border: 1px solid #dcdfe6;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.2s;
-  font-size: 12px;
-}
-
-.picker-btn:hover {
-  border-color: #409eff;
-  color: #409eff;
-}
-
-.picker-btn.active {
-  background: #409eff;
-  border-color: #409eff;
-  color: #fff;
-}
-
-.picker-btn.picked {
-  border-color: #67c23a;
-  color: #67c23a;
-}
-
-.picker-btn.active.picked {
-  background: #67c23a;
-  border-color: #67c23a;
-  color: #fff;
-}
-
-.picker-label {
-  font-size: 12px;
-}
-
-.picker-status {
-  font-size: 16px;
-  display: flex;
-  align-items: center;
-}
-
-.picking {
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-.picked-preview {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px;
-  background: #fff;
-  border-radius: 4px;
-  max-height: 100px;
-  overflow-y: auto;
-}
-
-.picked-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  font-size: 11px;
-}
-
-.picked-label {
-  color: #909399;
-  flex-shrink: 0;
-}
-
-.picked-selector {
-  font-family: monospace;
-  font-size: 11px;
-  color: #606266;
-  background: #f5f7fa;
-  padding: 1px 4px;
-  border-radius: 3px;
-  word-break: break-all;
+.panel-scroll-content {
   flex: 1;
-}
-
-.draft-actions {
+  padding: 12px;
+  overflow-y: auto;
   display: flex;
-  gap: 6px;
-  justify-content: flex-end;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
 }
 
-.picker-tip {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  background: #fdf6ec;
-  border-radius: 4px;
-  font-size: 12px;
-  color: #e6a23c;
-}
-
-/* ========== 操作区 ========== */
+/* ========== 顶部操作区 ========== */
 .panel-actions {
   display: flex;
   gap: 8px;
   align-items: center;
-  flex-shrink: 0;
 }
 
 /* ========== 规则分区 ========== */
@@ -586,7 +351,6 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-height: 0;
 }
 
 .section-title {
@@ -595,28 +359,22 @@ onMounted(() => {
   gap: 6px;
   font-size: 13px;
   font-weight: 600;
-  color: #303133;
-  padding-bottom: 4px;
-  border-bottom: 1px solid #ebeef5;
-  flex-shrink: 0;
+  color: #606266;
 }
 
+/* ========== 规则列表 ========== */
 .rule-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  overflow-y: auto;
-  flex: 1;
-  min-height: 0;
 }
 
 .rule-card {
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
   padding: 10px 12px;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
   background: #fff;
   transition: all 0.2s;
-  flex-shrink: 0;
 }
 
 .rule-card:hover {
@@ -651,18 +409,9 @@ onMounted(() => {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #606266;
+  color: #909399;
   margin-bottom: 4px;
   flex-wrap: wrap;
-}
-
-.match-value {
-  font-family: monospace;
-  font-size: 11px;
-  background: #f5f7fa;
-  padding: 1px 5px;
-  border-radius: 3px;
-  color: #606266;
 }
 
 .meta-label {
@@ -677,6 +426,15 @@ onMounted(() => {
   color: #dcdfe6;
 }
 
+.match-value {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 11px;
+  padding: 1px 4px;
+  background: #f5f7fa;
+  border-radius: 3px;
+  color: #606266;
+}
+
 .rule-card-actions {
   display: flex;
   gap: 6px;
@@ -684,23 +442,80 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
+/* ========== 无匹配提示 ========== */
 .no-match-hint {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 12px;
   background: #fdf6ec;
   border: 1px solid #faecd8;
-  border-radius: 8px;
+  border-radius: 6px;
   font-size: 13px;
   color: #e6a23c;
-  flex-wrap: wrap;
 }
 
+.no-match-hint .el-button {
+  margin-left: auto;
+}
+
+/* ========== 空状态 ========== */
 .empty-hint {
   text-align: center;
   padding: 20px;
-  color: #909399;
+  color: #c0c4cc;
   font-size: 13px;
+}
+
+/* ========== 删除确认框 ========== */
+.confirm-mask {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.confirm-box {
+  width: 320px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.confirm-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.confirm-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.confirm-body {
+  padding: 20px;
+  font-size: 14px;
+  color: #606266;
+  line-height: 1.6;
+}
+
+.confirm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid #f0f0f0;
+  background: #fafafa;
 }
 </style>

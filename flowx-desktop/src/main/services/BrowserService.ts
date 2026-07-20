@@ -341,68 +341,12 @@ export async function createBrowserView(options?: { url?: string; envId?: string
       }
     }
 
-    // 添加自定义规则
+    // 添加自定义规则（直接打开规则编辑器）
     menu.append(new MenuItem({
       label: '➕ 添加自定义规则',
-      submenu: [
-        {
-          label: '📌 拾取标题元素',
-          click: async () => {
-            await elementPicker.startPicker(viewId, 'title', 'single');
-            notifyRender('browser:pickerStarted', { viewId, fieldType: 'title' });
-          },
-        },
-        {
-          label: '📝 拾取正文元素',
-          click: async () => {
-            await elementPicker.startPicker(viewId, 'content', 'single');
-            notifyRender('browser:pickerStarted', { viewId, fieldType: 'content' });
-          },
-        },
-        {
-          label: '🖼️  拾取图片元素',
-          click: async () => {
-            await elementPicker.startPicker(viewId, 'image', 'multi');
-            notifyRender('browser:pickerStarted', { viewId, fieldType: 'image' });
-          },
-        },
-        {
-          label: '🏷️ 拾取话题标签',
-          click: async () => {
-            await elementPicker.startPicker(viewId, 'tags', 'multi');
-            notifyRender('browser:pickerStarted', { viewId, fieldType: 'tags' });
-          },
-        },
-        {
-          label: '👤 拾取作者元素',
-          click: async () => {
-            await elementPicker.startPicker(viewId, 'byline', 'single');
-            notifyRender('browser:pickerStarted', { viewId, fieldType: 'byline' });
-          },
-        },
-        {
-          label: '📅 拾取日期元素',
-          click: async () => {
-            await elementPicker.startPicker(viewId, 'date', 'single');
-            notifyRender('browser:pickerStarted', { viewId, fieldType: 'date' });
-          },
-        },
-        {
-          label: '🗑️  拾取移除元素',
-          click: async () => {
-            await elementPicker.startPicker(viewId, 'remove', 'multi');
-            notifyRender('browser:pickerStarted', { viewId, fieldType: 'remove' });
-          },
-        },
-        { type: 'separator' },
-        {
-          label: '✏️  完整规则编辑器',
-          click: () => {
-            // 通知渲染进程打开规则编辑器，创建新规则
-            notifyRender('browser:openRuleEditor', { viewId, url: currentUrl, mode: 'create' });
-          },
-        },
-      ],
+      click: () => {
+        notifyRender('browser:openRuleEditor', { viewId, url: currentUrl, mode: 'create' });
+      },
     }));
 
     menu.append(new MenuItem({ type: 'separator' }));

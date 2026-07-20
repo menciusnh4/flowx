@@ -1,14 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, watch, toRaw } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute } from 'vue-router'
 import { electronApi } from '../utils/electron'
 import { useEnvStore } from '../stores/env'
 import { useUiStore } from '../stores/ui'
 import PublishForm from '../components/PublishForm.vue'
-import SiteRuleEditor from '../components/SiteRuleEditor.vue'
 import BrowserRulePanel from '../components/BrowserRulePanel.vue'
-import type { BrowserEnvironment, PublishRequest, BrowserBookmark, BrowserHistoryItem, ExtractedContent, CustomSiteRule, PickerFieldType, RuleDraft, PickerResult, PublishContentType } from '../../types'
+import type { BrowserEnvironment, PublishRequest, BrowserBookmark, BrowserHistoryItem, ExtractedContent, CustomSiteRule, PickerFieldType, PickerResult, PublishContentType } from '../../types'
 
 const route = useRoute()
 const envStore = useEnvStore()
@@ -16,6 +15,8 @@ const uiStore = useUiStore()
 
 // 发布表单 ref
 const publishFormRef = ref<InstanceType<typeof PublishForm> | null>(null)
+// 规则面板 ref
+const browserRulePanelRef = ref<InstanceType<typeof BrowserRulePanel> | null>(null)
 
 // 布局模式：browser-only | split | publish-only
 const layoutMode = ref<'browser-only' | 'split' | 'publish-only'>('split')
@@ -34,30 +35,9 @@ const extractConfidence = ref<number | null>(null)
 
 // ========== 自定义规则 & 拾取器 ==========
 
-// 规则编辑器
-const ruleEditorVisible = ref(false)
-const ruleEditorMode = ref<'create' | 'edit'>('create')
-const editingRule = ref<CustomSiteRule | null>(null)
-const ruleEditorPresetDomain = ref('')
-
 // 拾取器状态
 const pickerActive = ref(false)
 const currentPickerField = ref<PickerFieldType | null>(null)
-
-// 草稿规则（快速拾取模式）
-const ruleDraft = ref<RuleDraft | null>(null)
-const draftPickedCount = computed(() => {
-  if (!ruleDraft.value) return 0
-  let count = 0
-  if (ruleDraft.value.titleSelector) count++
-  if (ruleDraft.value.contentSelector) count++
-  if (ruleDraft.value.imageSelector) count++
-  if (ruleDraft.value.tagsSelector) count++
-  if (ruleDraft.value.bylineSelector) count++
-  if (ruleDraft.value.dateSelector) count++
-  if (ruleDraft.value.removeSelectors.length > 0) count++
-  return count
-})
 
 // 地址栏输入值（UI 状态，切换标签时同步）
 const urlInput = ref('')
@@ -1094,19 +1074,11 @@ function handleSelectorCancelledEvent(data: { viewId: string }) {
 
 // ========== 拾取器事件处理 ==========
 
-// 处理拾取器启动（右键菜单触发等外部启动）
+// 处理拾取器启动（外部触发时切换到规则面板）
 function handlePickerStarted(data: { viewId: string; fieldType: PickerFieldType }) {
   if (data.viewId !== activeTabId.value) return
   pickerActive.value = true
   currentPickerField.value = data.fieldType
-
-  // 初始化草稿（如果没有的话）
-  if (!ruleDraft.value) {
-    initDraftFromCurrentPage()
-  }
-  if (ruleDraft.value) {
-    ruleDraft.value.pickerSessionActive = true
-  }
 
   // 自动切换到规则面板
   if (layoutMode.value === 'browser-only') {
@@ -1115,30 +1087,11 @@ function handlePickerStarted(data: { viewId: string; fieldType: PickerFieldType 
   rightPanelTab.value = 'rules'
 }
 
-// 处理拾取器结果
+// 处理拾取器结果（主要由 SiteRuleEditor 内部处理，这里仅更新状态）
 function handlePickerResult(data: { viewId: string; result: PickerResult }) {
   if (data.viewId !== activeTabId.value) return
   pickerActive.value = false
   currentPickerField.value = null
-
-  const { pickerType, selector, previewText } = data.result
-
-  // 如果有草稿，追加到草稿
-  if (ruleDraft.value && ruleDraft.value.pickerSessionActive) {
-    applyPickerToDraft(pickerType, selector)
-    ElMessage.success(`已拾取${getFieldLabel(pickerType)}`)
-    return
-  }
-
-  // 没有草稿，创建新草稿并开始拾取会话
-  if (!ruleDraft.value) {
-    initDraftFromCurrentPage()
-  }
-  if (ruleDraft.value) {
-    ruleDraft.value.pickerSessionActive = true
-    applyPickerToDraft(pickerType, selector)
-    ElMessage.success(`已拾取${getFieldLabel(pickerType)}`)
-  }
 }
 
 // 处理拾取器取消
@@ -1148,168 +1101,19 @@ function handlePickerCancelled(data: { viewId: string }) {
   currentPickerField.value = null
 }
 
-// 获取字段显示名
-function getFieldLabel(type: PickerFieldType): string {
-  const map: Record<PickerFieldType, string> = {
-    title: '标题',
-    content: '正文',
-    image: '图片',
-    tags: '话题标签',
-    byline: '作者',
-    date: '日期',
-    remove: '移除元素',
+// 从右键菜单打开规则编辑器
+function handleOpenRuleEditor(data: { viewId: string; url: string; mode: 'create' | 'edit' }) {
+  if (data.viewId !== activeTabId.value) return
+  // 切换到规则面板 tab
+  rightPanelTab.value = 'rules'
+  // 展开右侧面板（如果是浏览器-only 模式）
+  if (layoutMode.value === 'browser-only') {
+    layoutMode.value = 'split'
   }
-  return map[type] || type
-}
-
-// 初始化草稿
-function initDraftFromCurrentPage() {
-  if (!currentUrl.value) return
-  try {
-    const hostname = new URL(currentUrl.value).hostname
-    ruleDraft.value = {
-      name: `${hostname} 规则`,
-      matchType: 'domain',
-      matchValue: hostname,
-      contentTypes: [],
-      removeSelectors: [],
-      pickerSessionActive: false,
-    }
-  } catch {
-    // ignore
-  }
-}
-
-// 将拾取结果应用到草稿
-function applyPickerToDraft(type: PickerFieldType, selector: string) {
-  if (!ruleDraft.value) return
-  const propMap: Record<PickerFieldType, keyof RuleDraft> = {
-    title: 'titleSelector',
-    content: 'contentSelector',
-    image: 'imageSelector',
-    tags: 'tagsSelector',
-    byline: 'bylineSelector',
-    date: 'dateSelector',
-    remove: 'removeSelectors',
-  }
-  const prop = propMap[type]
-  if (!prop) return
-
-  if (type === 'remove') {
-    if (!ruleDraft.value.removeSelectors.includes(selector)) {
-      ruleDraft.value.removeSelectors.push(selector)
-    }
-  } else {
-    ;(ruleDraft.value as any)[prop] = selector
-  }
-  ruleDraft.value.lastPickerType = type
-}
-
-// 继续拾取
-async function continuePicking(fieldType: PickerFieldType, mode: 'single' | 'multi') {
-  if (!activeTabId.value) return
-  if (!ruleDraft.value) {
-    initDraftFromCurrentPage()
-  }
-  if (ruleDraft.value) {
-    ruleDraft.value.pickerSessionActive = true
-  }
-  pickerActive.value = true
-  currentPickerField.value = fieldType
-  try {
-    await electronApi.browser.startPicker(activeTabId.value, fieldType, mode)
-  } catch (e) {
-    ElMessage.error('启动拾取器失败')
-    pickerActive.value = false
-    currentPickerField.value = null
-  }
-}
-
-// 测试草稿规则
-async function testDraftRule() {
-  if (!activeTabId.value || !ruleDraft.value?.contentSelector) {
-    ElMessage.warning('请先拾取正文选择器')
-    return
-  }
-  try {
-    // 深拷贝去除所有响应式代理
-    const draft = JSON.parse(JSON.stringify(toRaw(ruleDraft.value)))
-    const result = await electronApi.browser.testCustomRule(activeTabId.value, draft as any)
-    if (result) {
-      ElMessage.success(`测试成功：${result.title?.slice(0, 20)}... (${result.length}字)`)
-    } else {
-      ElMessage.warning('测试失败：未提取到有效内容')
-    }
-  } catch (e: any) {
-    ElMessage.error(e.message || '测试失败')
-  }
-}
-
-// 保存草稿为正式规则
-async function saveDraftRule() {
-  if (!ruleDraft.value) return
-  if (!ruleDraft.value.name?.trim()) {
-    ElMessage.warning('请输入规则名称')
-    return
-  }
-  if (!ruleDraft.value.contentSelector?.trim()) {
-    ElMessage.warning('请先拾取正文选择器')
-    return
-  }
-
-  try {
-    // 深拷贝去除所有响应式代理（确保 IPC 可序列化）
-    const draft = JSON.parse(JSON.stringify(toRaw(ruleDraft.value)))
-    const saved = await electronApi.browser.createCustomRule({
-      name: draft.name,
-      enabled: true,
-      matchType: draft.matchType,
-      matchValue: draft.matchValue,
-      contentTypes: draft.contentTypes || [],
-      contentSelector: draft.contentSelector,
-      titleSelector: draft.titleSelector,
-      bylineSelector: draft.bylineSelector,
-      dateSelector: draft.dateSelector,
-      siteName: '',
-      imageSelector: draft.imageSelector,
-      tagsSelector: draft.tagsSelector,
-      removeSelectors: draft.removeSelectors || [],
-      source: 'manual',
-    } as any)
-    ElMessage.success('规则保存成功')
-    cancelDraft()
-
-    // 保存成功后自动用该规则提取
-    if (activeTabId.value) {
-      const result = await electronApi.browser.applyCustomRule(activeTabId.value, saved.id)
-      if (result) {
-        handleExtractResultEvent({ viewId: activeTabId.value, result })
-      }
-    }
-  } catch (e: any) {
-    ElMessage.error(e.message || '保存失败')
-  }
-}
-
-// 取消草稿
-function cancelDraft() {
-  if (pickerActive.value && activeTabId.value) {
-    electronApi.browser.stopPicker(activeTabId.value).catch(() => {})
-  }
-  ruleDraft.value = null
-  pickerActive.value = false
-  currentPickerField.value = null
-}
-
-// 打开完整编辑器（从草稿）
-function openEditorFromDraft() {
-  if (!ruleDraft.value) return
-  editingRule.value = null
-  ruleEditorMode.value = 'create'
-  ruleEditorPresetDomain.value = ruleDraft.value.matchValue
-  ruleEditorVisible.value = true
-  // 关闭草稿模式
-  cancelDraft()
+  // 调用规则面板的新建方法
+  nextTick(() => {
+    browserRulePanelRef.value?.openCreate()
+  })
 }
 
 // 保存到草稿箱
@@ -1354,6 +1158,7 @@ let cleanupSelectorCancelled: (() => void) | null = null
 let cleanupPickerStarted: (() => void) | null = null
 let cleanupPickerResult: (() => void) | null = null
 let cleanupPickerCancelled: (() => void) | null = null
+let cleanupOpenRuleEditor: (() => void) | null = null
 
 // 全局键盘事件：Esc 取消选择器
 function handleGlobalKeydown(e: KeyboardEvent) {
@@ -1383,6 +1188,8 @@ onMounted(() => {
     cleanupPickerStarted = electronApi.browser.onPickerStarted?.(handlePickerStarted) ?? null
     cleanupPickerResult = electronApi.browser.onPickerResult?.(handlePickerResult) ?? null
     cleanupPickerCancelled = electronApi.browser.onPickerCancelled?.(handlePickerCancelled) ?? null
+    // 注册规则编辑器事件
+    cleanupOpenRuleEditor = electronApi.browser.onOpenRuleEditor?.(handleOpenRuleEditor) ?? null
   }
   initBrowser()
 })
@@ -1403,6 +1210,7 @@ onUnmounted(() => {
   cleanupPickerStarted?.()
   cleanupPickerResult?.()
   cleanupPickerCancelled?.()
+  cleanupOpenRuleEditor?.()
   // 确保选择器模式已关闭
   if (selectorActive.value && activeTabId.value) {
     electronApi.browser.stopSelector?.(activeTabId.value).catch(() => {})
@@ -1660,7 +1468,6 @@ watch(() => route.path, () => {
           >
             <el-icon><Setting /></el-icon>
             <span>提取规则</span>
-            <el-badge v-if="ruleDraft" :value="draftPickedCount" class="tab-badge" />
           </div>
         </div>
 
@@ -1682,16 +1489,9 @@ watch(() => route.path, () => {
         <!-- 规则面板 -->
         <div v-show="rightPanelTab === 'rules'" class="tab-content">
           <BrowserRulePanel
+            ref="browserRulePanelRef"
             :current-url="currentUrl"
             :view-id="browserViewId"
-            :draft="ruleDraft"
-            :picker-active="pickerActive"
-            :current-picker-field="currentPickerField"
-            @start-picker="continuePicking"
-            @test-draft="testDraftRule"
-            @save-draft="saveDraftRule"
-            @cancel-draft="cancelDraft"
-            @open-editor="openEditorFromDraft"
             @apply-rule="handleApplyRule"
           />
         </div>
@@ -1824,102 +1624,13 @@ watch(() => route.path, () => {
       </div>
     </transition>
 
-    <!-- 快速拾取浮动栏 -->
-    <transition name="slide-up">
-      <div v-if="ruleDraft" class="picker-float-bar">
-        <div class="picker-bar-header">
-          <span class="picker-bar-title">
-            <el-icon color="#409eff"><Setting /></el-icon>
-            自定义规则（拾取模式）
-          </span>
-          <el-button size="small" link @click="cancelDraft">取消</el-button>
-        </div>
-        <div class="picker-bar-body">
-          <div class="picker-bar-row">
-            <span class="picker-label">规则名称：</span>
-            <el-input
-              v-model="ruleDraft.name"
-              size="small"
-              placeholder="规则名称"
-              style="width: 180px"
-            />
-          </div>
-          <div class="picker-bar-pickers">
-            <el-button
-              size="small"
-              :type="ruleDraft.titleSelector ? 'success' : 'primary'"
-              :plain="!ruleDraft.titleSelector"
-              @click="continuePicking('title', 'single')"
-            >
-              {{ ruleDraft.titleSelector ? '✓ ' : '' }}标题
-            </el-button>
-            <el-button
-              size="small"
-              :type="ruleDraft.contentSelector ? 'success' : 'primary'"
-              :plain="!ruleDraft.contentSelector"
-              @click="continuePicking('content', 'single')"
-            >
-              {{ ruleDraft.contentSelector ? '✓ ' : '' }}正文
-            </el-button>
-            <el-button
-              size="small"
-              :type="ruleDraft.imageSelector ? 'success' : 'primary'"
-              :plain="!ruleDraft.imageSelector"
-              @click="continuePicking('image', 'multi')"
-            >
-              {{ ruleDraft.imageSelector ? '✓ ' : '' }}图片
-            </el-button>
-            <el-button
-              size="small"
-              :type="ruleDraft.tagsSelector ? 'success' : 'primary'"
-              :plain="!ruleDraft.tagsSelector"
-              @click="continuePicking('tags', 'single')"
-            >
-              {{ ruleDraft.tagsSelector ? '✓ ' : '' }}话题
-            </el-button>
-            <el-button
-              size="small"
-              :type="ruleDraft.bylineSelector ? 'success' : 'primary'"
-              :plain="!ruleDraft.bylineSelector"
-              @click="continuePicking('byline', 'single')"
-            >
-              {{ ruleDraft.bylineSelector ? '✓ ' : '' }}作者
-            </el-button>
-            <el-button
-              size="small"
-              :type="ruleDraft.dateSelector ? 'success' : 'primary'"
-              :plain="!ruleDraft.dateSelector"
-              @click="continuePicking('date', 'single')"
-            >
-              {{ ruleDraft.dateSelector ? '✓ ' : '' }}日期
-            </el-button>
-          </div>
-          <div class="picker-bar-actions">
-            <el-button size="small" @click="openEditorFromDraft">完整编辑</el-button>
-            <el-button size="small" @click="testDraftRule">测试</el-button>
-            <el-button size="small" type="primary" @click="saveDraftRule">保存规则</el-button>
-          </div>
-        </div>
-      </div>
-    </transition>
-
     <!-- 拾取器提示 -->
     <transition name="fade">
       <div v-if="pickerActive" class="picker-toast">
         <el-icon><Mouse /></el-icon>
-        请在页面上点击选择{{ currentPickerField ? getFieldLabel(currentPickerField) : '元素' }}，按 Esc 取消
+        请在页面上点击选择元素，按 Esc 取消
       </div>
     </transition>
-
-    <!-- 规则编辑器 -->
-    <SiteRuleEditor
-      v-model="ruleEditorVisible"
-      :mode="ruleEditorMode"
-      :rule="editingRule"
-      :view-id="browserViewId || undefined"
-      :presetDomain="ruleEditorPresetDomain"
-      @saved="() => { ElMessage.success('规则保存成功') }"
-    />
   </div>
 </template>
 
@@ -2511,69 +2222,6 @@ watch(() => route.path, () => {
   50% { opacity: 0.7; transform: scale(1.2); }
 }
 
-/* ========== 拾取器浮动栏 ========== */
-.picker-float-bar {
-  position: fixed;
-  bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
-  padding: 12px 16px;
-  z-index: 9999;
-  min-width: 520px;
-  max-width: 90vw;
-}
-
-.picker-bar-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #ebeef5;
-}
-
-.picker-bar-title {
-  font-weight: 600;
-  font-size: 14px;
-  color: #303133;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.picker-bar-body {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.picker-bar-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.picker-label {
-  font-size: 13px;
-  color: #606266;
-  white-space: nowrap;
-}
-
-.picker-bar-pickers {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.picker-bar-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
 /* 拾取器提示 Toast */
 .picker-toast {
   position: fixed;
@@ -2593,17 +2241,6 @@ watch(() => route.path, () => {
 }
 
 /* 动画 */
-.slide-up-enter-active,
-.slide-up-leave-active {
-  transition: all 0.3s ease;
-}
-
-.slide-up-enter-from,
-.slide-up-leave-to {
-  opacity: 0;
-  transform: translate(-50%, 30px);
-}
-
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.3s;

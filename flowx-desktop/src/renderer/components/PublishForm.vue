@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, reactive, onMounted, watch, nextTick } from 'vue'
-import { ElMessage, ElMessageBox, ElInput, ElImageViewer } from 'element-plus'
+import { ElMessage, ElInput, ElImageViewer } from 'element-plus'
 import { useAccountStore } from '../stores/account'
 import { electronApi } from '../utils/electron'
 import type { PublishRequest, PlatformType } from '../../types'
@@ -25,21 +25,38 @@ const emit = defineEmits<{
 
 const accountStore = useAccountStore()
 
-// ============ 弹窗封装（解决 WebContentsView 遮挡问题） ============
-async function showConfirm(message: string, title: string, options?: Record<string, unknown>): Promise<boolean> {
-  emit('modal-show')
-  try {
-    await ElMessageBox.confirm(message, title, {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning',
-      ...options,
-    })
-    return true
-  } catch {
-    return false
-  } finally {
-    emit('modal-hide')
+// ============ 内嵌确认框（避免 BrowserView 遮挡和闪白） ============
+const confirmVisible = ref(false)
+const confirmTitle = ref('')
+const confirmMessage = ref('')
+const confirmButtonText = ref('确定')
+const confirmCancelText = ref('取消')
+let confirmResolver: ((value: boolean) => void) | null = null
+
+function showConfirm(message: string, title: string, options?: Record<string, unknown>): Promise<boolean> {
+  confirmMessage.value = message
+  confirmTitle.value = title
+  confirmButtonText.value = (options?.confirmButtonText as string) || '确定'
+  confirmCancelText.value = (options?.cancelButtonText as string) || '取消'
+  confirmVisible.value = true
+  return new Promise<boolean>((resolve) => {
+    confirmResolver = resolve
+  })
+}
+
+function handleConfirmOk() {
+  confirmVisible.value = false
+  if (confirmResolver) {
+    confirmResolver(true)
+    confirmResolver = null
+  }
+}
+
+function handleConfirmCancel() {
+  confirmVisible.value = false
+  if (confirmResolver) {
+    confirmResolver(false)
+    confirmResolver = null
   }
 }
 
@@ -1201,6 +1218,23 @@ function iconOf(platform?: string): string {
         <slot name="footer-extra"></slot>
       </div>
     </div>
+
+    <!-- 内嵌确认框 -->
+    <div v-if="confirmVisible" class="confirm-mask" @click.self="handleConfirmCancel">
+      <div class="confirm-box">
+        <div class="confirm-header">
+          <el-icon color="#e6a23c" size="22px"><Warning /></el-icon>
+          <span class="confirm-title">{{ confirmTitle }}</span>
+        </div>
+        <div class="confirm-body">
+          {{ confirmMessage }}
+        </div>
+        <div class="confirm-footer">
+          <el-button size="small" @click="handleConfirmCancel">{{ confirmCancelText }}</el-button>
+          <el-button size="small" type="warning" @click="handleConfirmOk">{{ confirmButtonText }}</el-button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- 图片大图预览 -->
@@ -1219,6 +1253,7 @@ function iconOf(platform?: string): string {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  position: relative;
 }
 .panel {
   background: #fff;
@@ -1404,4 +1439,56 @@ function iconOf(platform?: string): string {
   color: #909399;
 }
 .empty { padding: 20px 0; }
+
+/* ========== 内嵌确认框 ========== */
+.confirm-mask {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.confirm-box {
+  width: 360px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.confirm-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.confirm-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.confirm-body {
+  padding: 20px;
+  font-size: 14px;
+  color: #606266;
+  line-height: 1.6;
+}
+
+.confirm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid #f0f0f0;
+  background: #fafafa;
+}
 </style>

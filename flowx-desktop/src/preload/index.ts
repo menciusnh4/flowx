@@ -307,6 +307,12 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on('browser:pickerCancelled', handler);
       return () => ipcRenderer.removeListener('browser:pickerCancelled', handler);
     },
+    // 打开规则编辑器
+    onOpenRuleEditor: (cb: (data: { viewId: string; url: string; mode: 'create' | 'edit' }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { viewId: string; url: string; mode: 'create' | 'edit' }) => cb(payload);
+      ipcRenderer.on('browser:openRuleEditor', handler);
+      return () => ipcRenderer.removeListener('browser:openRuleEditor', handler);
+    },
 
     // 移除监听器的便捷方法
     removePageTitleUpdatedListener: (cb: (data: { viewId: string; title: string }) => void): void => {
