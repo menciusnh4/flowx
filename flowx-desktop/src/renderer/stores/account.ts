@@ -10,6 +10,10 @@ export const useAccountStore = defineStore('account', {
     error: '' as string,
     healthCheckConfig: null as HealthCheckConfig | null,
     categories: [] as AccountCategory[],
+    /** 全局搜索「账号定位」目标：搜索结果点击账号后，由 AccountPanel 消费并滚动+脉冲高亮 */
+    highlightAccountId: '' as string,
+    /** 自增计数：即使重复点击同一账号（id 不变）也能触发 AccountPanel 重新定位 */
+    highlightNonce: 0 as number,
   }),
   getters: {
     activeAccounts: (s) => s.accounts.filter((a) => a.status === 'active'),
@@ -97,6 +101,13 @@ export const useAccountStore = defineStore('account', {
       const cfg = await electronApi.getHealthCheckConfig();
       this.healthCheckConfig = cfg;
       return cfg;
+    },
+
+    /** 全局搜索：请求把某个账号在账号管理页中定位（滚动到该行 + 脉冲高亮）。
+     *  由搜索结果点击账号触发；AccountPanel watch highlightNonce 消费。 */
+    locateAccount(id: string) {
+      this.highlightAccountId = id;
+      this.highlightNonce++;
     },
 
     /** 更新健康检测配置（同时持久化保存 + 重启定时器） */

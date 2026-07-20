@@ -3,10 +3,64 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
 import { useWorkspaceStore, ROUTE_META, SYSTEM_ROUTES, type WorkspaceTab } from '../stores/workspace';
+import { useGlobalSearch } from '../composables/useGlobalSearch';
+import GlobalSearchPanel from './GlobalSearchPanel.vue';
 
 const store = useWorkspaceStore();
-const search = ref('');
+const {
+  query,
+  loading: gsLoading,
+  open: gsOpen,
+  results: gsResults,
+  activeIndex: gsActive,
+  onInput: gsOnInput,
+  onFocus: gsOnFocus,
+  select: gsSelect,
+  close: gsClose,
+  move: gsMove,
+  setActive: gsSetActive,
+  selectActive: gsSelectActive,
+} = useGlobalSearch();
 const addOpen = ref(false);
+
+// 搜索框锚点（视口坐标），用于结果面板定位
+const searchWrapRef = ref<HTMLElement | null>(null);
+const searchInputRef = ref<InstanceType<typeof import('element-plus')['ElInput']> | null>(null);
+const anchor = ref({ left: 0, top: 0, width: 0 });
+function updateAnchor() {
+  const el = searchWrapRef.value;
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  anchor.value = { left: r.left, top: r.bottom + 8, width: r.width };
+}
+function onSearchFocus() {
+  updateAnchor();
+  gsOnFocus();
+}
+function onSearchKeydown(e: Event | KeyboardEvent) {
+  const ke = e as KeyboardEvent;
+  if (ke.key === 'ArrowDown') {
+    e.preventDefault();
+    gsMove(1);
+  } else if (ke.key === 'ArrowUp') {
+    e.preventDefault();
+    gsMove(-1);
+  } else if (ke.key === 'Enter') {
+    e.preventDefault();
+    if (gsOpen.value && gsResults.value.length) gsSelectActive();
+  } else if (ke.key === 'Escape') {
+    e.preventDefault();
+    gsClose();
+    (ke.target as HTMLInputElement | null)?.blur();
+  }
+}
+// 全局 Ctrl/⌘ + K 聚焦搜索框
+function onGlobalKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    searchInputRef.value?.focus();
+  }
+}
 
 const tabs = computed(() => store.tabs);
 const activeId = computed(() => store.activeId);
@@ -93,9 +147,19 @@ function closeCtx() {
   if (ctx.value.visible) ctx.value = { ...ctx.value, visible: false };
 }
 function onDocPointer(e: MouseEvent) {
-  if (!ctx.value.visible) return;
-  const menuEl = document.getElementById('ws-ctx-menu');
-  if (menuEl && !menuEl.contains(e.target as Node)) closeCtx();
+  // 右键菜单：点外部关闭
+  if (ctx.value.visible) {
+    const menuEl = document.getElementById('ws-ctx-menu');
+    if (menuEl && !menuEl.contains(e.target as Node)) closeCtx();
+  }
+  // 全局搜索面板：点搜索框/面板外部关闭
+  if (gsOpen.value) {
+    const panelEl = document.getElementById('gs-panel');
+    const t = e.target as Node;
+    const insidePanel = panelEl && panelEl.contains(t);
+    const insideSearch = searchWrapRef.value && searchWrapRef.value.contains(t);
+    if (!insidePanel && !insideSearch) gsClose();
+  }
 }
 
 /** 未保存内容二次确认：批量关闭前若有脏 tab 提示一次 */
@@ -174,11 +238,8 @@ async function ctxCloseAll() {
 }
 
 function activate(id: string) {
+  // 滚动交给 scrollNonce watch 统一处理（store.activate 会自增 scrollNonce）
   store.activate(id);
-  nextTick(() => {
-    updateOverflow();
-    ensureVisible(id);
-  });
 }
 async function close(id: string, e: MouseEvent) {
   e.stopPropagation();
@@ -201,17 +262,36 @@ function onWheel(e: WheelEvent) {
 onMounted(() => {
   updateOverflow();
   window.addEventListener('resize', updateOverflow);
+  window.addEventListener('resize', updateAnchor);
   window.addEventListener('click', onDocPointer);
+  window.addEventListener('keydown', onGlobalKeydown);
 });
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateOverflow);
+  window.removeEventListener('resize', updateAnchor);
   window.removeEventListener('click', onDocPointer);
+  window.removeEventListener('keydown', onGlobalKeydown);
 });
 
 // 标签增删后重算溢出（nextTick 等 DOM 渲染完成）
 watch(
   () => store.tabs.length,
   () => nextTick(updateOverflow),
+);
+
+// 激活/打开 tab 时（无论来自点顶栏还是点左侧菜单栏，含重新点击已激活模块）
+// 自动滚动到可视区，确保当前选中的 tab 始终可见。
+// 用 scrollNonce 而非 activeId：重新点击已激活模块时 activeId 不变，纯 watch activeId 不会触发。
+watch(
+  () => store.scrollNonce,
+  () => {
+    const id = store.activeId;
+    if (!id) return;
+    nextTick(() => {
+      updateOverflow();
+      ensureVisible(id);
+    });
+  },
 );
 </script>
 
@@ -284,11 +364,36 @@ watch(
 
     <!-- 右侧：搜索 + 窗口控制点（位置恒定） -->
     <div class="ws-right">
-      <el-input v-model="search" class="ws-search" placeholder="搜索…" :prefix-icon="Search" clearable />
+      <div class="ws-search" ref="searchWrapRef">
+        <el-input
+          ref="searchInputRef"
+          v-model="query"
+          placeholder="搜索…"
+          :prefix-icon="Search"
+          clearable
+          @input="gsOnInput"
+          @focus="onSearchFocus"
+          @keydown="onSearchKeydown"
+          @clear="gsClose"
+        />
+      </div>
       <div class="win-dots">
         <i class="r"></i><i class="y"></i><i class="g"></i>
       </div>
     </div>
+
+    <!-- 全局搜索结果面板：Teleport 到 body，脱离顶栏 backdrop-filter 包含块，fixed 精确相对视口定位 -->
+    <GlobalSearchPanel
+      v-if="gsOpen"
+      :results="gsResults"
+      :active-index="gsActive"
+      :loading="gsLoading"
+      :query="query"
+      :anchor="anchor"
+      @hover="gsSetActive"
+      @select="gsSelect"
+      @close="gsClose"
+    />
 
     <!-- 右键上下文菜单（类 Chrome）：Teleport 到 body，脱离顶栏 backdrop-filter 包含块，fixed 精确相对视口定位 -->
     <Teleport to="body">

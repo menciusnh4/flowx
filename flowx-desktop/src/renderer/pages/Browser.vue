@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute } from 'vue-router'
 import { electronApi } from '../utils/electron'
 import { useEnvStore } from '../stores/env'
+import { useWorkspaceStore } from '../stores/workspace'
 import PublishForm from '../components/PublishForm.vue'
 import type { BrowserEnvironment, PublishRequest, BrowserBookmark, BrowserHistoryItem, ExtractedContent } from '../../types'
 
@@ -259,6 +260,17 @@ async function updateViewBounds() {
 }
 
 // ========== 浏览器操作（作用于当前激活标签） ==========
+
+// 全局搜索「在浏览器 tab 打开 URL」挂起地址消费：搜索的书签/历史结果点击后写入，
+// 本函数在其就绪时调用内部 navigateTo 并清空。
+const workspaceStore = useWorkspaceStore();
+function consumePendingNavigate() {
+  const url = workspaceStore.pendingNavigateUrl;
+  if (!url) return;
+  if (!activeTabId.value) return; // 等待默认标签就绪
+  navigateTo(url);
+  workspaceStore.pendingNavigateUrl = '';
+}
 
 // 导航到指定 URL
 async function navigateTo(url: string) {
@@ -1134,6 +1146,8 @@ onMounted(() => {
     cleanupSelectorCancelled = electronApi.browser.onSelectorCancelled?.(handleSelectorCancelledEvent) ?? null
   }
   initBrowser()
+  // 进入本页时若全局搜索已挂起待打开的 URL，标签就绪后导航
+  if (workspaceStore.pendingNavigateUrl) nextTick(consumePendingNavigate)
 })
 
 onUnmounted(() => {
@@ -1169,6 +1183,12 @@ onUnmounted(() => {
 // 监听路由变化，重新调整 bounds
 watch(() => route.path, () => {
   nextTick(() => updateViewBounds())
+})
+
+// 全局搜索「在浏览器 tab 打开 URL」：URL 写入即尝试导航；默认标签就绪（activeTabId 变化）时也尝试
+watch(() => workspaceStore.pendingNavigateUrl, consumePendingNavigate)
+watch(activeTabId, () => {
+  if (workspaceStore.pendingNavigateUrl) consumePendingNavigate()
 })
 </script>
 

@@ -28,9 +28,9 @@
             </div>
             <div class="dd-list">
               <div class="dd-opt" v-for="c in filteredCategoryOptions" :key="c.id" :class="{ selected: filterCategoryIds.includes(c.id) }" @click="toggleCategoryFilter(c.id)">
-                <span class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
                 <span class="label">{{ c.name }}</span>
                 <span class="opt-count">{{ c.count }}</span>
+                <span class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5 9-11" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
               </div>
               <div v-if="filteredCategoryOptions.length === 0" class="dd-empty">无匹配分类</div>
             </div>
@@ -122,10 +122,10 @@
     </section>
 
     <!-- 账号展示：平铺 / 列表 可切换 -->
-    <section class="acct-body" v-loading="accountStore.loading">
+    <section class="acct-body" v-loading="accountStore.loading" ref="acctBodyRef">
       <!-- 平铺（卡片网格） -->
       <div class="grid" v-if="viewMode === 'grid'">
-        <article class="acct-card" v-for="a in pagedAccounts" :key="a.id">
+        <article class="acct-card" :data-account-id="a.id" v-for="a in pagedAccounts" :key="a.id">
           <header class="ac-top">
             <div class="ac-plat" :style="platChipStyle(a.platform)">
               <img v-if="getPlatformIcon(a.platform)" :src="getPlatformIcon(a.platform)" class="ac-plat-ic" />
@@ -197,7 +197,7 @@
           <div class="lr-actions">操作</div>
         </header>
 
-        <article class="list-row" v-for="a in pagedAccounts" :key="a.id">
+        <article class="list-row" :data-account-id="a.id" v-for="a in pagedAccounts" :key="a.id">
           <div class="lr-plat">
             <span class="ac-plat" :style="platChipStyle(a.platform)">
               <img v-if="getPlatformIcon(a.platform)" :src="getPlatformIcon(a.platform)" class="ac-plat-ic" />
@@ -301,7 +301,7 @@
         </el-form-item>
         <el-form-item label="首次延迟">
           <el-input-number v-model="healthCheckForm.initialDelayMinutes" :min="1" :max="60" :disabled="!healthCheckForm.enabled" style="width:100%" />
-          <span style="font-size:12px; color:var(--muted); margin-left:110px; display:block; margin-top:-10px">应用启动后多少分钟开始第一次检测（默认为 5 分钟）</span>
+          <span style="font-size:12px; color:var(--muted); display:block; width:100%; margin-top:6px">应用启动后多少分钟开始第一次检测（默认为 5 分钟）</span>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -398,7 +398,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, reactive, ref, computed, watch } from 'vue';
+import { onMounted, onBeforeUnmount, reactive, ref, computed, watch, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh, Link, Monitor, Setting, Folder, Delete, Search } from '@element-plus/icons-vue';
 import { useAccountStore } from '../stores/account';
@@ -458,6 +458,41 @@ function platChipStyle(p: string): Record<string, string> {
 const accountStore = useAccountStore();
 const envStore = useEnvStore();
 const workspaceStore = useWorkspaceStore();
+
+/** 账号列表容器（用于全局搜索「账号定位」时查询目标行节点） */
+const acctBodyRef = ref<HTMLElement | null>(null);
+
+/** 全局搜索「账号定位」：滚动到目标账号行并脉冲高亮约 2s（不创建新 tab） */
+function flashAccount(id: string) {
+  const doFlash = (node: Element | null) => {
+    if (!node) return;
+    const el = node as HTMLElement;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('acct-flash');
+    window.setTimeout(() => el.classList.remove('acct-flash'), 2000);
+  };
+  nextTick(() => {
+    let node = acctBodyRef.value?.querySelector(`[data-account-id="${CSS.escape(id)}"]`) ?? null;
+    if (node) {
+      doFlash(node);
+      return;
+    }
+    // 目标被筛选/分页藏起来了：清空筛选并回首页，再尝试一次
+    filterCategoryIds.value = [];
+    filterPlatform.value = [];
+    searchText.value = '';
+    currentPage.value = 1;
+    nextTick(() => {
+      node = acctBodyRef.value?.querySelector(`[data-account-id="${CSS.escape(id)}"]`) ?? null;
+      doFlash(node);
+    });
+  });
+}
+
+function onHighlightNonce() {
+  const id = accountStore.highlightAccountId;
+  if (id) flashAccount(id);
+}
 
 const authVisible = ref(false);
 const authPlatform = ref<string>('xiaohongshu');
@@ -730,6 +765,9 @@ watch([filterCategoryIds, searchText, filterPlatform], () => {
 watch(filteredAccounts, () => {
   if (currentPage.value > totalPages.value) currentPage.value = totalPages.value;
 });
+
+// 全局搜索点击账号结果 → 定位（覆盖重新点击同一账号：highlightNonce 自增会再次触发）
+watch(() => accountStore.highlightNonce, onHighlightNonce);
 
 // 获取分类名称辅助函数
 function getCategoryName(id: string) {
@@ -1014,6 +1052,8 @@ onMounted(async () => {
   envStore.loadAll().catch(() => {});
   // 异步加载健康检测配置（不阻塞 UI）
   accountStore.loadHealthCheckConfig().catch(() => {});
+  // 若进入本页时全局搜索已设置账号定位目标，立即定位
+  if (accountStore.highlightAccountId) flashAccount(accountStore.highlightAccountId);
 });
 
 onBeforeUnmount(() => {
@@ -1023,6 +1063,20 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.acct-flash {
+  animation: acctFlash 1s ease-in-out 0s 2;
+  border-radius: var(--r-md, 12px);
+}
+@keyframes acctFlash {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25), var(--shadow-lg, 0 12px 32px rgba(15, 23, 42, 0.18));
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.9), var(--shadow-lg, 0 12px 32px rgba(15, 23, 42, 0.18));
+  }
+}
+
 .acct {
   display: flex;
   flex-direction: column;

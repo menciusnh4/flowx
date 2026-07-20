@@ -57,6 +57,12 @@ export const useWorkspaceStore = defineStore('workspace', {
     tabs: [] as WorkspaceTab[],
     activeId: '' as string,
     MAX: 20,
+    /** 自增计数：每次打开/激活 tab 都 +1，顶栏 watch 它来滚动到激活项。
+     *  用于覆盖「重新点击已激活模块（activeId 不变）」场景——纯 watch activeId 不会触发。 */
+    scrollNonce: 0 as number,
+    /** 全局搜索「在浏览器 tab 打开 URL」挂起地址：搜索的书签/历史结果点击后写入，
+     *  由 Browser.vue watch 后调用内部 navigateTo 消费并清空。 */
+    pendingNavigateUrl: '' as string,
   }),
   getters: {
     activeTab: (s) => s.tabs.find((t) => t.id === s.activeId) ?? null,
@@ -72,6 +78,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       const existing = this.tabs.find((t) => t.id === id);
       if (existing) {
         this.activeId = id;
+        this.scrollNonce++;
         return true;
       }
       if (!this.canAdd) return false;
@@ -86,6 +93,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         closable: meta?.closable ?? true,
       });
       this.activeId = id;
+      this.scrollNonce++;
       return true;
     },
 
@@ -105,6 +113,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         closable: true,
       });
       this.activeId = id;
+      this.scrollNonce++;
       return true;
     },
 
@@ -114,6 +123,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       const existing = this.tabs.find((t) => t.id === id);
       if (existing) {
         this.activeId = id;
+        this.scrollNonce++;
         return true;
       }
       if (!this.canAdd) return false;
@@ -127,11 +137,22 @@ export const useWorkspaceStore = defineStore('workspace', {
         closable: true,
       });
       this.activeId = id;
+      this.scrollNonce++;
       return true;
     },
 
+    /** 全局搜索：在浏览器 tab 打开指定 URL（PRD：书签/历史结果 → 浏览器 tab）。
+     *  先确保浏览器 tab 激活，再把 URL 写入 pendingNavigateUrl 由 Browser.vue 消费。 */
+    openBrowserWithUrl(url: string) {
+      this.openSystemTab('/browser');
+      this.pendingNavigateUrl = url;
+    },
+
     activate(id: string) {
-      if (this.tabs.some((t) => t.id === id)) this.activeId = id;
+      if (this.tabs.some((t) => t.id === id)) {
+        this.activeId = id;
+        this.scrollNonce++;
+      }
     },
 
     /** 关闭 tab；关闭激活项时回退到相邻项，或全部关闭则开 dashboard */
@@ -213,8 +234,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     /** M4：生成可持久化的布局快照（剔除运行时字段） */
-    snapshot(): { tabs: WorkspaceTab[]; activeId: string } {
-      const raw = {
+    snapshot(): { tabs: WorkspaceTab[]; activeId: string } {      const raw = {
         tabs: this.tabs.map((t) => ({
           id: t.id,
           kind: t.kind,
