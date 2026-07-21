@@ -95,8 +95,5 @@ flowx-ui-redesign/*.html
 flowx-desktop/dist_old_*/
 flowx-desktop/scratch/
 
-# 违禁词「用户自定义扩展词」txt：由用户/法务自行维护，不进源码仓库
-flowx-desktop/src/main/resources/compliance/**/*.txt
-
 # WorkBuddy 本地记忆/工作区（含敏感上下文，绝不进仓库）
 .workbuddy/
