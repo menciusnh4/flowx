@@ -1,16 +1,17 @@
 <template>
   <div class="about-window-container">
     <div class="about-content">
-      <div class="about-header">
+      <!-- 固定头部：版本信息常驻，不随滚动消失 -->
+      <header class="about-header">
         <div class="about-logo">
-          <el-icon :size="48" color="#409eff"><Promotion /></el-icon>
+          <el-icon :size="48" color="#ffffff"><Promotion /></el-icon>
         </div>
         <div class="about-info">
           <h2>FlowX Desktop</h2>
           <p class="about-subtitle">多平台内容发布工具</p>
-          <p class="about-version">版本：v{{ version || '0.1.0' }}</p>
+          <span class="about-version">版本 v{{ version || '0.1.0' }}</span>
         </div>
-      </div>
+      </header>
 
       <div class="about-desc">
         <p>
@@ -20,6 +21,7 @@
         <p>支持抖音、小红书、快手、微信视频号、知乎、今日头条等主流内容平台。</p>
       </div>
 
+      <!-- 吸顶标签栏：标签头固定，仅下方内容区内部滚动 -->
       <el-tabs v-model="activeTab" class="about-tabs">
         <el-tab-pane label="功能特性" name="features">
           <div class="feature-list">
@@ -67,10 +69,6 @@
         </el-tab-pane>
       </el-tabs>
     </div>
-
-    <div class="about-footer">
-      <el-button type="primary" @click="handleClose">关闭</el-button>
-    </div>
   </div>
 </template>
 
@@ -108,10 +106,6 @@ function simpleMarkdownToHtml(md: string): string {
   return html;
 }
 
-function handleClose() {
-  window.close();
-}
-
 onMounted(async () => {
   try {
     const info = await electronApi.getSystemInfo();
@@ -125,25 +119,31 @@ onMounted(async () => {
 
 <style scoped>
 .about-window-container {
-  height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  background: #f5f7fa;
-  padding: 24px;
+  background: transparent;
+  padding: 0;
   box-sizing: border-box;
   overflow: hidden;
 }
 
+/* 外壳：整张卡片固定不滚动，内部只让标签内容区滚 */
 .about-content {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   background: #fff;
-  border-radius: 8px;
-  padding: 24px;
+  border-radius: 14px;
+  padding: 28px 28px 0;
   box-sizing: border-box;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.06);
 }
 
+/* ---------- 固定头部 ---------- */
 .about-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 20px;
@@ -155,51 +155,108 @@ onMounted(async () => {
 .about-logo {
   width: 72px;
   height: 72px;
-  background: #ecf5ff;
-  border-radius: 12px;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #409eff 0%, #67c23a 100%);
+  border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 6px 18px rgba(64, 158, 255, 0.28);
 }
 
 .about-info h2 {
   margin: 0 0 4px 0;
   font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
   color: #303133;
 }
 
 .about-subtitle {
-  margin: 0 0 4px 0;
-  color: #606266;
+  margin: 0 0 8px 0;
+  color: #909399;
   font-size: 14px;
 }
 
 .about-version {
-  margin: 0;
-  color: #909399;
-  font-size: 13px;
+  display: inline-block;
+  padding: 3px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #409eff;
+  background: #ecf5ff;
+  border-radius: 999px;
 }
 
+/* ---------- 描述 ---------- */
 .about-desc {
+  flex-shrink: 0;
   color: #606266;
   font-size: 14px;
   line-height: 1.7;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .about-desc p {
   margin: 0 0 8px 0;
 }
 
+/* ---------- 吸顶标签栏 ---------- */
 .about-tabs {
-  margin-top: 10px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
+/* 标签头固定，不随内容滚走 */
+.about-tabs :deep(.el-tabs__header) {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0 4px;
+}
+
+.about-tabs :deep(.el-tabs__nav-wrap::after) {
+  height: 1px;
+  background: #ebeef5;
+}
+
+.about-tabs :deep(.el-tabs__item) {
+  font-size: 14.5px;
+  height: 44px;
+}
+
+.about-tabs :deep(.el-tabs__item.is-active) {
+  font-weight: 600;
+}
+
+/* 仅内容区内部滚动，平滑滚动 */
+.about-tabs :deep(.el-tabs__content) {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 4px 28px;
+  scroll-behavior: smooth;
+}
+
+/* 自定义滚动条，更精致 */
+.about-tabs :deep(.el-tabs__content)::-webkit-scrollbar {
+  width: 8px;
+}
+.about-tabs :deep(.el-tabs__content)::-webkit-scrollbar-thumb {
+  background: #dcdfe6;
+  border-radius: 8px;
+}
+.about-tabs :deep(.el-tabs__content)::-webkit-scrollbar-thumb:hover {
+  background: #c0c4cc;
+}
+
+/* ---------- 功能特性 ---------- */
 .feature-list {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px 20px;
-  padding: 10px 0;
+  gap: 12px 24px;
+  padding: 2px 0;
 }
 
 .feature-item {
@@ -208,12 +265,19 @@ onMounted(async () => {
   gap: 8px;
   font-size: 14px;
   color: #606266;
+  padding: 8px 10px;
+  border-radius: 8px;
+  transition: background 0.2s ease, transform 0.2s ease;
 }
 
+.feature-item:hover {
+  background: #f5f7fa;
+  transform: translateX(2px);
+}
+
+/* ---------- 更新日志 ---------- */
 .changelog-content {
-  max-height: 300px;
-  overflow-y: auto;
-  padding: 10px 4px;
+  padding: 2px 2px;
   font-size: 14px;
   line-height: 1.7;
   color: #606266;
@@ -251,11 +315,5 @@ onMounted(async () => {
 
 .changelog-content :deep(strong) {
   color: #303133;
-}
-
-.about-footer {
-  display: flex;
-  justify-content: center;
-  padding-top: 16px;
 }
 </style>

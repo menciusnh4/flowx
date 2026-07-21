@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
 import { useWorkspaceStore, ROUTE_META, SYSTEM_ROUTES, type WorkspaceTab } from '../stores/workspace';
 import { useGlobalSearch } from '../composables/useGlobalSearch';
+import { electronApi } from '../utils/electron';
 import GlobalSearchPanel from './GlobalSearchPanel.vue';
 
 const store = useWorkspaceStore();
@@ -21,7 +22,6 @@ const {
   setActive: gsSetActive,
   selectActive: gsSelectActive,
 } = useGlobalSearch();
-const addOpen = ref(false);
 
 // 搜索框锚点（视口坐标），用于结果面板定位
 const searchWrapRef = ref<HTMLElement | null>(null);
@@ -99,59 +99,59 @@ const addableRoutes = computed(() =>
   })),
 );
 
-// ============ 右键上下文菜单（类 Chrome） ============
-interface CtxState {
-  visible: boolean;
-  x: number;
-  y: number;
-  tabId: string;
-}
-const ctx = ref<CtxState>({ visible: false, x: 0, y: 0, tabId: '' });
-const ctxTab = computed(() => store.tabs.find((t) => t.id === ctx.value.tabId) ?? null);
-const ctxIndex = computed(() => store.tabs.findIndex((t) => t.id === ctx.value.tabId));
+// ============ 原生菜单（「+」新增页签 / 右键任务选项卡） ============
+// 顶栏弹层位于浏览器 WebContentsView 原生层之上，HTML 下拉会被原生层遮挡。
+// 参考 main 分支方案：改用 Electron 原生菜单（popupNativeMenu），原生层级高于 WebContentsView，
+// 从结构上消除遮挡，无需再依赖隐藏原生视图的脆弱竞态逻辑。
 
-// 各菜单项可用性（不可关闭 tab / 无可关目标时禁用，与 Chrome 一致）
-const canClose = computed(() => ctxTab.value?.closable !== false);
-const canCloseOthers = computed(() =>
-  store.tabs.some((t) => t.id !== ctx.value.tabId && t.closable !== false),
-);
-const canCloseRight = computed(() =>
-  ctxIndex.value >= 0 && store.tabs.some((t, i) => i > ctxIndex.value && t.closable !== false),
-);
-const canCloseAll = computed(() => store.tabs.some((t) => t.closable !== false));
+/** 「+」新增页签：弹出原生菜单，列出尚未打开的系统路由 */
+function openAddMenu(e: MouseEvent) {
+  if (!canAdd.value) return
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  const items = addableRoutes.value.length
+    ? addableRoutes.value.map((m) => ({ id: m.route, label: `${m.icon}  ${m.title}` }))
+    : [{ id: '__none__', label: '已全部打开', enabled: false }]
+  electronApi
+    .popupNativeMenu(items, Math.round(rect.left), Math.round(rect.bottom + 4))
+    .then((id) => {
+      if (id && id !== '__none__') addRoute(id)
+    })
+    .catch((err) => console.error('[WorkspaceTabBar] 新增菜单失败', err))
+}
 
-function onCtxMenu(e: MouseEvent, id: string) {
-  e.preventDefault();
-  e.stopPropagation();
-  const MENU_W = 184;
-  const MENU_H = 172;
-  const node = e.currentTarget as HTMLElement;
-  const rect = node.getBoundingClientRect();
-  // 菜单左缘对齐"当前点击的任务选项卡"左缘（rect.left），垂直仍贴其底部
-  let x = rect.left;
-  let y = rect.bottom + 4;
-  // 仅做视口边界夹取，防止菜单溢出屏幕
-  if (x < 8) x = 8;
-  if (x + MENU_W > window.innerWidth) x = window.innerWidth - MENU_W - 8;
-  if (y + MENU_H > window.innerHeight) y = rect.top - MENU_H - 4; // 下方空间不足则上翻到标签上方
-  ctx.value = { visible: true, x, y, tabId: id };
+/** 右键任务选项卡：弹出原生上下文菜单（关闭 / 关闭其他 / 关闭右侧 / 关闭全部） */
+function openTabCtxMenu(e: MouseEvent, id: string) {
+  e.preventDefault()
+  e.stopPropagation()
+  const tab = store.tabs.find((t) => t.id === id)
+  const closable = tab?.closable !== false
+  const idx = store.tabs.findIndex((t) => t.id === id)
+  const items = [
+    { id: 'close', label: '关闭', enabled: closable },
+    { id: 'closeOthers', label: '关闭其他标签页', enabled: store.tabs.some((t) => t.id !== id && t.closable !== false) },
+    { id: 'closeRight', label: '关闭右侧标签页', enabled: idx >= 0 && store.tabs.some((t, i) => i > idx && t.closable !== false) },
+    { id: 'closeAll', label: '关闭所有标签页', enabled: store.tabs.some((t) => t.closable !== false) },
+  ]
+  electronApi
+    .popupNativeMenu(items, e.clientX, e.clientY)
+    .then((action) => {
+      if (!action) return
+      if (action === 'close') void requestClose(id)
+      else if (action === 'closeOthers') void closeOthers(id)
+      else if (action === 'closeRight') void closeRight(id)
+      else if (action === 'closeAll') void closeAll()
+    })
+    .catch((err) => console.error('[WorkspaceTabBar] 右键菜单失败', err))
 }
-function closeCtx() {
-  if (ctx.value.visible) ctx.value = { ...ctx.value, visible: false };
-}
+
+// 全局搜索面板：点搜索框/面板外部关闭（右键菜单已是原生，无需此处理）
 function onDocPointer(e: MouseEvent) {
-  // 右键菜单：点外部关闭
-  if (ctx.value.visible) {
-    const menuEl = document.getElementById('ws-ctx-menu');
-    if (menuEl && !menuEl.contains(e.target as Node)) closeCtx();
-  }
-  // 全局搜索面板：点搜索框/面板外部关闭
   if (gsOpen.value) {
-    const panelEl = document.getElementById('gs-panel');
-    const t = e.target as Node;
-    const insidePanel = panelEl && panelEl.contains(t);
-    const insideSearch = searchWrapRef.value && searchWrapRef.value.contains(t);
-    if (!insidePanel && !insideSearch) gsClose();
+    const panelEl = document.getElementById('gs-panel')
+    const t = e.target as Node
+    const insidePanel = panelEl && panelEl.contains(t)
+    const insideSearch = searchWrapRef.value && searchWrapRef.value.contains(t)
+    if (!insidePanel && !insideSearch) gsClose()
   }
 }
 
@@ -199,32 +199,22 @@ async function requestClose(id: string) {
   nextTick(updateOverflow);
 }
 
-// —— 菜单动作 ——
-async function ctxClose() {
-  const id = ctx.value.tabId;
-  closeCtx();
-  await requestClose(id);
-}
-async function ctxCloseOthers() {
-  const id = ctx.value.tabId;
+// —— 菜单动作（供原生右键菜单调用） ——
+async function closeOthers(id: string) {
   const targets = store.tabs.filter((t) => t.id !== id && t.closable !== false);
-  closeCtx();
   if (!(await confirmDirty(targets, '关闭其他标签页'))) return;
   store.closeOthers(id);
   nextTick(updateOverflow);
 }
-async function ctxCloseRight() {
-  const id = ctx.value.tabId;
-  const idx = ctxIndex.value;
+async function closeRight(id: string) {
+  const idx = store.tabs.findIndex((t) => t.id === id);
   const targets = store.tabs.filter((t, i) => i > idx && t.closable !== false);
-  closeCtx();
   if (!(await confirmDirty(targets, '关闭右侧标签页'))) return;
   store.closeRight(id);
   nextTick(updateOverflow);
 }
-async function ctxCloseAll() {
+async function closeAll() {
   const targets = store.tabs.filter((t) => t.closable !== false);
-  closeCtx();
   if (!(await confirmDirty(targets, '关闭所有标签页'))) return;
   store.closeAll();
   nextTick(updateOverflow);
@@ -239,7 +229,6 @@ async function close(id: string, e: MouseEvent) {
   await requestClose(id);
 }
 function addRoute(route: string) {
-  addOpen.value = false;
   const ok = store.openSystemTab(route);
   if (!ok) ElMessage.warning(`任务页签已达上限（${store.MAX}）`);
   nextTick(updateOverflow);
@@ -252,8 +241,7 @@ function onWheel(e: WheelEvent) {
   el.scrollLeft += e.deltaY;
 }
 
-// 监听右键菜单 / 搜索面板的显隐，同步到 store 以通知 Browser.vue 隐藏 WebContentsView 原生层
-watch(() => ctx.value.visible, (v) => { v ? store.pushTopbarOverlay() : store.popTopbarOverlay() })
+// 全局搜索面板打开时，通知 Browser.vue 隐藏 WebContentsView 原生层（右键菜单/「+」菜单已改为原生菜单，无需此处理）
 watch(gsOpen, (v) => { v ? store.pushTopbarOverlay() : store.popTopbarOverlay() })
 
 onMounted(() => {
@@ -310,7 +298,7 @@ watch(
           :data-id="t.id"
           :class="{ active: t.id === activeId }"
           @click="activate(t.id)"
-          @contextmenu.prevent="onCtxMenu($event, t.id)"
+          @contextmenu.prevent="openTabCtxMenu($event, t.id)"
           :title="t.title"
         >
           <span class="ws-tab-ic">{{ t.icon }}</span>
@@ -335,29 +323,14 @@ watch(
         aria-label="向右滚动任务选项卡"
       >›</button>
 
-      <!-- 「+」新增页签（常驻，始终可见） -->
-      <el-dropdown
-        trigger="click"
-        placement="bottom-start"
-        popper-class="ws-top-popper"
+      <!-- 「+」新增页签（原生菜单，避免 WebContentsView 遮挡，参考 main 分支方案） -->
+      <button
+        class="ws-add"
+        :class="{ disabled: !canAdd }"
         :disabled="!canAdd"
-        @visible-change="(v: boolean) => { addOpen = v; v ? store.pushTopbarOverlay() : store.popTopbarOverlay() }"
-      >
-        <button class="ws-add" :class="{ disabled: !canAdd, open: addOpen }" :disabled="!canAdd" title="打开页面">+</button>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item
-              v-for="m in addableRoutes"
-              :key="m.route"
-              :command="m.route"
-              @click="addRoute(m.route)"
-            >
-              <span class="ws-add-ic">{{ m.icon }}</span>{{ m.title }}
-            </el-dropdown-item>
-            <el-dropdown-item v-if="addableRoutes.length === 0" disabled>已全部打开</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
+        title="打开页面"
+        @click="openAddMenu($event)"
+      >+</button>
     </div>
 
     <!-- 与右侧搜索栏的恒定分隔线 + 间距（不随标签数量变化） -->
@@ -396,23 +369,7 @@ watch(
       @close="gsClose"
     />
 
-    <!-- 右键上下文菜单（类 Chrome）：Teleport 到 body，脱离顶栏 backdrop-filter 包含块，fixed 精确相对视口定位 -->
-    <Teleport to="body">
-      <div
-        v-if="ctx.visible"
-        id="ws-ctx-menu"
-        class="ws-ctx-menu"
-        :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }"
-        role="menu"
-        @click.stop
-        @contextmenu.prevent.stop
-      >
-        <button class="ws-ctx-item" :disabled="!canClose" role="menuitem" @click="ctxClose">关闭</button>
-        <button class="ws-ctx-item" :disabled="!canCloseOthers" role="menuitem" @click="ctxCloseOthers">关闭其他标签页</button>
-        <button class="ws-ctx-item" :disabled="!canCloseRight" role="menuitem" @click="ctxCloseRight">关闭右侧标签页</button>
-        <button class="ws-ctx-item" :disabled="!canCloseAll" role="menuitem" @click="ctxCloseAll">关闭所有标签页</button>
-      </div>
-    </Teleport>
+    <!-- 右键上下文菜单已改为 Electron 原生菜单（openTabCtxMenu → popupNativeMenu），无需 HTML 节点 -->
   </header>
 </template>
 
@@ -592,9 +549,6 @@ watch(
   opacity: 0.4;
   cursor: not-allowed;
 }
-.ws-add-ic {
-  margin-right: 8px;
-}
 
 /* —— 与搜索栏的恒定分隔线 + 间距 —— */
 .ws-divider {
@@ -642,46 +596,6 @@ watch(
 }
 .win-dots .g {
   background: #28c840;
-}
-
-/* —— 右键上下文菜单 —— */
-.ws-ctx-menu {
-  position: fixed;
-  /* 必须高于浏览器任务选项卡的高层遮罩（Browser.vue .sidebar-mask z-index:9999），否则右键菜单会被浏览器内容盖住 */
-  z-index: 99999;
-  min-width: 168px;
-  padding: 6px;
-  background: var(--surface-strong, #fff);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md, 12px);
-  box-shadow: var(--shadow-lg, 0 12px 32px rgba(15, 23, 42, 0.18));
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.ws-ctx-item {
-  display: flex;
-  align-items: center;
-  height: 34px;
-  padding: 0 12px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--ink-2, #1e293b);
-  font-size: 13px;
-  font-weight: 500;
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
-}
-.ws-ctx-item:hover:not(:disabled) {
-  background: var(--brand-grad-soft, rgba(99, 102, 241, 0.1));
-  color: var(--brand-indigo, #6366f1);
-}
-.ws-ctx-item:disabled {
-  color: var(--faint, #94a3b8);
-  cursor: not-allowed;
-  opacity: 0.6;
 }
 
 /* 窄屏：搜索栏收窄，保持与标签区的美观距离 */

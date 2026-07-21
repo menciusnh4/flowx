@@ -47,6 +47,8 @@ export const ROUTE_META: Record<string, RouteMetaItem> = {
   '/settings/proxies': { title: '代理 IP 设置', icon: '🔀' },
   '/settings/api': { title: '对外接口', icon: '🔌' },
   '/settings/logs': { title: '日志管理', icon: '📜' },
+  '/settings/rules': { title: '提取规则', icon: '📐' },
+  '/about': { title: '关于', icon: 'ℹ️' },
 };
 
 /** 「+」菜单可添加的路由顺序 */

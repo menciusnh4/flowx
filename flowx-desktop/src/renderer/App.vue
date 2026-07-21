@@ -97,8 +97,8 @@
           </div>
         </div>
 
-        <!-- 关于 FlowX（独立窗口，非任务页签） -->
-        <button class="nav-item" @click="openAboutWindow">
+        <!-- 关于 FlowX（右侧页面，与左侧菜单其它系统页一致） -->
+        <button class="nav-item" :class="{ active: route.path === '/about' }" @click="go('/about')">
           <span class="ic">ℹ️</span>
           <span>关于</span>
         </button>
@@ -115,9 +115,8 @@
 
     <!-- ============ 内容区 ============ -->
     <div class="content">
-      <!-- M1：顶部常驻任务选项卡栏（搜索 / 窗口点已迁入） -->
+      <!-- 顶部任务选项卡栏 + 按 tabId 实例渲染（状态保持核心） -->
       <WorkspaceTabBar />
-      <!-- M1：按 tabId 实例渲染，切换不卸载（状态保持核心） -->
       <WorkspaceView />
     </div>
   </div>
@@ -191,14 +190,6 @@ function toggleSettings() {
 }
 function toggleWorkbench() {
   workbenchOpen.value = !workbenchOpen.value;
-}
-
-async function openAboutWindow() {
-  try {
-    await electronApi.openAboutWindow();
-  } catch (e) {
-    ElMessage.error(`打开关于窗口失败：${e instanceof Error ? e.message : String(e)}`);
-  }
 }
 
 onMounted(async () => {

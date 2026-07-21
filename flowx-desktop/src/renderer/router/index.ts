@@ -22,8 +22,8 @@ const routes: RouteRecordRaw[] = [
   { path: '/settings/rules', name: 'rules', component: () => import('@/pages/RulesPanel.vue'), meta: { title: '提取规则' } },
   { path: '/settings/api', name: 'api', component: () => import('@/pages/ApiPanel.vue'), meta: { title: '对外接口' } },
   { path: '/settings/logs', name: 'logs', component: () => import('@/pages/LogPanel.vue'), meta: { title: '日志管理' } },
-  // 关于窗口（独立 BrowserWindow 使用）
-  { path: '/about-window', name: 'about-window', component: () => import('@/pages/AboutWindow.vue'), meta: { title: '关于 FlowX', hideHeader: true } },
+  // 关于（右侧页面，与左侧菜单其它系统页一致，作为任务 tab 打开）
+  { path: '/about', name: 'about', component: () => import('@/pages/AboutWindow.vue'), meta: { title: '关于 FlowX' } },
 ];
 
 export const router = createRouter({

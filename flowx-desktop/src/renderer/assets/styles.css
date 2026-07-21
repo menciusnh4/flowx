@@ -374,6 +374,11 @@ body {
   flex-direction: column;
 }
 
+/* 独立窗口模式（关于窗口等）：隐藏侧栏与任务壳后，内容区铺满、无额外留白 */
+.no-header .content {
+  padding: 0;
+}
+
 .topbar {
   height: 60px;
   flex-shrink: 0;

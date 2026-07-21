@@ -163,8 +163,6 @@ contextBridge.exposeInMainWorld('electron', {
       x?: number,
       y?: number,
     ): Promise<string | null> => invoke('system:popupNativeMenu', items, x, y),
-    // 打开关于窗口（独立 BrowserWindow，避免 WebContentsView 遮挡）
-    openAboutWindow: (): Promise<boolean> => invoke('system:openAboutWindow'),
   },
 
   // ========== 日志管理 ==========

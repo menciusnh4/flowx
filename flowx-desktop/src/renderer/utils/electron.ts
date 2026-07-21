@@ -199,11 +199,6 @@ export const electronApi = {
   ): Promise<string | null> {
     return invokeElectron('system.popupNativeMenu', 'system:popupNativeMenu', items, x, y);
   },
-  // 打开关于窗口（独立 BrowserWindow，避免 WebContentsView 遮挡）
-  async openAboutWindow(): Promise<boolean> {
-    return invokeElectron('system.openAboutWindow', 'system:openAboutWindow');
-  },
-
   // 日志管理
   async readMainLog(options?: { limit?: number; date?: string }): Promise<string> {
     return invokeElectron('log.readMain', 'log:readMain', options);

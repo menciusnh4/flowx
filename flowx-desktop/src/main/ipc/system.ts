@@ -2,7 +2,6 @@ import { ipcMain, shell, app, dialog, BrowserWindow, Menu, MenuItem } from 'elec
 import { safeInvoke } from './index';
 import type { SystemInfo, UpdateInfo, PublishLogQuery } from '../../types';
 import { getMainWindow } from '../windows/MainWindow';
-import { createAboutWindow } from '../windows/AboutWindow';
 import { getLogsDir, getPublishLogPath, getMainLogPath, queryPublishLogs, clearPublishLogs, listLogFiles, getLogPathByDate } from '../utils/logger';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -263,11 +262,5 @@ export function registerSystemIpc(): void {
         },
       });
     });
-  });
-
-  // 打开关于窗口（独立 BrowserWindow，避免 WebContentsView 遮挡）
-  safeInvoke('system:openAboutWindow', async (): Promise<boolean> => {
-    await createAboutWindow();
-    return true;
   });
 }
