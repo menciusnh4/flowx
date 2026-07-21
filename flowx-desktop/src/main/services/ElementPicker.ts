@@ -139,10 +139,31 @@ class ElementPickerService {
     }
     var rect = el.getBoundingClientRect();
     overlay.style.display = 'block';
-    overlay.style.left = (rect.left + window.scrollX) + 'px';
-    overlay.style.top = (rect.top + window.scrollY) + 'px';
+    overlay.style.left = rect.left + 'px';
+    overlay.style.top = rect.top + 'px';
     overlay.style.width = rect.width + 'px';
     overlay.style.height = rect.height + 'px';
+  }
+
+  // 刷新所有高亮框位置（滚动时调用）
+  function refreshAllOverlays() {
+    if (hoverEl) updateOverlay(hoverEl, hoverOverlay, 'blue');
+    if (navEl) updateOverlay(navEl, hoverOverlay, 'blue');
+    if (selectedElements.length > 0) updateSelectedOverlay();
+    if (selectedElements.length >= 2) {
+      var commonSel = inferCommonSelector(selectedElements);
+      highlightMatches(commonSel);
+    }
+  }
+
+  // 滚动时刷新位置（使用 requestAnimationFrame 节流）
+  var scrollRafId = null;
+  function onScroll() {
+    if (scrollRafId) return;
+    scrollRafId = requestAnimationFrame(function() {
+      scrollRafId = null;
+      refreshAllOverlays();
+    });
   }
 
   // 生成单个元素的唯一选择器
@@ -473,6 +494,12 @@ class ElementPickerService {
     document.removeEventListener('mouseover', onMouseOver, true);
     document.removeEventListener('click', onClick, true);
     document.removeEventListener('keydown', onKeyDown, true);
+    window.removeEventListener('scroll', onScroll, true);
+    window.removeEventListener('resize', onScroll, true);
+    if (scrollRafId) {
+      cancelAnimationFrame(scrollRafId);
+      scrollRafId = null;
+    }
     if (hoverOverlay.parentNode) hoverOverlay.parentNode.removeChild(hoverOverlay);
     if (selectedOverlay.parentNode) selectedOverlay.parentNode.removeChild(selectedOverlay);
     if (matchOverlay.parentNode) matchOverlay.parentNode.removeChild(matchOverlay);
@@ -507,6 +534,8 @@ class ElementPickerService {
   document.addEventListener('mouseover', onMouseOver, true);
   document.addEventListener('click', onClick, true);
   document.addEventListener('keydown', onKeyDown, true);
+  window.addEventListener('scroll', onScroll, true);
+  window.addEventListener('resize', onScroll, true);
 
   // 确认按钮（多选模式）
   var confirmBtn = document.getElementById('__flowx_picker_confirm');
