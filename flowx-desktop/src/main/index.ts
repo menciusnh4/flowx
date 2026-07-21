@@ -8,6 +8,7 @@ import { AccountService } from './services/AccountService';
 import { BrowserEnvService } from './services/BrowserEnvService';
 import { PublishEngine } from './services/PublishEngine';
 import { ApiServer } from './services/ApiServer';
+import { registerMediaProtocol } from './protocols/mediaProtocol';
 
 // FlowX 主进程入口
 // 负责: 窗口管理、IPC 注册、服务初始化、生命周期事件
@@ -77,6 +78,10 @@ async function bootstrap() {
   // 当 Electron 完成初始化并准备好创建浏览器窗口时调用
   await app.whenReady();
   isReady = true;
+
+  // 注册自定义媒体协议（flowx-media://），供发布页 <video>/<img> 预览本地媒体，
+  // 须在渲染进程发起请求前注册，故置于 createMainWindow 之前。
+  registerMediaProtocol();
 
   // 设置应用名称和图标
   app.setName('FlowX');

@@ -3,12 +3,16 @@
 // 合并规则：common 全量 + 平台文件；平台词后插入覆盖 common 同名词。
 // 未知平台：仅扫 common（不报错、不阻断）。
 
+import * as fs from 'fs';
+import * as path from 'path';
+import { app } from 'electron';
 import common from '../../resources/compliance/common.json';
 import douyin from '../../resources/compliance/douyin.json';
 import xiaohongshu from '../../resources/compliance/xiaohongshu.json';
 import zhihu from '../../resources/compliance/zhihu.json';
 import kuaishou from '../../resources/compliance/kuaishou.json';
 import wechatOfficial from '../../resources/compliance/wechat_official.json';
+import commonSupplement from '../../resources/compliance/common_supplement.json';
 import type { ComplianceDictionaryFile, ComplianceLevel } from '../../../types/compliance';
 import { buildTrie, type ACNode, type RawTerm } from './matcher';
 
@@ -130,6 +134,88 @@ function normalize(raw: RawDict, platform: ComplianceDictionaryFile): RawTerm[] 
   return out;
 }
 
+// ============ 分类扩展词库（外部 txt，内容无关通用加载器）============
+/**
+ * 机制：compliance/extensions.json 描述若干「外部词文件 → 通用词库分类」映射，
+ * 运行期读取对应 txt（词以 空格/制表/换行 分隔，# 开头为注释）并作为 common 词追加合并，
+ * 全平台生效。词文件由用户/法务自行维护，本加载器不预置任何词条内容。
+ *
+ * extensions.json 结构（数组）：
+ *   [{ "file": "政治敏感类.txt", "category": "政治敏感类", "risk_level": "高", "reason": "..." }]
+ * - file：相对 compliance 目录的路径，或绝对路径（生产期放 userData 等可写位置时用绝对路径）。
+ * - category：common.json 中已有的分类名（如「政治敏感类」），词将并入该分类。
+ * - risk_level：高/中/低（缺省高）；reason/suggestion：可选附加字段。
+ */
+
+interface ExtensionMapping {
+  file: string;
+  category: string;
+  risk_level?: '高' | '中' | '低';
+  reason?: string;
+  suggestion?: string;
+}
+
+/** 解析 compliance 资源目录：dev 与打包(asar) 均指向 src/main/resources/compliance */
+function resolveComplianceDir(): string {
+  try {
+    const byApp = path.join(app.getAppPath(), 'src/main/resources/compliance');
+    if (fs.existsSync(byApp)) return byApp;
+  } catch {
+    /* app 未就绪时回退 */
+  }
+  // 回退：基于当前模块位置（dist-electron/main/services/compliance → ../../resources/compliance）
+  return path.join(__dirname, '../../resources/compliance');
+}
+
+let extTermsCache: RawTerm[] | null = null;
+
+/** 读取 extensions.json + 各 txt，分词为 RawTerm[]（一次计算后缓存） */
+function loadExtensionTerms(): RawTerm[] {
+  if (extTermsCache) return extTermsCache;
+  const result: RawTerm[] = [];
+  try {
+    const dir = resolveComplianceDir();
+    const cfgPath = path.join(dir, 'extensions.json');
+    if (!fs.existsSync(cfgPath)) {
+      extTermsCache = result;
+      return result;
+    }
+    const cfg: ExtensionMapping[] = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+    if (!Array.isArray(cfg)) {
+      extTermsCache = result;
+      return result;
+    }
+    for (const m of cfg) {
+      if (!m || !m.file || !m.category) continue;
+      const filePath = path.isAbsolute(m.file) ? m.file : path.join(dir, m.file);
+      if (!fs.existsSync(filePath)) {
+        console.warn(`[compliance] 扩展词库文件缺失，已跳过：${filePath}`);
+        continue;
+      }
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      const level = cnLevel(m.risk_level) || 'high';
+      // 按行处理：整行以 # 开头视为注释行跳过；其余行以 空格/制表 分隔取词。
+      for (const line of raw.split(/\r?\n/)) {
+        const trimmedLine = line.trim();
+        if (trimmedLine.length === 0 || trimmedLine.startsWith('#')) continue;
+        for (const term of trimmedLine.split(/\s+/).map((t) => t.trim()).filter((t) => t.length > 0)) {
+          result.push({
+            term,
+            level,
+            platform: 'common',
+            category: m.category,
+            suggestion: m.suggestion || undefined,
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[compliance] 加载扩展词库失败：', e);
+  }
+  extTermsCache = result;
+  return result;
+}
+
 const cache = new Map<string, ACNode>();
 
 export const dictionary = {
@@ -138,7 +224,11 @@ export const dictionary = {
     const cached = cache.get(platform);
     if (cached) return cached;
 
-    const terms: RawTerm[] = normalize(FILES.common, 'common');
+    const terms: RawTerm[] = [
+      ...normalize(FILES.common, 'common'),
+      ...normalize(commonSupplement, 'common'),
+      ...loadExtensionTerms(), // 外部 txt 扩展词（按 extensions.json 映射并入对应分类，全平台生效）
+    ];
     if ((KNOWN_PLATFORMS as string[]).includes(platform)) {
       terms.push(...normalize(FILES[platform as ComplianceDictionaryFile], platform as ComplianceDictionaryFile));
     }

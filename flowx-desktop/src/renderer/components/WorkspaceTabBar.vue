@@ -54,13 +54,6 @@ function onSearchKeydown(e: Event | KeyboardEvent) {
     (ke.target as HTMLInputElement | null)?.blur();
   }
 }
-// 全局 Ctrl/⌘ + K 聚焦搜索框
-function onGlobalKeydown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
-    e.preventDefault();
-    searchInputRef.value?.focus();
-  }
-}
 
 const tabs = computed(() => store.tabs);
 const activeId = computed(() => store.activeId);
@@ -259,18 +252,20 @@ function onWheel(e: WheelEvent) {
   el.scrollLeft += e.deltaY;
 }
 
+// 监听右键菜单 / 搜索面板的显隐，同步到 store 以通知 Browser.vue 隐藏 WebContentsView 原生层
+watch(() => ctx.value.visible, (v) => { v ? store.pushTopbarOverlay() : store.popTopbarOverlay() })
+watch(gsOpen, (v) => { v ? store.pushTopbarOverlay() : store.popTopbarOverlay() })
+
 onMounted(() => {
   updateOverflow();
   window.addEventListener('resize', updateOverflow);
   window.addEventListener('resize', updateAnchor);
   window.addEventListener('click', onDocPointer);
-  window.addEventListener('keydown', onGlobalKeydown);
 });
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateOverflow);
   window.removeEventListener('resize', updateAnchor);
   window.removeEventListener('click', onDocPointer);
-  window.removeEventListener('keydown', onGlobalKeydown);
 });
 
 // 标签增删后重算溢出（nextTick 等 DOM 渲染完成）
@@ -341,7 +336,13 @@ watch(
       >›</button>
 
       <!-- 「+」新增页签（常驻，始终可见） -->
-      <el-dropdown trigger="click" placement="bottom-start" :disabled="!canAdd" @visible-change="(v: boolean) => (addOpen = v)">
+      <el-dropdown
+        trigger="click"
+        placement="bottom-start"
+        popper-class="ws-top-popper"
+        :disabled="!canAdd"
+        @visible-change="(v: boolean) => { addOpen = v; v ? store.pushTopbarOverlay() : store.popTopbarOverlay() }"
+      >
         <button class="ws-add" :class="{ disabled: !canAdd, open: addOpen }" :disabled="!canAdd" title="打开页面">+</button>
         <template #dropdown>
           <el-dropdown-menu>
@@ -368,7 +369,7 @@ watch(
         <el-input
           ref="searchInputRef"
           v-model="query"
-          placeholder="搜索…"
+          placeholder="搜索草稿、账号、书签、历史、功能…"
           :prefix-icon="Search"
           clearable
           @input="gsOnInput"
@@ -428,7 +429,7 @@ watch(
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--line);
   position: relative;
-  z-index: 15;
+  z-index: 100;
 }
 
 /* —— 中部弹性区：承载任务选项卡 + 翻页按钮 + 新增按钮 —— */
@@ -612,8 +613,8 @@ watch(
   flex-shrink: 0;
 }
 .ws-search {
-  width: 240px;
-  max-width: 30vw;
+  width: 340px;
+  max-width: 42vw;
 }
 .ws-search :deep(.el-input__wrapper) {
   border-radius: var(--r-pill);

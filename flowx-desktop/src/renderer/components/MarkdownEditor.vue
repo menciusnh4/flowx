@@ -1,6 +1,6 @@
 <template>
   <div class="markdown-editor-wrapper">
-    <div class="md-toolbar">
+    <div class="md-toolbar" v-if="showToolbar">
       <div class="md-toolbar-left">
         <button type="button" class="md-tool-btn" title="一级标题" @click="insertHeading(1)">H1</button>
         <button type="button" class="md-tool-btn" title="二级标题" @click="insertHeading(2)">H2</button>
@@ -58,12 +58,14 @@ interface Props {
   placeholder?: string
   maxLength?: number
   height?: number
+  showToolbar?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   placeholder: '请输入 Markdown 内容...',
   maxLength: undefined,
   height: 400,
+  showToolbar: true,
 })
 
 const emit = defineEmits<{
@@ -346,6 +348,15 @@ onMounted(() => {
     gfm: true,
   })
 })
+
+// 暴露编辑指令，供父组件（如展开模态顶栏）复用同一套工具栏
+defineExpose({
+  insertHeading,
+  insertWrap,
+  insertPrefix,
+  insertOrderedList,
+  insertImage,
+})
 </script>
 
 <style scoped>
@@ -360,24 +371,30 @@ onMounted(() => {
 .md-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   padding: 6px 8px;
   background: #f5f7fa;
   border-bottom: 1px solid #dcdfe6;
-  flex-wrap: wrap;
-  gap: 4px;
+  gap: 8px;
+  flex-wrap: nowrap;
 }
 
 .md-toolbar-left {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
+.md-toolbar-left::-webkit-scrollbar { height: 4px; }
+.md-toolbar-left::-webkit-scrollbar-thumb { background: #c0c4cc; border-radius: 2px; }
 
 .md-toolbar-right {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .md-tool-btn {
@@ -393,6 +410,7 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   transition: background 0.2s;
 }
 

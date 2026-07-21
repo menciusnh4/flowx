@@ -58,6 +58,11 @@ let historySearchTimer: ReturnType<typeof setTimeout> | null = null
 
 const browserContainerRef = ref<HTMLElement | null>(null)
 
+// 原生视图（WebContentsView）是否已临时隐藏：弹窗/下拉打开时置 true，
+// 把原生视图移到屏幕外避免其「永远覆盖 HTML DOM」的层级特性盖住弹窗。
+// 任何 setBounds 恢复操作（updateViewBounds 等）都必须检查它，否则会被 ResizeObserver 等拉回。
+let browserHidden = false
+
 // 环境列表
 const environments = ref<BrowserEnvironment[]>([])
 
@@ -241,6 +246,9 @@ watch(
 
 /** 更新当前激活标签的 WebContentsView 位置和大小 */
 async function updateViewBounds() {
+  // 原生视图已隐藏时，绝不重新 setBounds 把它拉回可见区 ——
+  // 否则 ResizeObserver / 窗口 resize / 各处 nextTick 任意触发都会让 WebContentsView 重新盖住弹窗
+  if (browserHidden) return
   if (!browserContainerRef.value || !activeTabId.value) return
   const rect = browserContainerRef.value.getBoundingClientRect()
   // 容器不可见（display:none / 布局未就绪 / 仅发布表单模式）时尺寸为 0，
@@ -437,7 +445,8 @@ function handleModalHide() {
   }
 }
 
-let browserHidden = false
+// 顶栏弹窗（右键/「+」/搜索）显示时，WebContentsView 原生控件必须整块隐藏
+// （原生层永远覆盖 HTML DOM，CSS z-index 无效），让位给弹窗。
 function hideBrowserView() {
   if (!activeTabId.value || browserHidden) return
   browserHidden = true
@@ -445,8 +454,8 @@ function hideBrowserView() {
 }
 function showBrowserView() {
   if (!activeTabId.value || !browserHidden) return
-  // 如果下拉菜单还开着或还有弹窗，不恢复
-  if (layoutDropdownVisible.value || modalCount > 0) return
+  // 如果下拉菜单还开着、还有弹窗、或顶栏弹层还在显示，不恢复
+  if (layoutDropdownVisible.value || modalCount > 0 || workspaceStore.topbarOverlayCount > 0) return
   browserHidden = false
   nextTick(() => {
     updateViewBounds()
@@ -454,6 +463,18 @@ function showBrowserView() {
     setTimeout(() => updateViewBounds(), 50)
   })
 }
+
+// 监听顶栏弹层叠加计数器：顶栏的「+」下拉/右键菜单/搜索面板显示时，
+// WebContentsView 原生控件必须隐藏（原生层永远覆盖 HTML DOM，CSS z-index 无效）。
+// 与 handleLayoutDropdownVisible / handleEnvDropdownVisible / handleModalShow 共享同一套 hide/show 机制。
+watch(() => workspaceStore.topbarOverlayCount, (count) => {
+  if (count > 0) {
+    hideBrowserView()
+  } else {
+    // 延迟恢复，等待弹层动画完成
+    setTimeout(() => showBrowserView(), 200)
+  }
+})
 
 // 窗口大小变化时更新 bounds
 function handleResize() {
@@ -1272,6 +1293,7 @@ watch(activeTabId, () => {
           style="width: 140px"
           placeholder="选择环境"
           clearable
+          popper-class="ws-top-popper"
           @change="handleEnvChange"
           @visible-change="handleEnvDropdownVisible"
         >
@@ -1332,7 +1354,7 @@ watch(activeTabId, () => {
           </el-tag>
         </div>
 
-        <el-dropdown @command="setLayoutMode" @visible-change="handleLayoutDropdownVisible">
+        <el-dropdown popper-class="ws-top-popper" @command="setLayoutMode" @visible-change="handleLayoutDropdownVisible">
           <el-button size="small" icon="Grid">
             布局
             <el-icon class="el-icon--right"><arrow-down /></el-icon>
@@ -1743,12 +1765,16 @@ watch(activeTabId, () => {
 /* ========== 侧边栏 ========== */
 .sidebar-mask {
   position: fixed;
-  top: 0;
+  /* 根治：遮罩 z-index 压到内容区层级(60,低于顶栏 chrome 的 100)，
+     顶栏(.ws-tabbar z-index:100)整体在其之上——任何顶栏弹层(含未 Teleport 的)天然不被盖。
+     顶栏下拉/右键/搜索面板仍额外 Teleport 到 body 并顶到 99999/100000 作双保险；
+     PublishForm 全屏模态 z-index:9000 > 100，不受影响。 */
+  top: 48px;
   left: 0;
   right: 0;
   bottom: 0;
   background: rgba(0, 0, 0, 0.3);
-  z-index: 9999;
+  z-index: 60;
   display: flex;
 }
 

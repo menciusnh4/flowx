@@ -63,6 +63,10 @@ export const useWorkspaceStore = defineStore('workspace', {
     /** 全局搜索「在浏览器 tab 打开 URL」挂起地址：搜索的书签/历史结果点击后写入，
      *  由 Browser.vue watch 后调用内部 navigateTo 消费并清空。 */
     pendingNavigateUrl: '' as string,
+    /** 顶栏弹层（「+」下拉/右键菜单/搜索面板）叠加计数器。
+     *  >0 时通知 Browser.vue 隐藏 WebContentsView（原生控件永远覆盖 HTML DOM，z-index 无效）。
+     *  用计数器支持嵌套场景（如搜索面板开着时又点了右键菜单）。 */
+    topbarOverlayCount: 0 as number,
   }),
   getters: {
     activeTab: (s) => s.tabs.find((t) => t.id === s.activeId) ?? null,
@@ -231,6 +235,17 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.tabs = valid;
       const active = valid.find((t) => t.id === payload.activeId);
       this.activeId = active ? active.id : valid[0].id;
+    },
+
+    /** 顶栏弹层显示时调用（+1），通知 Browser.vue 隐藏 WebContentsView 原生层。
+     *  原生控件层级永远高于 HTML DOM，z-index 无法解决，只能临时移出视口。 */
+    pushTopbarOverlay(): void {
+      this.topbarOverlayCount++;
+    },
+
+    /** 顶栏弹层隐藏时调用（-1），计数归零时通知 Browser.vue 恢复 WebContentsView。 */
+    popTopbarOverlay(): void {
+      if (this.topbarOverlayCount > 0) this.topbarOverlayCount--;
     },
 
     /** M4：生成可持久化的布局快照（剔除运行时字段） */

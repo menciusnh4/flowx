@@ -11,6 +11,7 @@ import ComplianceDetailPanel from './ComplianceDetailPanel.vue'
 import ComplianceNoticeModal from './ComplianceNoticeModal.vue'
 import type { ComplianceSettings } from '../../types/compliance'
 import MarkdownEditor from './MarkdownEditor.vue'
+import MediaLightbox from './MediaLightbox.vue'
 import { complianceHighlight } from '../directives/complianceHighlight'
 
 // 本地注册违禁词高亮指令（v-compliance-highlight）
@@ -111,12 +112,68 @@ const compliance = useCompliance({
   enabled: () => complianceSettings.value.promptEnabled,
 })
 
+// ============ 正文展开编辑（档2 最大化模态，2026-07-20 落地） ============
+const expandOpen = ref(false)
+const modalContentRef = ref<InstanceType<typeof ElInput> | null>(null)
+const winH = ref(typeof window !== 'undefined' ? window.innerHeight : 900)
+const modalEditorHeight = computed(() => Math.max(360, Math.round(winH.value * 0.6)))
+const modalLen = computed(() =>
+  contentType.value === 'article' && contentMode.value === 'markdown'
+    ? markdownContent.value.length
+    : content.value.length,
+)
+const isModalOverLimit = computed(() => modalLen.value > platformContentLimit.value.min)
+const expandSubtitle = computed(() => {
+  if (contentType.value === 'article') return '抖音 8000 · 小红书 不限制'
+  return '抖音 1000 · 小红书 1000 · 快手 500'
+})
+const contentPlaceholder = computed(() => {
+  if (contentType.value === 'article') return '请输入文章正文（抖音：至少100字，最多8000字；小红书：不限制字数）'
+  if (contentType.value === 'image') return '可选：为图文添加描述文案（将作为笔记正文发布，小红书 1000 字/抖音 1000 字/快手 500 字）'
+  return '可选：为视频添加描述文案（快手最多 500 字）'
+})
+
+function openExpand() {
+  expandOpen.value = true
+  nextTick(() => {
+    if (!(contentType.value === 'article' && contentMode.value === 'markdown')) {
+      const ta = (modalContentRef.value as any)?.textarea as HTMLTextAreaElement | undefined
+      ta?.focus()
+    }
+  })
+}
+function closeExpand() {
+  if (!expandOpen.value) return
+  expandOpen.value = false
+  nextTick(() => {
+    if (!(contentType.value === 'article' && contentMode.value === 'markdown')) {
+      ;(contentTextareaRef.value as any)?.textarea?.focus()
+    }
+  })
+}
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (expandOpen.value) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closeExpand()
+    }
+    return
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'e') {
+    e.preventDefault()
+    openExpand()
+  }
+}
+function onWinResize() {
+  winH.value = window.innerHeight
+}
+
 /** 聚焦某字段；带 start/end 时选中具体违禁词并把多行 textarea 滚动到可见（点击面板「定位」时调用） */
 function locateField(field: string, start?: number, end?: number) {
   nextTick(() => {
     let native: HTMLInputElement | HTMLTextAreaElement | null = null
     if (field === 'title') native = (titleInputRef.value as any)?.input ?? null
-    else if (field === 'content') native = (contentTextareaRef.value as any)?.textarea ?? null
+    else if (field === 'content') native = (expandOpen.value ? (modalContentRef.value as any)?.textarea : (contentTextareaRef.value as any)?.textarea) ?? null
     else if (field === 'tags') native = (tagsInputRef.value as any)?.input ?? null
     else if (field === 'summary') native = (summaryTextareaRef.value as any)?.textarea ?? null
     if (!native) return
@@ -575,14 +632,68 @@ function loadAllImagePreviews(files: string[]) {
   })
 }
 
-// 监听 mediaFiles 变化，自动加载新图片的预览
+// 监听 mediaFiles / coverImage 变化，自动加载新图片的预览（图文素材 + 视频/文章封面统一平铺展示）
 watch(
-  () => mediaFiles.value,
-  (newFiles) => {
-    loadAllImagePreviews(newFiles)
+  () => [mediaFiles.value, coverImage.value] as [string[], string],
+  ([files, cover]: [string[], string]) => {
+    loadAllImagePreviews(files)
+    if (cover) loadImagePreview(cover)
   },
   { immediate: true }
 )
+
+// ============ 媒体预览（视频内联 / 图片 Lightbox） ============
+// 视频源走自定义协议 flowx-media://（主进程流式返回，不进渲染进程内存）
+const MEDIA_PROTOCOL = 'flowx-media'
+
+// Lightbox 状态
+const lightboxVisible = ref(false)
+const lightboxImages = ref<string[]>([])
+const lightboxIndex = ref(0)
+const lightboxCoverIndex = ref(-1)
+
+// 视频预览元信息（时长/分辨率）与错误态，按文件路径记录
+const videoMeta = reactive<Record<string, { duration: number; width: number; height: number }>>({})
+const videoError = reactive<Record<string, boolean>>({})
+
+function mediaSrc(filePath: string): string {
+  return `${MEDIA_PROTOCOL}://${encodeURIComponent(filePath)}`
+}
+
+function fmtDuration(sec?: number): string {
+  if (sec === undefined || !isFinite(sec) || sec <= 0) return ''
+  const m = Math.floor(sec / 60)
+  const s = Math.floor(sec % 60)
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function fmtRes(w?: number, h?: number): string {
+  if (!w || !h) return ''
+  return `${w}×${h}`
+}
+
+function onVideoMeta(filePath: string, e: Event) {
+  const v = e.target as HTMLVideoElement
+  if (!v.videoWidth || !isFinite(v.duration)) return
+  videoMeta[filePath] = { duration: v.duration, width: v.videoWidth, height: v.videoHeight }
+  videoError[filePath] = false
+}
+
+function onVideoError(filePath: string) {
+  videoError[filePath] = true
+}
+
+/** 打开图片 Lightbox：确保全部 base64 已加载，过滤空项后映射到有效索引 */
+async function openLightbox(paths: string[], idx: number, coverIndex = -1) {
+  await Promise.all(paths.map((p) => loadImagePreview(p)))
+  const valid = paths.filter((p) => imageUrlCache[p])
+  if (valid.length === 0) return
+  lightboxImages.value = valid.map((p) => imageUrlCache[p])
+  lightboxIndex.value = Math.max(valid.indexOf(paths[idx]), 0)
+  // 封面标识指向有效列表中的首图（文章模式首图）
+  lightboxCoverIndex.value = coverIndex >= 0 ? Math.max(valid.indexOf(paths[coverIndex]), 0) : -1
+  lightboxVisible.value = true
+}
 
 // ============ 文件操作 ============
 const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp']
@@ -626,6 +737,13 @@ async function pickMediaFiles() {
 function removeMediaFile(p: string) {
   mediaFiles.value = mediaFiles.value.filter((x) => x !== p)
   delete imageUrlCache[p]
+  notifyChange()
+}
+
+function removeCover() {
+  const c = coverImage.value
+  coverImage.value = ''
+  if (c) delete imageUrlCache[c]
   notifyChange()
 }
 
@@ -827,6 +945,46 @@ async function submitPublish() {
 
   emit('submit', req)
   submitting.value = false
+}
+
+// ===== 发布操作区：时机双 CTA（立即发布 / 定时发布 提升为主行动）=====
+function fmtSchedLabel(d: Date | null): string {
+  if (!d) return ''
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+function setSchedPreset(kind: '10m' | '1h' | 'tomorrow9') {
+  const d = new Date()
+  if (kind === '10m') d.setMinutes(d.getMinutes() + 10)
+  else if (kind === '1h') d.setHours(d.getHours() + 1)
+  else if (kind === 'tomorrow9') { d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0) }
+  scheduledTime.value = d
+  publishTimeType.value = 'scheduled'
+  notifyChange()
+}
+
+// 立即发布：切换为 now 并直接提交
+function onNowClick() {
+  if (submitting.value || visibleAccounts.value.length === 0) return
+  publishTimeType.value = 'now'
+  notifyChange()
+  submitPublish()
+}
+
+// 定时发布：首次点击仅展开内联选择器（武装）；已选时间后再次点击才提交
+function onScheduledClick() {
+  if (submitting.value || visibleAccounts.value.length === 0) return
+  if (publishTimeType.value !== 'scheduled') {
+    publishTimeType.value = 'scheduled'
+    notifyChange()
+    return // 打开选择器，不直接发布
+  }
+  if (!scheduledTime.value) {
+    ElMessage.warning('请选择定时发布时间')
+    return
+  }
+  submitPublish()
 }
 
 // ============ 测试发布（不真的点击发布按钮，仅验证表单填写） ============
@@ -1055,6 +1213,8 @@ function onDropMedia(e: DragEvent) {
   e.preventDefault()
   dragDepth.media = 0
   dragZone.value = ''
+  // 内部拖拽排序落到上传区：忽略，不误判为「上传文件」
+  if (internalDrag.value) { internalDrag.value = false; return }
   const paths = getDroppedPaths(e)
   if (paths.length === 0) {
     ElMessage.warning('拖入的内容不是本地文件')
@@ -1075,6 +1235,8 @@ function onDropCover(e: DragEvent) {
   e.preventDefault()
   dragDepth.cover = 0
   dragZone.value = ''
+  // 内部拖拽排序落到上传区：忽略，不误判为「上传文件」
+  if (internalDrag.value) { internalDrag.value = false; return }
   const paths = getDroppedPaths(e)
   const { valid } = filterByExt(paths, IMAGE_EXTENSIONS)
   if (valid.length === 0) {
@@ -1090,12 +1252,61 @@ function onDropArticleCover(e: DragEvent) {
   e.preventDefault()
   dragDepth.articleCover = 0
   dragZone.value = ''
+  // 内部拖拽排序落到上传区：忽略，不误判为「上传文件」
+  if (internalDrag.value) { internalDrag.value = false; return }
   const paths = getDroppedPaths(e)
   const { valid, invalid } = filterByExt(paths, IMAGE_EXTENSIONS)
   if (invalid > 0) ElMessage.warning(`已过滤 ${invalid} 个非图片文件`)
   if (valid.length === 0) return
   addImages(valid)
   ElMessage.success(`已添加 ${valid.length} 张图片`)
+}
+
+// ============ 图片拖拽排序（图文 / 文章多图） ============
+// 内部拖拽标识：拖的是已存在的缩略图（非外部文件），用于隔离上传拖拽区
+const dragIndex = ref<number>(-1)
+const dragOverIndex = ref<number>(-1)
+const internalDrag = ref(false)
+
+function onImgDragStart(idx: number, e: DragEvent) {
+  dragIndex.value = idx
+  internalDrag.value = true
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    // 部分浏览器要求设置数据才会真正发起拖拽
+    e.dataTransfer.setData('text/plain', String(idx))
+  }
+}
+function onImgDragOver(idx: number, e: DragEvent) {
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  if (dragOverIndex.value !== idx) dragOverIndex.value = idx
+}
+function onImgDrop(idx: number, e: DragEvent) {
+  e.preventDefault()
+  const from = dragIndex.value
+  const to = idx
+  dragIndex.value = -1
+  dragOverIndex.value = -1
+  internalDrag.value = false
+  if (from < 0 || from === to) return
+  reorderMedia(from, to)
+}
+function onImgDragEnd() {
+  dragIndex.value = -1
+  dragOverIndex.value = -1
+  internalDrag.value = false
+}
+/** 在 mediaFiles 数组中把第 from 项移到第 to 项位置（文章模式首图=封面会随之变化） */
+function reorderMedia(from: number, to: number) {
+  const arr = mediaFiles.value
+  if (from < 0 || from >= arr.length || to < 0 || to >= arr.length) return
+  if (from === to) return
+  const next = arr.slice()
+  const [moved] = next.splice(from, 1)
+  next.splice(to, 0, moved)
+  mediaFiles.value = next
+  notifyChange()
 }
 
 // 全局阻止把文件拖到非落点区域时 Electron 跳去打开文件
@@ -1105,10 +1316,14 @@ function preventFileNavigation(e: DragEvent) {
 onMounted(() => {
   window.addEventListener('dragover', preventFileNavigation)
   window.addEventListener('drop', preventFileNavigation)
+  window.addEventListener('keydown', onGlobalKeydown)
+  window.addEventListener('resize', onWinResize)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('dragover', preventFileNavigation)
   window.removeEventListener('drop', preventFileNavigation)
+  window.removeEventListener('keydown', onGlobalKeydown)
+  window.removeEventListener('resize', onWinResize)
 })
 
 /**
@@ -1224,7 +1439,7 @@ function setType(t: 'video' | 'image' | 'article') {
 
         <!-- 正文 / 描述 -->
         <div class="field">
-          <label>{{ contentType === 'article' ? '正文' : '正文 / 描述' }}<ComplianceBadge :level="compliance.badges.value.content?.level" :count="compliance.badges.value.content?.count" @click="locateField('content')" /><span class="counter">{{ content.length }} / {{ platformContentLimit.min }}</span></label>
+          <label>{{ contentType === 'article' ? '正文' : '正文 / 描述' }}<ComplianceBadge :level="compliance.badges.value.content?.level" :count="compliance.badges.value.content?.count" @click="locateField('content')" /><span class="counter">{{ content.length }} / {{ platformContentLimit.min }}</span><button type="button" class="be-expand-btn" @click="openExpand" title="放大编辑（点击或按 ⌘/Ctrl+E）"><span class="ex-ic">⛶</span>展开</button></label>
 
           <!-- 文章模式：正文模式切换（Markdown 编辑器，origin/main 新增） -->
           <div v-if="contentType === 'article'" class="content-mode-switch">
@@ -1243,12 +1458,8 @@ function setType(t: 'video' | 'image' | 'article') {
             ref="contentTextareaRef"
             v-model="content"
             type="textarea"
-            :rows="contentType === 'article' ? 8 : 4"
-            :placeholder="contentType === 'article'
-              ? '请输入文章正文（抖音：至少100字，最多8000字；小红书：不限制字数）'
-              : contentType === 'image'
-                ? '可选：为图文添加描述文案（将作为笔记正文发布，小红书 1000 字/抖音 1000 字/快手 500 字）'
-                : '可选：为视频添加描述文案（快手最多 500 字）'"
+            :autosize="{ minRows: contentType === 'article' ? 8 : 4, maxRows: contentType === 'article' ? 20 : 16 }"
+            :placeholder="contentPlaceholder"
             :maxlength="platformContentLimit.min"
             @input="notifyChange"
             v-compliance-highlight="compliance.fieldMatches('content')"
@@ -1291,12 +1502,44 @@ function setType(t: 'video' | 'image' | 'article') {
             </div>
           </div>
           <div v-if="mediaFiles.length > 0" class="file-tip">已选择 {{ mediaFiles.length }} 个文件</div>
-          <div class="file-list" v-if="mediaFiles.length > 0">
-            <div v-for="(f, idx) in mediaFiles" :key="idx" class="file-item">
-              <span class="file-name">{{ f }}</span>
+          <!-- 视频模式：内联预览卡（首帧 + 可播放 + 元信息 + 错误态） -->
+          <div class="file-list" v-if="contentType === 'video' && mediaFiles.length > 0">
+            <div v-for="(f, idx) in mediaFiles" :key="idx" class="file-item vp-item">
+              <div class="vp-card">
+                <video
+                  v-if="!videoError[f]"
+                  class="vp-video"
+                  :src="mediaSrc(f)"
+                  preload="metadata"
+                  controls
+                  @loadedmetadata="onVideoMeta(f, $event)"
+                  @error="onVideoError(f)"
+                ></video>
+                <div v-else class="vp-error">⚠ 无法预览该视频</div>
+              </div>
+              <div class="vp-meta">
+                <span class="file-name">{{ f }}</span>
+                <span v-if="videoMeta[f]" class="vp-info">⏱ {{ fmtDuration(videoMeta[f]?.duration) }} · 📐 {{ fmtRes(videoMeta[f]?.width, videoMeta[f]?.height) }}</span>
+              </div>
               <el-button size="small" type="danger" link @click="removeMediaFile(f)">删除</el-button>
             </div>
           </div>
+          <!-- 图文模式：平铺缩略图网格 + 点击放大 Lightbox + 悬停显示路径 + 拖拽排序（与文章封面选择统一排版） -->
+          <div class="image-grid" v-else-if="contentType === 'image' && mediaFiles.length > 0">
+            <div v-for="(f, idx) in mediaFiles" :key="idx" class="image-item" :class="{ 'is-over': dragOverIndex === idx && dragIndex !== idx }" @dragover="onImgDragOver(idx, $event)" @drop="onImgDrop(idx, $event)">
+              <div class="image-thumb" :class="{ 'is-dragging': dragIndex === idx }" draggable="true" @dragstart="onImgDragStart(idx, $event)" @dragend="onImgDragEnd" @click="openLightbox(mediaFiles, idx)">
+                <img v-if="imageUrlCache[f]" :src="imageUrlCache[f]" :alt="'图片' + (idx + 1)" draggable="false" />
+                <div v-else class="image-loading">加载中...</div>
+                <div class="drag-grip" title="拖拽调整顺序">⠿</div>
+                <div class="path-overlay">{{ f }}</div>
+              </div>
+              <div class="image-actions">
+                <span class="image-index">{{ idx + 1 }}</span>
+                <el-button size="small" type="danger" link @click="removeMediaFile(f)">删除</el-button>
+              </div>
+            </div>
+          </div>
+          <div class="reorder-tip" v-if="contentType === 'image' && mediaFiles.length > 1">🖐 拖拽缩略图可调整图片顺序</div>
         </div>
 
         <!-- 封面（视频） -->
@@ -1310,11 +1553,24 @@ function setType(t: 'video' | 'image' | 'article') {
                @drop.prevent="onDropCover($event)">
             <div class="dz-ico">🖼️</div>
             <div>
-              <div class="dz-main">上传封面</div>
+              <div class="dz-main">点击或拖拽上传封面</div>
               <div class="dz-sub">抖音 / 视频号必填</div>
             </div>
           </div>
-          <div v-if="coverImage" class="cover-path">🖼️ {{ coverImage }}</div>
+          <div class="image-grid" v-if="coverImage">
+            <div class="image-item">
+              <div class="image-thumb" @click="pickCover" style="cursor: pointer">
+                <img v-if="imageUrlCache[coverImage]" :src="imageUrlCache[coverImage]" :alt="'封面'" />
+                <div v-else class="image-loading">加载中...</div>
+                <div class="cover-badge">封面</div>
+                <div class="path-overlay">{{ coverImage }}</div>
+              </div>
+              <div class="image-actions">
+                <span class="image-index">封面</span>
+                <el-button size="small" type="danger" link @click="removeCover">删除</el-button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- 封面（文章：取图片首张） -->
@@ -1328,17 +1584,19 @@ function setType(t: 'video' | 'image' | 'article') {
                @drop.prevent="onDropArticleCover($event)">
             <div class="dz-ico">🖼️</div>
             <div>
-              <div class="dz-main">选择封面图片</div>
+              <div class="dz-main">点击或拖拽选择封面</div>
               <div class="dz-sub">第 1 张将作为封面</div>
             </div>
           </div>
           <div class="article-cover-hint" v-if="hasDouyinAccount"><span class="warn-text">⚠️ 已选抖音账号：封面为必填项</span></div>
           <div class="image-grid" v-if="mediaFiles.length > 0">
-            <div v-for="(f, idx) in mediaFiles" :key="idx" class="image-item">
-              <div class="image-thumb">
-                <img v-if="imageUrlCache[f]" :src="imageUrlCache[f]" :alt="'图片' + (idx + 1)" />
+            <div v-for="(f, idx) in mediaFiles" :key="idx" class="image-item" :class="{ 'is-over': dragOverIndex === idx && dragIndex !== idx }" @dragover="onImgDragOver(idx, $event)" @drop="onImgDrop(idx, $event)">
+              <div class="image-thumb" :class="{ 'is-dragging': dragIndex === idx }" draggable="true" @dragstart="onImgDragStart(idx, $event)" @dragend="onImgDragEnd" @click="openLightbox(mediaFiles, idx, 0)">
+                <img v-if="imageUrlCache[f]" :src="imageUrlCache[f]" :alt="'图片' + (idx + 1)" draggable="false" />
                 <div v-else class="image-loading">加载中...</div>
                 <div v-if="idx === 0" class="cover-badge">封面</div>
+                <div class="drag-grip" title="拖拽调整顺序">⠿</div>
+                <div class="path-overlay">{{ f }}</div>
               </div>
               <div class="image-actions">
                 <span class="image-index">{{ idx + 1 }}</span>
@@ -1346,6 +1604,7 @@ function setType(t: 'video' | 'image' | 'article') {
               </div>
             </div>
           </div>
+          <div class="reorder-tip" v-if="contentType === 'article' && mediaFiles.length > 1">🖐 拖拽缩略图可调整顺序（第 1 张作为封面）</div>
         </div>
 
         <!-- 摘要（文章） -->
@@ -1354,25 +1613,7 @@ function setType(t: 'video' | 'image' | 'article') {
           <el-input ref="summaryTextareaRef" v-model="summary" type="textarea" :rows="2" placeholder="可选：文章摘要/简介（抖音300字/小红书1000字）" :maxlength="articleSummaryMaxLength" @input="notifyChange" v-compliance-highlight="compliance.fieldMatches('summary')" />
         </div>
 
-        <!-- 发布时间 -->
-        <div class="field">
-          <label>发布时间</label>
-          <div class="time-row">
-            <div class="seg">
-              <button type="button" class="seg-btn" :class="{ active: publishTimeType === 'now' }" @click="publishTimeType = 'now'; notifyChange()">⚡ 立即发布</button>
-              <button type="button" class="seg-btn" :class="{ active: publishTimeType === 'scheduled' }" @click="publishTimeType = 'scheduled'; notifyChange()">🕘 定时发布</button>
-            </div>
-            <el-date-picker
-              v-if="publishTimeType === 'scheduled'"
-              v-model="scheduledTime"
-              type="datetime"
-              placeholder="选择发布时间"
-              :disabled-date="disabledScheduledDate"
-              class="time-picker"
-              @change="notifyChange"
-            />
-          </div>
-        </div>
+        <!-- 发布时间：时机选择已提升为底部操作栏双 CTA，此处不再重复 -->
       </div>
 
       <!-- 右：选择账号 -->
@@ -1442,16 +1683,64 @@ function setType(t: 'video' | 'image' | 'article') {
             </div>
           </div>
         </div>
-        <!-- 发布操作区（移入右侧账号面板底部，平衡左右高度） -->
+        <!-- 发布操作区：时机决策提升为主 CTA，与发布动作同位同显 -->
         <div class="acc-footer">
+          <!-- 内联时间选择器：仅定时发布时展开 -->
+          <div class="sched-panel" :class="{ open: publishTimeType === 'scheduled' }">
+            <div class="sched-inner">
+              <div>
+                <label class="field-lbl">选择发布时间</label>
+                <el-date-picker
+                  v-model="scheduledTime"
+                  type="datetime"
+                  placeholder="选择发布时间"
+                  :disabled-date="disabledScheduledDate"
+                  class="time-picker"
+                  @change="notifyChange"
+                />
+              </div>
+              <div>
+                <label class="field-lbl">快捷</label>
+                <div class="presets">
+                  <button type="button" class="preset" @click="setSchedPreset('10m')">10 分钟后</button>
+                  <button type="button" class="preset" @click="setSchedPreset('1h')">1 小时后</button>
+                  <button type="button" class="preset" @click="setSchedPreset('tomorrow9')">明天 9:00</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div class="submit-row">
-            <el-button type="primary" :loading="submitting" :disabled="submitting || visibleAccounts.length === 0" @click="submitPublish">
-              {{ submitText || (publishTimeType === 'scheduled' ? '🕘 定时发布到' : '🚀 一键发布到') + ' ' + getSelectedIds().length + ' 个账号' }}
-            </el-button>
-            <el-button type="warning" :loading="submitting" :disabled="submitting || visibleAccounts.length === 0" @click="submitTestPublish">
-              🔍 发布测试
-            </el-button>
-            <el-button :disabled="submitting" @click="clearForm">清空</el-button>
+            <div class="ab-left">
+              <el-button :disabled="submitting" @click="submitTestPublish">🔍 发布测试</el-button>
+              <el-button :disabled="submitting" @click="clearForm">清空</el-button>
+            </div>
+            <div class="ab-summary">发布到 <b>{{ getSelectedIds().length }}</b> 个账号</div>
+            <button
+              type="button"
+              class="pa-btn"
+              :class="publishTimeType === 'scheduled' ? 'pa-sched-active' : 'pa-ghost'"
+              :disabled="submitting || visibleAccounts.length === 0"
+              :aria-pressed="publishTimeType === 'scheduled'"
+              @click="onScheduledClick"
+            >
+              <svg class="pa-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+              <span class="pa-txt">
+                <span class="pa-label">{{ publishTimeType === 'scheduled' && scheduledTime ? '确认定时' : '定时发布' }}</span>
+                <span class="pa-sub" v-if="publishTimeType === 'scheduled' && scheduledTime">{{ fmtSchedLabel(scheduledTime) }}</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              class="pa-btn pa-primary"
+              :class="{ 'pa-ghost': publishTimeType === 'scheduled' }"
+              :disabled="submitting || visibleAccounts.length === 0"
+              :aria-pressed="publishTimeType === 'now'"
+              @click="onNowClick"
+            >
+              <svg class="pa-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2 0-2.8a2 2 0 0 0-3 0z"/><path d="M12 15l-3-3a22 22 0 0 1 8-11 2 2 0 0 1 4 4 22 22 0 0 1-11 8z"/><path d="M9 12H4s.5-2.8 2-4c1.5-1.2 4 0 4 0"/><path d="M12 15v5s2.8-.5 4-2c1.2-1.5 0-4 0-4"/></svg>
+              <span class="pa-label">立即发布</span>
+            </button>
             <slot name="footer-extra"></slot>
           </div>
         </div>
@@ -1459,7 +1748,68 @@ function setType(t: 'video' | 'image' | 'article') {
     </div>
 
   </div>
+
+  <!-- 档2：正文最大化编辑模态（⛶ 展开，82vw×86vh；文章+Markdown 内置左编辑/右实时预览） -->
+  <Teleport to="body">
+    <div v-if="expandOpen" class="be-overlay" @mousedown.self="closeExpand">
+      <div class="be-modal" role="dialog" aria-modal="true" aria-labelledby="beTitle">
+        <div class="be-head">
+          <span class="be-ic">{{ contentType === 'article' ? '📄' : '✎' }}</span>
+          <span class="be-title" id="beTitle">{{ contentType === 'article' ? '编辑文章正文' : '编辑正文 / 描述' }}</span>
+          <span class="be-sub">{{ expandSubtitle }}</span>
+          <button type="button" class="be-close" @click="closeExpand" title="关闭（Esc / 点击遮罩 / 完成）">✕</button>
+        </div>
+        <div class="be-body">
+          <!-- 纯文本模式：复用同一 el-input + 合规高亮，仅放大 -->
+          <div v-if="contentType !== 'article' || contentMode === 'text'" class="be-editor">
+            <el-input
+              ref="modalContentRef"
+              v-model="content"
+              type="textarea"
+              :rows="20"
+              resize="none"
+              class="be-textarea"
+              :placeholder="contentPlaceholder"
+              :maxlength="platformContentLimit.min"
+              @input="notifyChange"
+              v-compliance-highlight="compliance.fieldMatches('content')"
+            />
+          </div>
+          <!-- Markdown 模式（仅文章）：复用 MarkdownEditor，其内置工具栏 + 左编辑/右实时预览分栏，与外层未展开时一致 -->
+          <MarkdownEditor
+            v-else
+            v-model="markdownContent"
+            :max-length="platformContentLimit.min"
+            :height="modalEditorHeight"
+            class="be-markdown"
+            :placeholder="contentPlaceholder"
+            @input="notifyChange"
+          />
+        </div>
+        <div class="be-foot">
+          <div class="be-limit">
+            <span>正文 {{ modalLen }} / {{ platformContentLimit.min }} 字</span>
+            <span v-for="p in platformContentLimit.platforms" :key="p.platform" class="lim-tag">{{ platformName(p.platform) }} {{ p.limit }}字</span>
+            <span v-if="kuaishouSelected" class="lim-kw">⚡ 快手限 500 字</span>
+            <span v-if="isModalOverLimit" class="lim-over">超出将被截断</span>
+          </div>
+          <el-button type="primary" @click="closeExpand">完成</el-button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
   <ComplianceNoticeModal ref="noticeRef" />
+
+  <!-- 图片放大 Lightbox（复用正文展开模态的 Teleport / z-index:9000 规范） -->
+  <MediaLightbox
+    :visible="lightboxVisible"
+    :images="lightboxImages"
+    :index="lightboxIndex"
+    :cover-index="lightboxCoverIndex"
+    @update:visible="lightboxVisible = $event"
+    @update:index="lightboxIndex = $event"
+  />
 </template>
 
 <style scoped>
@@ -1544,13 +1894,15 @@ function setType(t: 'video' | 'image' | 'article') {
 /* 字段 */
 .field { margin-bottom: 15px; }
 .field > label {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
   font-weight: 700;
   color: var(--ink);
   margin-bottom: 7px;
 }
-.counter { float: right; font-size: 11.5px; color: var(--faint); font-weight: 600; }
+.counter { margin-left: auto; font-size: 11.5px; color: var(--faint); font-weight: 600; }
 
 /* 拖拽上传区 */
 .dropzone {
@@ -1581,22 +1933,70 @@ function setType(t: 'video' | 'image' | 'article') {
 .dz-main { font-size: 13.5px; font-weight: 600; color: var(--ink); }
 .dz-sub { font-size: 12px; color: var(--muted); font-weight: 500; }
 .file-tip { font-size: 12px; color: var(--muted); margin-top: 8px; }
-.file-list { margin-top: 8px; max-height: 150px; overflow-y: auto; }
+.file-list { margin-top: 8px; max-height: 320px; overflow-y: auto; }
 .file-item { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; font-size: 12px; color: var(--slate); border-bottom: 1px dashed var(--line); }
 .file-name { word-break: break-all; }
 
-/* 封面 */
-.cover-path { font-size: 12px; color: var(--muted); margin-top: 8px; word-break: break-all; }
+/* 视频预览卡（内联） */
+.vp-item { flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 0; }
+.vp-card {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 200px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0f172a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.vp-video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+.vp-error { color: #fca5a5; font-size: 13px; padding: 20px; text-align: center; }
+.vp-meta { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.vp-info { font-size: 11.5px; color: var(--muted); font-weight: 600; flex-shrink: 0; }
+
+/* 悬停显示文件路径（图片素材 / 封面统一：与文章封面选择排版一致） */
+.image-thumb .path-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 6px 8px 7px;
+  background: linear-gradient(to top, rgba(15, 23, 42, 0.9) 25%, rgba(15, 23, 42, 0));
+  color: #fff;
+  font-size: 10.5px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.18s var(--ease), transform 0.18s var(--ease);
+  pointer-events: none;
+}
+.image-thumb:hover .path-overlay { opacity: 1; transform: translateY(0); }
 .article-cover-hint { margin-top: 8px; }
 .warn-text { color: var(--danger); font-size: 12px; font-weight: 600; }
 .image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; margin-top: 10px; }
 .image-item { display: flex; flex-direction: column; gap: 5px; }
-.image-thumb { position: relative; width: 100%; padding-top: 100%; border-radius: var(--r-sm); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
+.image-thumb { position: relative; width: 100%; padding-top: 100%; border-radius: var(--r-sm); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); cursor: grab; transition: border-color 0.15s, box-shadow 0.15s, opacity 0.15s; }
+.image-thumb:active { cursor: grabbing; }
+.image-thumb:hover { border-color: var(--brand-indigo); }
+/* 拖拽排序视觉反馈 */
+.image-thumb.is-dragging { opacity: 0.4; }
+.image-item.is-over .image-thumb { border-color: var(--brand-indigo); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25); }
 .image-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .image-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--muted); }
-.cover-badge { position: absolute; top: 6px; left: 6px; background: var(--brand-indigo); color: #fff; font-size: 11px; padding: 2px 6px; border-radius: 6px; font-weight: 600; }
+.cover-badge { position: absolute; top: 6px; left: 6px; background: var(--brand-indigo); color: #fff; font-size: 11px; padding: 2px 6px; border-radius: 6px; font-weight: 600; z-index: 2; }
+/* 拖拽手柄：悬停时浮现，纯装饰不拦截事件 */
+.drag-grip { position: absolute; top: 6px; right: 6px; z-index: 2; background: rgba(15, 23, 42, 0.55); color: #fff; font-size: 13px; line-height: 1; padding: 3px 5px; border-radius: 6px; opacity: 0; transition: opacity 0.15s var(--ease); pointer-events: none; user-select: none; }
+.image-thumb:hover .drag-grip { opacity: 1; }
 .image-actions { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
 .image-index { color: var(--muted); font-size: 11px; }
+/* 拖拽排序提示 */
+.reorder-tip { font-size: 11.5px; color: var(--muted); font-weight: 600; margin-top: 6px; }
 
 /* 账号选择 */
 .sec-title { font-family: var(--font-display); font-size: 16px; font-weight: 700; margin: 0 0 12px; color: var(--ink); }
@@ -1681,23 +2081,63 @@ function setType(t: 'video' | 'image' | 'article') {
 .pf-id { opacity: 0.7; }
 .check { position: absolute; top: 8px; right: 10px; width: 18px; height: 18px; border-radius: 50%; background: var(--brand-indigo); color: #fff; font-size: 11px; display: flex; align-items: center; justify-content: center; font-weight: 800; }
 
-/* 发布时间 */
-.time-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.seg { display: inline-flex; background: var(--surface-2); border-radius: 11px; padding: 4px; gap: 4px; }
-.seg-btn { border: none; background: transparent; border-radius: 8px; padding: 8px 14px; font-weight: 700; font-size: 13px; color: var(--slate); cursor: pointer; transition: all var(--t) var(--ease); font-family: inherit; }
-.seg-btn.active { background: #fff; color: var(--brand-indigo); box-shadow: var(--shadow-xs); }
-.time-picker { width: 220px; }
+/* 发布时间选择器（内联于操作栏） */
+.time-picker { width: 240px; }
 
-/* 底部提交栏（已移入右侧账号面板底部） */
-.submit-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+/* ===== 发布操作区：时机双 CTA ===== */
 .acc-footer {
   margin-top: auto;
   padding-top: 16px;
   border-top: 1px solid var(--line);
   flex-shrink: 0;
 }
-.acc-footer .submit-row { justify-content: flex-start; }
-.acc-footer .el-button--primary { flex: 1 1 auto; }
+.submit-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.ab-left { display: flex; gap: 8px; align-items: center; margin-right: auto; }
+.ab-summary { font-size: 13px; color: var(--slate); margin-right: 4px; }
+.ab-summary b { color: var(--ink); font-size: 15px; }
+
+/* 双 CTA 主按钮 */
+.pa-btn {
+  font-family: inherit; font-size: 14px; font-weight: 700; border-radius: var(--r-sm);
+  cursor: pointer; border: 1.5px solid transparent; display: inline-flex; align-items: center;
+  justify-content: center; gap: 8px; min-height: 44px; padding: 0 18px; position: relative;
+  transition: transform var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.pa-btn:focus-visible { outline: 2px solid var(--brand-indigo); outline-offset: 2px; }
+.pa-btn:active { transform: translateY(1px); }
+.pa-ic { width: 17px; height: 17px; flex-shrink: 0; }
+.pa-txt { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; }
+.pa-label { font-weight: 700; }
+.pa-sub { font-size: 11px; font-weight: 600; opacity: 0.85; }
+
+/* 主 CTA：渐变实心 */
+.pa-primary { background: var(--brand-grad); color: #fff; box-shadow: var(--shadow-md); }
+.pa-primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-lg); }
+.pa-primary:active:not(:disabled) { transform: translateY(0); }
+
+/* 幽灵（未选中时机按钮） */
+.pa-ghost { background: var(--surface); color: var(--slate); border-color: var(--line-strong); box-shadow: var(--shadow-xs); }
+.pa-ghost:hover:not(:disabled) { border-color: var(--brand-indigo); color: var(--brand-indigo); background: var(--surface-2); transform: translateY(-1px); }
+
+/* 选中态的定时按钮：靛蓝描边 + 柔光 */
+.pa-sched-active { background: var(--brand-grad-soft); color: var(--brand-indigo); border-color: var(--brand-indigo); box-shadow: var(--shadow-sm); }
+.pa-sched-active:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+
+.pa-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 内联时间选择器（定时发布展开） */
+.sched-panel { overflow: hidden; max-height: 0; opacity: 0;
+  transition: max-height var(--t-slow) var(--ease), opacity var(--t) var(--ease), margin var(--t) var(--ease); }
+.sched-panel.open { max-height: 260px; opacity: 1; margin-top: 12px; }
+.sched-inner { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 14px; display: flex; gap: 18px; align-items: flex-end; flex-wrap: wrap; }
+.field-lbl { display: block; font-size: 12px; font-weight: 600; color: var(--slate); margin-bottom: 6px; }
+.presets { display: flex; gap: 8px; flex-wrap: wrap; }
+.preset { font-family: inherit; font-size: 12px; font-weight: 600; padding: 9px 12px; border-radius: var(--r-pill);
+  cursor: pointer; background: var(--surface); border: 1px solid var(--line-strong); color: var(--slate);
+  transition: all var(--t-fast) var(--ease); }
+.preset:hover { border-color: var(--brand-indigo); color: var(--brand-indigo); background: var(--brand-grad-soft); }
 
 /* 字数限制提示 */
 .kuaishou-hint { font-size: 12px; color: var(--warning); margin-top: 4px; background: #fffbeb; border-left: 3px solid var(--warning); padding: 6px 10px; border-radius: var(--r-sm); }
@@ -1734,4 +2174,80 @@ function setType(t: 'video' | 'image' | 'article') {
 /* 本地检测说明 */
 .local-note { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 14px; }
 .local-note .lk { font-size: 13px; }
+
+/* ===== 正文展开编辑（档2 最大化模态） ===== */
+.be-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  margin: 0;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--slate);
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s var(--ease);
+}
+.be-expand-btn .ex-ic { font-size: 13px; line-height: 1; }
+.be-expand-btn:hover { border-color: var(--brand-indigo); color: var(--brand-indigo); background: var(--brand-grad-soft); box-shadow: var(--shadow-xs); }
+.be-expand-btn:active { transform: translateY(1px); }
+
+.be-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.be-modal {
+  width: 82vw;
+  height: 86vh;
+  max-width: 1500px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.be-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); flex-shrink: 0; }
+.be-ic { font-size: 18px; }
+.be-title { font-size: 15px; font-weight: 800; color: var(--ink); }
+.be-sub { font-size: 12px; color: var(--muted); font-weight: 600; }
+.be-close {
+  width: 34px; height: 34px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; color: var(--slate); background: var(--surface-2);
+  border: none; cursor: pointer; transition: all 0.15s;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.be-close:hover { background: rgba(244, 63, 94, 0.12); color: var(--danger); }
+
+.be-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 16px 20px; gap: 10px; }
+.be-editor { flex: 1; min-height: 0; display: flex; }
+.be-editor :deep(.el-textarea) { flex: 1; display: flex; }
+.be-editor :deep(.el-textarea__inner) { flex: 1; height: 100%; min-height: 100%; resize: none; font-size: 15px; line-height: 1.75; }
+.be-markdown { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+/* 模态内让编辑/预览分栏填满可用高度（覆盖组件内联固定 height，避免底部留白） */
+.be-markdown :deep(.md-split-container) { flex: 1 1 auto !important; height: auto !important; min-height: 0; }
+/* 输入框右上角已统一显示字段字数计数，隐藏 Markdown 自带工具栏字数避免双计数（内联 + 模态都覆盖，仅隐藏计数 span，不动布局） */
+.field :deep(.md-toolbar-right),
+.be-markdown :deep(.md-toolbar-right) { display: none; }
+
+.be-foot { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; border-top: 1px solid var(--line-soft); background: rgba(241, 245, 249, 0.5); }
+.be-limit { font-size: 12px; color: var(--slate); font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.be-limit .lim-tag { font-size: 11px; font-weight: 700; color: var(--muted); background: rgba(15, 23, 42, 0.05); border-radius: 20px; padding: 2px 9px; }
+.be-limit .lim-over { color: var(--danger); background: rgba(244, 63, 94, 0.1); padding: 2px 9px; border-radius: 20px; }
+.be-limit .lim-kw { color: var(--warning); }
 </style>

@@ -517,6 +517,7 @@ onBeforeUnmount(() => {
         class="acw-webview"
         :class="{ 'is-active': t.id === activeInnerId }"
         :partition="partitionName"
+        :preload="guestPreloadPath || undefined"
         :useragent="resolvedUserAgent || null"
         :src="t.src"
         allowpopups

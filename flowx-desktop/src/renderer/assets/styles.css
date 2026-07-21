@@ -526,3 +526,11 @@ body {
   border-radius: var(--r-md);
   box-shadow: var(--shadow-xs);
 }
+
+/* 顶栏 / 浏览器工具栏点击类弹层（el-dropdown / el-select 的 popper）
+   统一顶到浏览器侧边栏遮罩(.sidebar-mask z-index:9999)之上，避免被盖住无法展示。
+   popper 由 Element Plus 默认 teleport 到 body，与本页遮罩同 stacking context，
+   故一条全局规则即可兜底所有顶栏弹层；收口于此，避免规则散落在各组件 scoped 里复发。 */
+.ws-top-popper {
+  z-index: 100000 !important;
+}
