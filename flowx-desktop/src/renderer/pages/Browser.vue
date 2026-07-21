@@ -5,19 +5,27 @@ import { useRoute } from 'vue-router'
 import { electronApi } from '../utils/electron'
 import { useEnvStore } from '../stores/env'
 import { useWorkspaceStore } from '../stores/workspace'
+import { useUiStore } from '../stores/ui'
 import PublishForm from '../components/PublishForm.vue'
-import type { BrowserEnvironment, PublishRequest, BrowserBookmark, BrowserHistoryItem, ExtractedContent } from '../../types'
+import BrowserRulePanel from '../components/BrowserRulePanel.vue'
+import type { BrowserEnvironment, PublishRequest, BrowserBookmark, BrowserHistoryItem, ExtractedContent, CustomSiteRule, PickerFieldType, PickerResult, PublishContentType } from '../../types'
 
 const route = useRoute()
 const envStore = useEnvStore()
 const props = defineProps<{ url?: string }>()
+const uiStore = useUiStore()
 
 // 发布表单 ref
 const publishFormRef = ref<InstanceType<typeof PublishForm> | null>(null)
+// 规则面板 ref
+const browserRulePanelRef = ref<InstanceType<typeof BrowserRulePanel> | null>(null)
 
 // 布局模式：browser-only | split | publish-only
 const layoutMode = ref<'browser-only' | 'split' | 'publish-only'>('split')
-const leftWidth = ref(66.7) // 左侧宽度百分比（浏览器:表单 = 2:1）
+const leftWidth = ref(70) // 左侧浏览器占比（%）
+
+// 右侧面板 Tab
+const rightPanelTab = ref<'publish' | 'rules'>('publish')
 const isDragging = ref(false)
 const isExtracting = ref(false)
 const layoutDropdownVisible = ref(false)
@@ -26,6 +34,12 @@ const layoutDropdownVisible = ref(false)
 const selectorActive = ref(false)
 const extractMode = ref<'replace' | 'append'>('replace')
 const extractConfidence = ref<number | null>(null)
+
+// ========== 自定义规则 & 拾取器 ==========
+
+// 拾取器状态
+const pickerActive = ref(false)
+const currentPickerField = ref<PickerFieldType | null>(null)
 
 // 地址栏输入值（UI 状态，切换标签时同步）
 const urlInput = ref('')
@@ -99,7 +113,7 @@ const canGoForward = computed(() => activeTab.value?.canGoForward ?? false)
 // ========== 标签操作 ==========
 
 /** 新建标签 */
-async function createTab(url = 'https://www.baidu.com') {
+async function createTab(url = 'flowx-newtab://page') {
   try {
     const result = await electronApi.browser.createView({ url })
     const tab: BrowserTab = {
@@ -221,7 +235,7 @@ async function initBrowser() {
     environments.value = envStore.environments
 
     // 从 URL 参数获取初始 URL（从草稿箱等地方跳转过来时会带 url 参数）
-    const initialUrl = (props.url ?? (route.query.url as string)) || 'https://www.baidu.com'
+    const initialUrl = (props.url ?? (route.query.url as string)) || 'flowx-newtab://page'
 
     // 初始创建一个标签
     await createTab(initialUrl)
@@ -317,6 +331,15 @@ function handleUrlKeydown(e: KeyboardEvent | Event) {
   }
 }
 
+async function goHome() {
+  if (!activeTabId.value) return
+  try {
+    await electronApi.browser.navigate(activeTabId.value, 'flowx-newtab://page')
+  } catch (e) {
+    console.error('[Browser.vue] goHome error', e)
+  }
+}
+
 async function goBack() {
   if (!activeTabId.value || !canGoBack.value) return
   try {
@@ -402,48 +425,50 @@ function setLayoutMode(mode: 'browser-only' | 'split' | 'publish-only') {
   })
 }
 
-// 布局下拉显示/隐藏时，控制 WebContentsView 可见性
-// 因为 WebContentsView 是原生控件，层级永远在 HTML 之上，会挡住 dropdown 菜单
+// 布局下拉显示/隐藏时，更新全局弹层计数
 function handleLayoutDropdownVisible(visible: boolean) {
   layoutDropdownVisible.value = visible
-  if (!activeTabId.value) return
   if (visible) {
-    hideBrowserView()
+    uiStore.pushOverlay('browser-layout-dropdown')
   } else {
-    // 下拉关闭后延迟恢复，等待下拉动画完成
-    setTimeout(() => showBrowserView(), 200)
+    uiStore.popOverlay('browser-layout-dropdown')
   }
 }
 
-// 环境选择下拉显示/隐藏时同样控制（防止被 WebContentsView 遮挡）
+// 环境选择下拉显示/隐藏时，更新全局弹层计数
 function handleEnvDropdownVisible(visible: boolean) {
-  if (!activeTabId.value) return
   if (visible) {
-    hideBrowserView()
+    uiStore.pushOverlay('browser-env-dropdown')
   } else {
-    setTimeout(() => showBrowserView(), 200)
+    uiStore.popOverlay('browser-env-dropdown')
   }
 }
 
-// 弹窗显示/隐藏时控制 WebContentsView
-// 用计数器支持嵌套弹窗
-let modalCount = 0
+// 弹窗显示/隐藏时，更新全局弹层计数
 function handleModalShow() {
-  modalCount++
-  if (modalCount === 1) hideBrowserView()
+  uiStore.pushOverlay('browser-modal')
 }
 function handleModalHide() {
-  modalCount--
-  if (modalCount <= 0) {
-    modalCount = 0
-    // 弹窗关闭后延迟恢复，等待弹窗动画完成，再多次尝试确保恢复
+  uiStore.popOverlay('browser-modal')
+}
+
+// 监听全局弹层计数变化，控制 WebContentsView 显隐
+// 因为 WebContentsView 是原生控件，层级永远在 HTML 之上，会挡住所有 HTML 弹层
+watch(() => uiStore.overlayCount, (count, oldCount) => {
+  if (!activeTabId.value) return
+  if (count > 0 && oldCount === 0) {
+    // 从 0 变到有弹层 → 隐藏浏览器视图
+    hideBrowserView()
+  } else if (count === 0 && oldCount > 0) {
+    // 从有弹层变到 0 → 恢复浏览器视图（延迟等待动画完成）
     setTimeout(() => {
       showBrowserView()
+      // 多次尝试确保恢复（防止动画期间尺寸变化）
       setTimeout(() => showBrowserView(), 100)
       setTimeout(() => showBrowserView(), 300)
     }, 200)
   }
-}
+})
 
 // 顶栏弹窗（右键/「+」/搜索）显示时，WebContentsView 原生控件必须整块隐藏
 // （原生层永远覆盖 HTML DOM，CSS z-index 无效），让位给弹窗。
@@ -454,8 +479,8 @@ function hideBrowserView() {
 }
 function showBrowserView() {
   if (!activeTabId.value || !browserHidden) return
-  // 如果下拉菜单还开着、还有弹窗、或顶栏弹层还在显示，不恢复
-  if (layoutDropdownVisible.value || modalCount > 0 || workspaceStore.topbarOverlayCount > 0) return
+  // 两路遮挡并存：远程 uiStore（浏览器内下拉/规则面板/弹窗）+ 本分支顶栏 topbarOverlayCount（顶栏「+」/右键/搜索）
+  if (uiStore.overlayCount > 0 || workspaceStore.topbarOverlayCount > 0) return
   browserHidden = false
   nextTick(() => {
     updateViewBounds()
@@ -817,7 +842,7 @@ async function handleTestSubmit(req: PublishRequest) {
  * @param result 提取结果（images 为 ExtractedImage[]）
  * @param mode 填充模式：replace 替换，append 追加
  */
-async function fillExtractToForm(result: ExtractedContent, mode: 'replace' | 'append' = 'replace') {
+async function fillExtractToForm(result: ExtractedContent, mode: 'replace' | 'append' = 'replace', contentType?: PublishContentType) {
   // 下载图片（使用 ExtractedImage 对象的 url 属性，优先下载内容图片）
   let downloadedImages: string[] = []
   if (result.images && result.images.length > 0) {
@@ -834,6 +859,19 @@ async function fillExtractToForm(result: ExtractedContent, mode: 'replace' | 'ap
 
   if (!publishFormRef.value) return
 
+  // 内容类型映射：PublishContentType -> 表单 contentType
+  // 'image-text' -> 'image', 'video' -> 'video', 'article' -> 'article'
+  const mapContentType = (ct: PublishContentType): 'video' | 'image' | 'article' => {
+    if (ct === 'image-text') return 'image'
+    return ct as 'video' | 'article'
+  }
+
+  // 自动判断内容类型：图文 > 文章
+  // 如果有图片且图片数量 >= 1，优先用图文；否则用文章
+  const autoContentType = contentType
+    ? mapContentType(contentType)
+    : (downloadedImages.length > 0 ? 'image' : 'article') as 'video' | 'image' | 'article'
+
   if (mode === 'append') {
     // 追加模式：获取当前表单数据，合并内容
     const current = publishFormRef.value.getFormData()
@@ -842,20 +880,26 @@ async function fillExtractToForm(result: ExtractedContent, mode: 'replace' | 'ap
       : result.title
     const mergedContent = (current.content?.trim() ? current.content + '\n\n' : '') + (result.textContent || '')
     const mergedMedia = [...(current.mediaFiles || []), ...downloadedImages]
+    // 合并话题标签
+    const currentTags = current.tags || []
+    const resultTags = result.tags || []
+    const mergedTags = Array.from(new Set([...currentTags, ...resultTags]))
 
     publishFormRef.value.fillForm({
-      contentType: 'article',
+      contentType: autoContentType,
       title: mergedTitle,
       content: mergedContent,
       mediaFiles: mergedMedia,
+      tags: mergedTags,
     })
   } else {
     // 替换模式（默认）：直接填充
     publishFormRef.value.fillForm({
-      contentType: 'article',
+      contentType: autoContentType,
       title: result.title,
       content: result.textContent || '',
       mediaFiles: downloadedImages,
+      tags: result.tags || [],
     })
   }
 }
@@ -948,6 +992,14 @@ async function handleExtractContent() {
   }
 }
 
+// 切换规则面板
+function toggleRulesPanel() {
+  if (layoutMode.value === 'browser-only') {
+    layoutMode.value = 'split'
+  }
+  rightPanelTab.value = 'rules'
+}
+
 // 切换选择器模式（选择提取）
 async function toggleSelectorMode() {
   if (!activeTabId.value) return
@@ -983,17 +1035,43 @@ function handleExtractResultEvent(data: { viewId: string; result: ExtractedConte
     extractConfidence.value = null
     return
   }
-  extractConfidence.value = typeof data.result.confidence === 'number' ? data.result.confidence : null
-  fillExtractToForm(data.result, 'replace').catch((e) => {
+  // 自动判断内容类型
+  const imgCount = data.result.images?.filter(i => i.isLikelyContent).length ?? 0
+  const contentType: PublishContentType = imgCount > 0 ? 'image-text' : 'article'
+  fillExtractToForm(data.result, 'replace', contentType).catch((e) => {
     console.error('[Browser.vue] fillExtractToForm error', e)
   })
   if (layoutMode.value === 'browser-only') {
     layoutMode.value = 'split'
     nextTick(() => updateViewBounds())
   }
-  const imgCount = data.result.images?.filter((img) => img.isLikelyContent).length ?? data.result.images?.length ?? 0
-  const confText = extractConfidence.value != null ? `，置信度 ${Math.round(extractConfidence.value)}%` : ''
-  ElMessage.success(`已提取：${data.result.title?.slice(0, 20) || '无标题'}...（${data.result.length} 字，${imgCount} 张图${confText}）`)
+  const confText = data.result.confidence != null ? `，置信度 ${Math.round(data.result.confidence)}%` : ''
+  ElMessage.success(`提取成功：${data.result.length} 字，${imgCount} 张图${confText}`)
+}
+
+// 处理规则面板应用提取结果
+function handleApplyRule(payload: { rule: CustomSiteRule; result: ExtractedContent }) {
+  const { rule, result } = payload
+  // 切换到发布 Tab
+  rightPanelTab.value = 'publish'
+  // 根据规则的 contentTypes 决定发布类型（取第一个匹配的类型）
+  let contentType: PublishContentType = 'article'
+  if (rule.contentTypes && rule.contentTypes.length > 0) {
+    contentType = rule.contentTypes[0] as PublishContentType
+  } else if (result.images && result.images.filter(i => i.isLikelyContent).length > 0) {
+    contentType = 'image-text'
+  }
+  // 填充表单
+  fillExtractToForm(result, 'replace', contentType).catch((e) => {
+    console.error('[Browser.vue] fillExtractToForm error', e)
+  })
+  if (layoutMode.value === 'browser-only') {
+    layoutMode.value = 'split'
+    nextTick(() => updateViewBounds())
+  }
+  const imgCount = result.images?.filter((img) => img.isLikelyContent).length ?? result.images?.length ?? 0
+  const confText = result.confidence != null ? `，置信度 ${Math.round(result.confidence)}%` : ''
+  ElMessage.success(`提取成功：${result.length} 字，${imgCount} 张图${confText}`)
 }
 
 // 处理提取错误事件
@@ -1047,6 +1125,50 @@ function handleSelectorStartedEvent(data: { viewId: string }) {
 function handleSelectorCancelledEvent(data: { viewId: string }) {
   if (data.viewId !== activeTabId.value) return
   selectorActive.value = false
+}
+
+// ========== 拾取器事件处理 ==========
+
+// 处理拾取器启动（外部触发时切换到规则面板）
+function handlePickerStarted(data: { viewId: string; fieldType: PickerFieldType }) {
+  if (data.viewId !== activeTabId.value) return
+  pickerActive.value = true
+  currentPickerField.value = data.fieldType
+
+  // 自动切换到规则面板
+  if (layoutMode.value === 'browser-only') {
+    layoutMode.value = 'split'
+  }
+  rightPanelTab.value = 'rules'
+}
+
+// 处理拾取器结果（主要由 SiteRuleEditor 内部处理，这里仅更新状态）
+function handlePickerResult(data: { viewId: string; result: PickerResult }) {
+  if (data.viewId !== activeTabId.value) return
+  pickerActive.value = false
+  currentPickerField.value = null
+}
+
+// 处理拾取器取消
+function handlePickerCancelled(data: { viewId: string }) {
+  if (data.viewId !== activeTabId.value) return
+  pickerActive.value = false
+  currentPickerField.value = null
+}
+
+// 从右键菜单打开规则编辑器
+function handleOpenRuleEditor(data: { viewId: string; url: string; mode: 'create' | 'edit' }) {
+  if (data.viewId !== activeTabId.value) return
+  // 切换到规则面板 tab
+  rightPanelTab.value = 'rules'
+  // 展开右侧面板（如果是浏览器-only 模式）
+  if (layoutMode.value === 'browser-only') {
+    layoutMode.value = 'split'
+  }
+  // 调用规则面板的新建方法
+  nextTick(() => {
+    browserRulePanelRef.value?.openCreate()
+  })
 }
 
 // 保存到草稿箱
@@ -1116,6 +1238,10 @@ let cleanupExtractError: (() => void) | null = null
 let cleanupManualExtractResult: (() => void) | null = null
 let cleanupSelectorStarted: (() => void) | null = null
 let cleanupSelectorCancelled: (() => void) | null = null
+let cleanupPickerStarted: (() => void) | null = null
+let cleanupPickerResult: (() => void) | null = null
+let cleanupPickerCancelled: (() => void) | null = null
+let cleanupOpenRuleEditor: (() => void) | null = null
 
 // 全局键盘事件：Esc 取消选择器
 function handleGlobalKeydown(e: KeyboardEvent) {
@@ -1165,6 +1291,12 @@ onMounted(() => {
     cleanupManualExtractResult = electronApi.browser.onManualExtractResult?.(handleManualExtractResultEvent) ?? null
     cleanupSelectorStarted = electronApi.browser.onSelectorStarted?.(handleSelectorStartedEvent) ?? null
     cleanupSelectorCancelled = electronApi.browser.onSelectorCancelled?.(handleSelectorCancelledEvent) ?? null
+    // 注册拾取器相关事件
+    cleanupPickerStarted = electronApi.browser.onPickerStarted?.(handlePickerStarted) ?? null
+    cleanupPickerResult = electronApi.browser.onPickerResult?.(handlePickerResult) ?? null
+    cleanupPickerCancelled = electronApi.browser.onPickerCancelled?.(handlePickerCancelled) ?? null
+    // 注册规则编辑器事件
+    cleanupOpenRuleEditor = electronApi.browser.onOpenRuleEditor?.(handleOpenRuleEditor) ?? null
   }
   initBrowser()
   // 进入本页时若全局搜索已挂起待打开的 URL，标签就绪后导航
@@ -1186,9 +1318,17 @@ onUnmounted(() => {
   cleanupManualExtractResult?.()
   cleanupSelectorStarted?.()
   cleanupSelectorCancelled?.()
+  cleanupPickerStarted?.()
+  cleanupPickerResult?.()
+  cleanupPickerCancelled?.()
+  cleanupOpenRuleEditor?.()
   // 确保选择器模式已关闭
   if (selectorActive.value && activeTabId.value) {
     electronApi.browser.stopSelector?.(activeTabId.value).catch(() => {})
+  }
+  // 确保拾取器已关闭
+  if (pickerActive.value && activeTabId.value) {
+    electronApi.browser.stopPicker?.(activeTabId.value).catch(() => {})
   }
   // 销毁所有标签的 view
   if (electronApi.browser) {
@@ -1244,6 +1384,14 @@ watch(activeTabId, () => {
     <!-- 顶部工具栏 -->
     <div class="toolbar">
       <div class="nav-buttons">
+        <el-button
+          icon="House"
+          circle
+          size="small"
+          :disabled="!browserViewId"
+          @click="goHome"
+          title="主页"
+        />
         <el-button :icon="isLoading ? 'Close' : 'Refresh'" circle size="small"
           :disabled="!browserViewId"
           @click="reload"
@@ -1322,6 +1470,20 @@ watch(activeTabId, () => {
           <el-radio-button value="replace">替换</el-radio-button>
           <el-radio-button value="append">追加</el-radio-button>
         </el-radio-group>
+
+        <!-- 规则管理按钮 -->
+        <el-tooltip content="提取规则管理" placement="bottom">
+          <el-button
+            size="small"
+            type="primary"
+            plain
+            icon="Setting"
+            :class="{ 'btn-rules-active': rightPanelTab === 'rules' && layoutMode !== 'browser-only' }"
+            @click="toggleRulesPanel"
+          >
+            规则
+          </el-button>
+        </el-tooltip>
 
         <!-- 提取按钮组 -->
         <div class="extract-btn-group">
@@ -1409,23 +1571,56 @@ watch(activeTabId, () => {
         <div class="divider-handle"></div>
       </div>
 
-      <!-- 右侧发布表单区 -->
+      <!-- 右侧面板区（发布/规则） -->
       <div
         v-show="layoutMode !== 'browser-only'"
-        class="publish-container"
+        class="right-panel"
         :style="{ width: layoutMode === 'split' ? (100 - leftWidth) + '%' : '100%' }"
       >
-        <PublishForm
-          ref="publishFormRef"
-          @submit="handlePublishSubmit"
-          @test-submit="handleTestSubmit"
-          @modal-show="handleModalShow"
-          @modal-hide="handleModalHide"
-        >
-          <template #footer-extra>
-            <el-button :disabled="isExtracting" icon="Document" @click="saveToDraft">保存草稿</el-button>
-          </template>
-        </PublishForm>
+        <!-- 右侧 Tab 头 -->
+        <div class="right-panel-tabs">
+          <div
+            class="right-tab"
+            :class="{ active: rightPanelTab === 'publish' }"
+            @click="rightPanelTab = 'publish'"
+          >
+            <el-icon><Edit /></el-icon>
+            <span>发布编辑</span>
+          </div>
+          <div
+            class="right-tab"
+            :class="{ active: rightPanelTab === 'rules' }"
+            @click="rightPanelTab = 'rules'"
+          >
+            <el-icon><Setting /></el-icon>
+            <span>提取规则</span>
+          </div>
+        </div>
+
+        <!-- 发布表单 -->
+        <div v-show="rightPanelTab === 'publish'" class="tab-content">
+          <PublishForm
+            ref="publishFormRef"
+            @submit="handlePublishSubmit"
+            @test-submit="handleTestSubmit"
+            @modal-show="handleModalShow"
+            @modal-hide="handleModalHide"
+          >
+            <template #footer-extra>
+              <el-button :disabled="isExtracting" icon="Document" @click="saveToDraft">保存草稿</el-button>
+            </template>
+          </PublishForm>
+        </div>
+
+        <!-- 规则面板 -->
+        <div v-show="rightPanelTab === 'rules'" class="tab-content">
+          <BrowserRulePanel
+            ref="browserRulePanelRef"
+            :current-url="currentUrl"
+            :view-id="browserViewId"
+            @apply-rule="handleApplyRule"
+          />
+        </div>
       </div>
     </div>
 
@@ -1552,6 +1747,14 @@ watch(activeTabId, () => {
             </el-button>
           </div>
         </div>
+      </div>
+    </transition>
+
+    <!-- 拾取器提示 -->
+    <transition name="fade">
+      <div v-if="pickerActive" class="picker-toast">
+        <el-icon><Mouse /></el-icon>
+        请在页面上点击选择元素，按 Esc 取消
       </div>
     </transition>
   </div>
@@ -1744,6 +1947,63 @@ watch(activeTabId, () => {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+}
+
+/* ========== 右侧面板（Tab 结构） ========== */
+.right-panel {
+  height: 100%;
+  background: #f5f7fa;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.right-panel-tabs {
+  display: flex;
+  background: #fff;
+  border-bottom: 1px solid #e4e7ed;
+  flex-shrink: 0;
+}
+
+.right-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  font-size: 14px;
+  color: #606266;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.right-tab:hover {
+  color: #409eff;
+}
+
+.right-tab.active {
+  color: #409eff;
+  border-bottom-color: #409eff;
+  font-weight: 500;
+}
+
+.tab-badge {
+  margin-left: 2px;
+}
+
+.tab-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 发布表单在 tab 内容中的样式 */
+.tab-content > :deep(.publish-form) {
+  height: 100%;
+  overflow-y: auto;
 }
 
 /* ========== 导航按钮分隔线 ========== */
@@ -2019,6 +2279,12 @@ watch(activeTabId, () => {
   animation: pulse-border 1.5s ease-in-out infinite;
 }
 
+.btn-rules-active {
+  background-color: #ecf5ff !important;
+  border-color: #409eff !important;
+  color: #409eff !important;
+}
+
 @keyframes pulse-border {
   0%, 100% { box-shadow: 0 0 0 0 rgba(230, 162, 60, 0.4); }
   50% { box-shadow: 0 0 0 4px rgba(230, 162, 60, 0); }
@@ -2084,5 +2350,34 @@ watch(activeTabId, () => {
 @keyframes pulse-icon {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.7; transform: scale(1.2); }
+}
+
+/* 拾取器提示 Toast */
+.picker-toast {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(64, 158, 255, 0.95);
+  color: #fff;
+  padding: 10px 20px;
+  border-radius: 20px;
+  font-size: 14px;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 2px 12px rgba(64, 158, 255, 0.4);
+}
+
+/* 动画 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>

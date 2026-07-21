@@ -55,9 +55,11 @@ flowx-desktop/
 │   │   ├── index.ts                  # 应用入口（GPU 策略 / 单实例锁 / 窗口创建）
 │   │   ├── services/
 │   │   │   ├── AccountService.ts     # 账号授权 / Cookie 注入 / 信息提取
-│   │   │   ├── BrowserService.ts     # 浏览器视图管理（多标签 / 书签 / 内容提取）
+│   │   │   ├── BrowserService.ts     # 浏览器视图管理（多标签 / 书签 / 内容提取 / 右键菜单）
 │   │   │   ├── BrowserHistoryService.ts # 书签与历史记录服务
 │   │   │   ├── ContentExtractor.ts   # 网页内容提取引擎（Readability + 站点规则 + 手动提取）
+│   │   │   ├── ElementPicker.ts      # 元素拾取器（悬停高亮 / 点击确认 / 选择器推断）
+│   │   │   ├── SiteRuleManager.ts    # 自定义站点规则管理器（CRUD / 匹配评分 / 持久化）
 │   │   │   ├── PublishEngine.ts      # 发布引擎 / 并发控制 / IPC 推送
 │   │   │   ├── PlatformAdapter.ts    # 平台适配器（各平台 publish 入口）
 │   │   │   └── platforms/
@@ -68,12 +70,13 @@ flowx-desktop/
 │   │   ├── ipc/
 │   │   │   ├── index.ts              # IPC 注册（safeInvoke 封装）
 │   │   │   ├── account.ts            # 账号通道
-│   │   │   ├── browser.ts            # 浏览器通道（标签页 / 导航 / 内容提取）
+│   │   │   ├── browser.ts            # 浏览器通道（标签页 / 导航 / 内容提取 / 元素拾取 / 站点规则）
 │   │   │   ├── browserHistory.ts     # 书签与历史记录通道
 │   │   │   ├── publish.ts            # 发布通道
 │   │   │   └── system.ts             # 系统信息 / 日志
 │   │   ├── windows/
 │   │   │   ├── MainWindow.ts         # 主窗口
+│   │   │   ├── AboutWindow.ts        # 关于窗口（独立模态窗口，避免 WebContentsView 遮挡）
 │   │   │   └── AccountBrowserView.ts # 账号浏览窗口
 │   │   ├── store/
 │   │   │   └── SecureStore.ts        # 加密存储（safeStorage + electron-store）
@@ -87,10 +90,14 @@ flowx-desktop/
 │   │   │   ├── AccountPanel.vue      # 账号管理
 │   │   │   ├── Publish.vue           # 一键发布
 │   │   │   ├── History.vue           # 发布历史（重试/编辑重发/重新测试/立即发布）
-│   │   │   ├── Browser.vue           # 浏览器（多标签 + 内容提取 + 发布表单分栏）
+│   │   │   ├── Browser.vue           # 浏览器（多标签 + 内容提取 + 发布表单分栏 + 规则面板）
+│   │   │   ├── AboutWindow.vue       # 关于窗口页面（独立窗口，无 header）
+│   │   │   ├── RulesPanel.vue        # 站点规则管理（全局规则列表）
 │   │   │   └── DraftBox.vue          # 草稿箱
 │   │   ├── components/
-│   │   │   └── PublishForm.vue       # 发布表单组件（发布页/浏览器页复用）
+│   │   │   ├── PublishForm.vue       # 发布表单组件（发布页/浏览器页复用）
+│   │   │   ├── BrowserRulePanel.vue  # 浏览器内规则面板（Tab 集成，匹配规则 + 全部规则）
+│   │   │   └── SiteRuleEditor.vue    # 规则编辑器（新建/编辑 + 可视化拾取）
 │   │   └── stores/
 │   │       ├── account.ts            # 账号列表 / 刷新状态
 │   │       ├── browser.ts            # 浏览器状态（标签页 / 书签 / 历史）
@@ -154,14 +161,26 @@ flowx-desktop/
 
 - **多标签浏览器**：基于 Electron WebContentsView，支持新建/切换/关闭标签页
 - **环境隔离**：支持选择浏览器环境（User-Agent / 代理配置），每个标签独立 session
-- **分栏布局**：左侧浏览器 + 右侧发布表单，宽度比 2:1，支持拖拽调节
+- **分栏布局**：左侧浏览器 + 右侧 Tab 面板（发布编辑 / 提取规则），宽度可拖拽调节
 - **一键提取内容**：自动提取网页正文、标题、图片，一键填充到发布表单
 - **多策略提取引擎**：
-  - 站点规则适配（微信公众号 / 知乎 / 今日头条 / 36氪 / 简书 / 少数派 / CSDN / 掘金 等 10+ 站点）
+  - **自定义站点规则**（优先级最高）：用户可视化配置，支持域名/正则匹配
+  - 内置站点规则适配（微信公众号 / 知乎 / 今日头条 / 36氪 / 简书 / 少数派 / CSDN / 掘金 等 10+ 站点）
   - Readability.js 通用正文提取
   - 文本密度算法兜底
+- **可视化元素拾取**：
+  - 鼠标悬停高亮，点击确认选择
+  - 自动推断 CSS 选择器（ID → Class → 属性 → 层级路径）
+  - 支持多元素选择，自动推断公共选择器
+  - ESC 取消、方向键切换层级
+- **自定义站点规则管理**：
+  - 浏览器内 Tab 面板管理，边浏览边配置
+  - 当前网站匹配规则绿色高亮，一目了然
+  - 支持 8 种选择器：正文、标题、作者、日期、站点名、图片、话题、移除元素
+  - 支持图文/视频/文章多内容类型匹配
+  - 右键菜单快捷创建自定义规则
 - **手动提取**：
-  - 右键菜单提取（图片 / 元素 / 整页 / 选择模式）
+  - 右键菜单提取（图片 / 元素 / 整页 / 选择模式 / 添加自定义规则）
   - 元素选择模式（悬停高亮 / 点击确认 / ESC 取消 / 方向键切换层级）
   - 光标位置插入（手动提取不覆盖已有内容）
 - **文本清理**：七步清理管线（零宽字符 / 换行 / 空格 / 空行 / 首尾清理）
@@ -243,6 +262,7 @@ Vue 响应式更新 → 进度面板刷新
 - ⚡ 提取结果缓存 / 预提取优化
 - 🔄 自动更新（electron-updater，需要配置私有发布地址）
 - 🔌 插件系统（允许用户自定义平台适配器）
+- 📤 规则导入导出（分享自定义站点规则）
 
 ---
 
@@ -250,7 +270,11 @@ Vue 响应式更新 → 进度面板刷新
 
 - **项目总览 README**：[上层目录 README](../README.md)
 - **完整设计文档**：[../设计文档.md](../设计文档.md)（包含 PlatformDispatcher 工厂方法模式）
+- **用户自定义站点规则设计方案**：[`docs/用户自定义站点规则设计方案.md`](./docs/用户自定义站点规则设计方案.md)（可视化拾取 / 规则匹配 / 浏览器规则面板 / 顶部导航栏层级优化）
+- **第四阶段-高级特性设计方案**：[`docs/第四阶段-高级特性设计方案.html`](./docs/第四阶段-高级特性设计方案.html)
 - **浏览器与内容提取设计文档**：[`../content-extraction-optimization/content-extraction-optimization.html`](../content-extraction-optimization/content-extraction-optimization.html)
+- **浏览器提取设计文档**：[`docs/浏览器提取设计文档.html`](./docs/浏览器提取设计文档.html)
+- **内容提取优化设计文档**：[`docs/内容提取优化设计文档.html`](./docs/内容提取优化设计文档.html)
 - **小红书自动发布技术文档**：[`docs/小红书自动发布技术文档.md`](./docs/小红书自动发布技术文档.md)（Closed Shadow DOM / CDP 穿透）
 - **小红书图文发布技术文档**：[`docs/小红书图文发布技术文档.md`](./docs/小红书图文发布技术文档.md)（ProseMirror 富文本 / 多图上传）
 - **小红书文章发布技术文档**：[`docs/小红书文章发布技术文档.md`](./docs/小红书文章发布技术文档.md)（多步排版 / 摘要填写 / 话题插入）
@@ -270,3 +294,9 @@ Vue 响应式更新 → 进度面板刷新
 - **ContentExtractor.ts**：[`src/main/services/ContentExtractor.ts`](./src/main/services/ContentExtractor.ts)（内容提取引擎）
 - **Browser.vue**：[`src/renderer/pages/Browser.vue`](./src/renderer/pages/Browser.vue)（浏览器页面）
 - **PublishForm.vue**：[`src/renderer/components/PublishForm.vue`](./src/renderer/components/PublishForm.vue)（发布表单组件）
+- **BrowserRulePanel.vue**：[`src/renderer/components/BrowserRulePanel.vue`](./src/renderer/components/BrowserRulePanel.vue)（浏览器内规则面板）
+- **SiteRuleEditor.vue**：[`src/renderer/components/SiteRuleEditor.vue`](./src/renderer/components/SiteRuleEditor.vue)（规则编辑器）
+- **SiteRuleManager.ts**：[`src/main/services/SiteRuleManager.ts`](./src/main/services/SiteRuleManager.ts)（自定义站点规则管理器）
+- **ElementPicker.ts**：[`src/main/services/ElementPicker.ts`](./src/main/services/ElementPicker.ts)（元素拾取器）
+- **ContentExtractor.ts**：[`src/main/services/ContentExtractor.ts`](./src/main/services/ContentExtractor.ts)（内容提取引擎）
+- **BrowserService.ts**：[`src/main/services/BrowserService.ts`](./src/main/services/BrowserService.ts)（浏览器视图管理）

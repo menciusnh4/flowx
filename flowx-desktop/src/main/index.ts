@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol } from 'electron';
 import path from 'path';
 import { registerAllIpc } from './ipc';
 import { createMainWindow, getMainWindow, getAppIcon } from './windows/MainWindow';
@@ -9,6 +9,20 @@ import { BrowserEnvService } from './services/BrowserEnvService';
 import { PublishEngine } from './services/PublishEngine';
 import { ApiServer } from './services/ApiServer';
 import { registerMediaProtocol } from './protocols/mediaProtocol';
+import { registerNewTabProtocol } from './services/NewTabPageService';
+
+// 注册自定义协议为标准方案（必须在 app ready 之前调用）
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'flowx-newtab',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: false,
+      stream: true,
+    },
+  },
+]);
 
 // FlowX 主进程入口
 // 负责: 窗口管理、IPC 注册、服务初始化、生命周期事件
@@ -116,6 +130,9 @@ async function bootstrap() {
       }
     }
   });
+
+  // 注册新标签页协议
+  registerNewTabProtocol();
 
   // 初始化业务服务
   AccountService.init();

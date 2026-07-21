@@ -1,5 +1,7 @@
 import { getViewWebContents } from './BrowserService';
 import { logger } from '../utils/logger';
+import { siteRuleManager } from './SiteRuleManager';
+import type { CustomSiteRule } from '../../types';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -215,6 +217,19 @@ export async function extractContentFromView(viewId: string): Promise<ExtractedC
     // 获取当前页面 URL
     const pageUrl = wc.getURL();
 
+    // 0. 优先尝试自定义站点规则（优先级最高）
+    const customRule = siteRuleManager.findMatchingRule(pageUrl);
+    if (customRule) {
+      logger.info(`[ContentExtractor] 匹配自定义规则: ${customRule.name}`);
+      const customResult = await tryCustomSiteRuleExtract(wc, customRule, pageUrl);
+      if (customResult && customResult.content) {
+        logger.info(`[ContentExtractor] 自定义规则提取成功: ${customResult.title?.slice(0, 30)}, 字数: ${customResult.length}`);
+        siteRuleManager.incrementUsage(customRule.id);
+        return customResult;
+      }
+      logger.warn(`[ContentExtractor] 自定义规则提取失败，回退到内置规则`);
+    }
+
     // 1. 优先尝试站点适配规则
     const siteRule = findSiteRule(pageUrl);
     if (siteRule) {
@@ -265,6 +280,43 @@ async function tryReadabilityExtract(wc: Electron.WebContents): Promise<Extracte
 
     // Clone document to avoid mutating the original
     var docClone = document.cloneNode(true);
+
+    // 同步表单元素的值到克隆文档（input/textarea/select 的 value 不会被 cloneNode 复制）
+    (function syncFormValues(realDoc, cloneDoc) {
+      try {
+        var realInputs = realDoc.querySelectorAll('input');
+        var cloneInputs = cloneDoc.querySelectorAll('input');
+        for (var i = 0; i < realInputs.length && i < cloneInputs.length; i++) {
+          var type = (realInputs[i].type || 'text').toLowerCase();
+          if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image'].indexOf(type) >= 0) continue;
+          var val = realInputs[i].value || '';
+          if (val.trim()) {
+            cloneInputs[i].value = val;
+            cloneInputs[i].setAttribute('value', val);
+            cloneInputs[i].textContent = val;
+          }
+        }
+        var realTas = realDoc.querySelectorAll('textarea');
+        var cloneTas = cloneDoc.querySelectorAll('textarea');
+        for (var j = 0; j < realTas.length && j < cloneTas.length; j++) {
+          var tVal = realTas[j].value || '';
+          if (tVal.trim()) {
+            cloneTas[j].value = tVal;
+            cloneTas[j].textContent = tVal;
+          }
+        }
+        var realSels = realDoc.querySelectorAll('select');
+        var cloneSels = cloneDoc.querySelectorAll('select');
+        for (var k = 0; k < realSels.length && k < cloneSels.length; k++) {
+          var sVal = realSels[k].value || '';
+          var sText = realSels[k].options && realSels[k].options[realSels[k].selectedIndex] ? realSels[k].options[realSels[k].selectedIndex].text : '';
+          if (sVal || sText) {
+            cloneSels[k].value = sVal;
+            cloneSels[k].textContent = sText || sVal;
+          }
+        }
+      } catch(e) {}
+    })(document, docClone);
 
     // Create a Readability instance
     var reader = new Readability(docClone, {
@@ -479,6 +531,53 @@ async function trySiteRuleExtract(
       return result.join('\\n');
     }
 
+    // ========== 同步表单元素值到 DOM ==========
+    function syncFormValues(el) {
+      try {
+        // 先处理元素自身（如果选择器直接选中的就是 input/textarea）
+        var selfTag = el.tagName ? el.tagName.toLowerCase() : '';
+        if (selfTag === 'input') {
+          var st = (el.type || 'text').toLowerCase();
+          if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image'].indexOf(st) < 0) {
+            var sv = el.value || '';
+            if (sv.trim()) {
+              el.textContent = sv;
+              el.setAttribute('value', sv);
+            }
+          }
+        } else if (selfTag === 'textarea') {
+          var stv = el.value || '';
+          if (stv.trim()) { el.textContent = stv; }
+        } else if (selfTag === 'select') {
+          var ssv = el.value || '';
+          var sst = el.options && el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : '';
+          if (ssv || sst) { el.textContent = sst || ssv; }
+        }
+        el.querySelectorAll('input').forEach(function(input) {
+          var type = (input.type || 'text').toLowerCase();
+          if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image'].indexOf(type) >= 0) return;
+          var val = input.value || '';
+          if (val.trim()) {
+            input.textContent = val;
+            input.setAttribute('value', val);
+          }
+        });
+        el.querySelectorAll('textarea').forEach(function(ta) {
+          var val = ta.value || '';
+          if (val.trim()) {
+            ta.textContent = val;
+          }
+        });
+        el.querySelectorAll('select').forEach(function(sel) {
+          var val = sel.value || '';
+          var text = sel.options && sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
+          if (val || text) {
+            sel.textContent = text || val;
+          }
+        });
+      } catch(e) {}
+    }
+
     // ========== 清理 HTML 内容 ==========
     function cleanContentHTML(el) {
       var clone = el.cloneNode(true);
@@ -579,11 +678,22 @@ async function trySiteRuleExtract(
     function queryText(sel) {
       if (!sel) return '';
       var el = document.querySelector(sel);
-      return el ? (el.textContent || '').trim() : '';
+      if (!el) return '';
+      var tag = el.tagName.toLowerCase();
+      if (tag === 'input' || tag === 'textarea') {
+        return (el.value || '').trim();
+      }
+      if (tag === 'select') {
+        return (el.value || '').trim();
+      }
+      return (el.textContent || '').trim();
     }
 
     var contentEl = document.querySelector(${contentSel});
     if (!contentEl) return null;
+
+    // 先同步表单元素的值到 DOM
+    syncFormValues(contentEl);
 
     var title = queryText(${titleSel}) || document.title || '';
     var contentHTML = cleanContentHTML(contentEl);
@@ -633,6 +743,291 @@ async function trySiteRuleExtract(
   }
 }
 
+// ========== 自定义站点规则提取 ==========
+
+async function tryCustomSiteRuleExtract(
+  wc: Electron.WebContents,
+  rule: CustomSiteRule,
+  pageUrl: string,
+): Promise<ExtractedContent | null> {
+  try {
+    const removeSelectorsJson = JSON.stringify(rule.removeSelectors || []);
+    const titleSel = JSON.stringify(rule.titleSelector || '');
+    const contentSel = JSON.stringify(rule.contentSelector);
+    const bylineSel = JSON.stringify(rule.bylineSelector || '');
+    const dateSel = JSON.stringify(rule.dateSelector || '');
+    const siteName = JSON.stringify(rule.siteName || '');
+    const imageSel = JSON.stringify(rule.imageSelector || '');
+    const tagsSel = JSON.stringify(rule.tagsSelector || '');
+
+    const script = `
+(function() {
+  try {
+    // ========== 文本清理管线 ==========
+    function cleanText(text) {
+      if (!text) return '';
+      text = text.replace(/[\\u200B-\\u200D\\uFEFF\\u00AD\\u0000-\\u001F\\u007F]/g, '');
+      text = text.replace(/\\r\\n?/g, '\\n');
+      text = text.replace(/\\u3000/g, ' ');
+      text = text.replace(/[ \\t]+/g, ' ');
+      var lines = text.split('\\n').map(function(line) { return line.trim(); });
+      var result = [];
+      var emptyCount = 0;
+      for (var i = 0; i < lines.length; i++) {
+        if (lines[i] === '') { emptyCount++; if (emptyCount <= 1) result.push(''); }
+        else { emptyCount = 0; result.push(lines[i]); }
+      }
+      while (result.length > 0 && result[0] === '') result.shift();
+      while (result.length > 0 && result[result.length - 1] === '') result.pop();
+      return result.join('\\n');
+    }
+
+    // ========== 同步表单元素值到 DOM ==========
+    // input/textarea/select 的值存储在 .value 属性中，不在 textContent/innerHTML 里
+    // 需要把值同步到 DOM，才能被内容提取捕获
+    function syncFormValues(el) {
+      try {
+        // 先处理元素自身（如果 contentSelector 直接选中的就是 input/textarea）
+        var selfTag = el.tagName ? el.tagName.toLowerCase() : '';
+        if (selfTag === 'input') {
+          var type = (el.type || 'text').toLowerCase();
+          if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image'].indexOf(type) < 0) {
+            var val = el.value || '';
+            if (val.trim()) {
+              el.textContent = val;
+              el.setAttribute('value', val);
+            }
+          }
+        } else if (selfTag === 'textarea') {
+          var tVal = el.value || '';
+          if (tVal.trim()) {
+            el.textContent = tVal;
+          }
+        } else if (selfTag === 'select') {
+          var sVal = el.value || '';
+          var sText = el.options && el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : '';
+          if (sVal || sText) {
+            el.textContent = sText || sVal;
+          }
+        }
+        // 处理后代 input 元素
+        el.querySelectorAll('input').forEach(function(input) {
+          var type = (input.type || 'text').toLowerCase();
+          // 跳过按钮、复选框、单选框、文件等非文本输入
+          if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image'].indexOf(type) >= 0) return;
+          var val = input.value || '';
+          if (val.trim()) {
+            // 把值设置为元素的文本内容，确保 textContent 和 innerHTML 都能获取到
+            input.textContent = val;
+            // 同时设置 value 属性（HTML 属性），以便 innerHTML 序列化时包含
+            input.setAttribute('value', val);
+          }
+        });
+        // 处理 textarea
+        el.querySelectorAll('textarea').forEach(function(ta) {
+          var val = ta.value || '';
+          if (val.trim()) {
+            ta.textContent = val;
+          }
+        });
+        // 处理 select
+        el.querySelectorAll('select').forEach(function(sel) {
+          var val = sel.value || '';
+          var text = sel.options && sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
+          if (val || text) {
+            sel.textContent = text || val;
+          }
+        });
+      } catch(e) {}
+    }
+
+    // ========== 清理 HTML 内容 ==========
+    function cleanContentHTML(el) {
+      var clone = el.cloneNode(true);
+      var noiseSelectors = ${removeSelectorsJson};
+      noiseSelectors.forEach(function(sel) {
+        try { clone.querySelectorAll(sel).forEach(function(n) { n.remove(); }); } catch(e) {}
+      });
+      clone.querySelectorAll('script, style, noscript, iframe, nav, footer, aside').forEach(function(n) { n.remove(); });
+      clone.querySelectorAll('[hidden], [style*="display:none"], [style*="visibility:hidden"]').forEach(function(n) { n.remove(); });
+      clone.querySelectorAll('p, div, span').forEach(function(p) {
+        var txt = (p.textContent || '').trim();
+        if (txt === '' && !p.querySelector('img, video, figure')) {
+          if (!p.id && (!p.className || p.className.trim() === '')) p.remove();
+        }
+      });
+      clone.querySelectorAll('img').forEach(function(img) {
+        var src = img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-original') || '';
+        if (src) { img.setAttribute('src', src); } else { img.remove(); }
+        img.removeAttribute('data-src');
+        img.removeAttribute('data-original');
+      });
+      return clone.innerHTML;
+    }
+
+    // ========== 收集图片 ==========
+    function collectImages(el, imageSelector) {
+      var images = [];
+      var adDoms = /doubleclick|googlesyndication|amazon-adsystem|googleadservices|adservice|adnxs|moatads|criteo|outbrain|taboola|pixel|tracker|beacon|analytics/i;
+
+      var imgEls = imageSelector ? document.querySelectorAll(imageSelector) : el.querySelectorAll('img');
+      imgEls.forEach(function(img, idx) {
+        var src = img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-original') || '';
+        if (!src || src.startsWith('data:') || adDoms.test(src)) return;
+
+        var w = parseInt(img.getAttribute('width') || img.naturalWidth || 0);
+        var h = parseInt(img.getAttribute('height') || img.naturalHeight || 0);
+        var rect = img.getBoundingClientRect();
+        if (!w) w = Math.round(rect.width);
+        if (!h) h = Math.round(rect.height);
+        if (w < 50 || h < 50) return;
+        var ar = h > 0 ? w / h : 1;
+        if (ar < 0.3 || ar > 5) return;
+
+        var isContent = w >= 200 && h >= 100 && ar >= 0.5 && ar <= 3;
+        var caption = '';
+        var parent = img.parentElement;
+        for (var i = 0; i < 3 && parent; i++) {
+          var cap = parent.querySelector('figcaption, .caption, .image-caption, [class*="caption"]');
+          if (cap) { caption = (cap.textContent || '').trim(); break; }
+          parent = parent.parentElement;
+        }
+        try { src = new URL(src, location.href).href; } catch(e) {}
+
+        images.push({
+          url: src,
+          alt: (img.getAttribute('alt') || '').trim(),
+          width: w,
+          height: h,
+          aspectRatio: ar,
+          caption: caption,
+          position: idx,
+          isLikelyContent: isContent,
+        });
+      });
+
+      var seen = {};
+      var unique = [];
+      for (var i = 0; i < images.length; i++) {
+        if (!seen[images[i].url]) { seen[images[i].url] = true; unique.push(images[i]); }
+      }
+      unique.sort(function(a, b) {
+        if (a.isLikelyContent !== b.isLikelyContent) return a.isLikelyContent ? -1 : 1;
+        return (b.width * b.height) - (a.width * a.height);
+      });
+      return unique.slice(0, 30);
+    }
+
+    // ========== 收集话题标签 ==========
+    function collectTags(tagsSelector) {
+      if (!tagsSelector) return [];
+      var tags = [];
+      var seen = {};
+
+      function addTag(text) {
+        if (!text) return;
+        // 去掉 # 号前缀
+        text = text.replace(/^#+/, '').trim();
+        if (!text || text.length > 30 || seen[text]) return;
+        seen[text] = true;
+        tags.push(text);
+      }
+
+      var els = document.querySelectorAll(tagsSelector);
+
+      // 情况1：单个元素包含多个标签（用 # 或空格分隔）
+      if (els.length === 1) {
+        var text = (els[0].textContent || '').trim();
+        if (text) {
+          // 按 # 号或空格分割
+          var parts = text.split(/[#\s,，]+/).filter(function(t) { return t.trim(); });
+          parts.forEach(function(p) { addTag(p); });
+        }
+        return tags.slice(0, 20);
+      }
+
+      // 情况2：多个元素，每个元素一个标签
+      els.forEach(function(el) {
+        var text = (el.textContent || '').trim();
+        addTag(text);
+      });
+
+      return tags.slice(0, 20);
+    }
+
+    // ========== 提取字段 ==========
+    function queryText(sel) {
+      if (!sel) return '';
+      var el = document.querySelector(sel);
+      if (!el) return '';
+      // 如果是表单元素，优先取 value
+      var tag = el.tagName.toLowerCase();
+      if (tag === 'input' || tag === 'textarea') {
+        return (el.value || '').trim();
+      }
+      if (tag === 'select') {
+        return (el.value || '').trim();
+      }
+      return (el.textContent || '').trim();
+    }
+
+    var contentEl = document.querySelector(${contentSel});
+    if (!contentEl) return null;
+
+    // 先同步表单元素的值到 DOM
+    syncFormValues(contentEl);
+
+    var title = queryText(${titleSel}) || document.title || '';
+    var contentHTML = cleanContentHTML(contentEl);
+    var textContent = cleanText(contentEl.textContent || '');
+    var byline = queryText(${bylineSel});
+    var dateStr = queryText(${dateSel});
+    var images = collectImages(contentEl, ${imageSel});
+    var tags = collectTags(${tagsSel});
+
+    if (textContent.length < 50) return null;
+
+    var confidence = 85;
+    if (textContent.length > 1000) confidence += 5;
+    if (images.length > 0) confidence += 5;
+    if (byline) confidence += 5;
+    if (tags.length > 0) confidence += 2;
+    confidence = Math.min(confidence, 100);
+
+    return {
+      title: cleanText(title),
+      content: contentHTML,
+      textContent: textContent,
+      excerpt: textContent.slice(0, 200),
+      byline: byline,
+      length: textContent.length,
+      siteName: ${siteName},
+      pageUrl: ${JSON.stringify(pageUrl)},
+      images: images,
+      tags: tags,
+      extractStrategy: 'custom-rule',
+      confidence: confidence,
+    };
+  } catch(e) {
+    return { error: e.message };
+  }
+})()
+`;
+
+    const result = await wc.executeJavaScript(script);
+    if (result && !result.error) {
+      return result as ExtractedContent;
+    }
+    if (result?.error) {
+      logger.warn(`[ContentExtractor] 自定义规则提取脚本错误: ${result.error}`);
+    }
+    return null;
+  } catch (e) {
+    logger.warn('[ContentExtractor] 自定义规则提取失败:', e);
+    return null;
+  }
+}
+
 // ========== 手动提取：从指定元素提取 ==========
 
 export async function extractContentFromElement(
@@ -661,6 +1056,68 @@ export async function extractContentFromElement(
     logger.error('[ContentExtractor] 手动提取 error:', e);
     throw new Error(`手动提取失败: ${e instanceof Error ? e.message : String(e)}`);
   }
+}
+
+/**
+ * 使用指定的自定义规则提取页面内容
+ * 不回退，强制使用该规则
+ */
+export async function extractWithCustomRule(
+  viewId: string,
+  ruleId: string,
+): Promise<ExtractedContent | null> {
+  const wc = getViewWebContents(viewId);
+  if (!wc) throw new Error('视图不存在');
+
+  const rule = siteRuleManager.getRuleById(ruleId);
+  if (!rule) throw new Error('规则不存在');
+
+  const pageUrl = wc.getURL();
+  const result = await tryCustomSiteRuleExtract(wc, rule, pageUrl);
+
+  if (result) {
+    siteRuleManager.incrementUsage(ruleId);
+    logger.info(`[ContentExtractor] 使用规则提取成功: ${rule.name}`);
+  } else {
+    logger.warn(`[ContentExtractor] 使用规则提取失败: ${rule.name}`);
+  }
+
+  return result;
+}
+
+/**
+ * 测试规则（用于编辑器实时预览）
+ */
+export async function testRuleWithView(
+  viewId: string,
+  rule: Partial<CustomSiteRule> & { contentSelector: string },
+): Promise<ExtractedContent | null> {
+  const wc = getViewWebContents(viewId);
+  if (!wc) throw new Error('视图不存在');
+
+  const pageUrl = wc.getURL();
+  const mockRule: CustomSiteRule = {
+    id: 'test',
+    name: '测试规则',
+    enabled: true,
+    matchType: 'domain',
+    matchValue: '',
+    contentTypes: [],
+    contentSelector: rule.contentSelector,
+    titleSelector: rule.titleSelector,
+    bylineSelector: rule.bylineSelector,
+    dateSelector: rule.dateSelector,
+    siteName: rule.siteName,
+    imageSelector: rule.imageSelector,
+    tagsSelector: rule.tagsSelector,
+    removeSelectors: rule.removeSelectors || [],
+    source: 'manual',
+    useCount: 0,
+    createdAt: 0,
+    updatedAt: 0,
+  };
+
+  return await tryCustomSiteRuleExtract(wc, mockRule, pageUrl);
 }
 
 // ========== 注入元素选择器脚本（进入选择模式） ==========
@@ -907,6 +1364,49 @@ function buildAutoExtractScript(): string {
     // ========== 5. 清理内容 ==========
     var clone = bestEl.cloneNode(true);
 
+    // 先同步表单元素的值到 DOM（input/textarea 的值在 .value 中，不在 textContent 里）
+    (function syncFormValues(el) {
+      try {
+        // 从真实 DOM 获取值（因为 clone 的 value 属性不会被复制）
+        var realInputs = bestEl.querySelectorAll('input');
+        var cloneInputs = el.querySelectorAll('input');
+        for (var i = 0; i < realInputs.length && i < cloneInputs.length; i++) {
+          var realInput = realInputs[i];
+          var cloneInput = cloneInputs[i];
+          var type = (realInput.type || 'text').toLowerCase();
+          if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image'].indexOf(type) >= 0) continue;
+          var val = realInput.value || '';
+          if (val.trim()) {
+            cloneInput.textContent = val;
+            cloneInput.setAttribute('value', val);
+          }
+        }
+        // textarea
+        var realTextareas = bestEl.querySelectorAll('textarea');
+        var cloneTextareas = el.querySelectorAll('textarea');
+        for (var j = 0; j < realTextareas.length && j < cloneTextareas.length; j++) {
+          var realTa = realTextareas[j];
+          var cloneTa = cloneTextareas[j];
+          var tVal = realTa.value || '';
+          if (tVal.trim()) {
+            cloneTa.textContent = tVal;
+          }
+        }
+        // select
+        var realSelects = bestEl.querySelectorAll('select');
+        var cloneSelects = el.querySelectorAll('select');
+        for (var k = 0; k < realSelects.length && k < cloneSelects.length; k++) {
+          var realSel = realSelects[k];
+          var cloneSel = cloneSelects[k];
+          var sVal = realSel.value || '';
+          var sText = realSel.options && realSel.options[realSel.selectedIndex] ? realSel.options[realSel.selectedIndex].text : '';
+          if (sVal || sText) {
+            cloneSel.textContent = sText || sVal;
+          }
+        }
+      } catch(e) {}
+    })(clone);
+
     var removeSelectors = [
       'script', 'style', 'noscript', 'iframe', 'svg:not(:has(img))',
       'nav', 'header:not(article header)', 'footer:not(article footer)', 'aside',
@@ -918,7 +1418,7 @@ function buildAutoExtractScript(): string {
       '.toolbar', '.action', '.actions', '.btn-group', '.button-group',
       '.login', '.register', '.popup', '.modal', '.dialog',
       '.breadcrumb', '.search', '.search-box',
-      'form', 'input', 'button', 'select', 'textarea',
+      'button',
       '[class*="ad-"]', '[class*="ads-"]', '[class*="advert"]',
       '[class*="banner"]', '[class*="popup"]', '[class*="modal"]',
       '[id*="ad-"]', '[id*="ads-"]', '[id*="banner"]',
@@ -929,6 +1429,22 @@ function buildAutoExtractScript(): string {
       try {
         clone.querySelectorAll(sel).forEach(function(el) { el.remove(); });
       } catch(e) {}
+    });
+
+    // 处理表单元素：将有内容的 input/textarea 转换为 span，保留文本内容
+    // 空的表单元素直接移除
+    clone.querySelectorAll('input, textarea, select').forEach(function(el) {
+      var txt = (el.textContent || '').trim();
+      if (txt) {
+        // 有内容，替换为 span 保留文本
+        var span = document.createElement('span');
+        span.textContent = txt;
+        span.className = 'extracted-form-value';
+        el.parentNode && el.parentNode.replaceChild(span, el);
+      } else {
+        // 无内容，移除
+        el.remove();
+      }
     });
 
     // 移除空的块级元素
@@ -1134,7 +1650,74 @@ function buildManualExtractScript(selector: string): string {
 
     // 清理：移除脚本和样式
     var clone = el.cloneNode(true);
-    clone.querySelectorAll('script, style, noscript, iframe, form, input, button, [hidden]').forEach(function(n) { n.remove(); });
+
+    // 同步表单元素的值到 DOM（从真实 DOM 读取 value）
+    (function syncFormValues(realEl, cloneEl) {
+      try {
+        // 先处理元素自身（如果选中的就是 input/textarea/select）
+        var selfTag = realEl.tagName ? realEl.tagName.toLowerCase() : '';
+        if (selfTag === 'input') {
+          var st = (realEl.type || 'text').toLowerCase();
+          if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image'].indexOf(st) < 0) {
+            var sv = realEl.value || '';
+            if (sv.trim()) {
+              cloneEl.textContent = sv;
+              cloneEl.setAttribute('value', sv);
+            }
+          }
+        } else if (selfTag === 'textarea') {
+          var stv = realEl.value || '';
+          if (stv.trim()) { cloneEl.textContent = stv; }
+        } else if (selfTag === 'select') {
+          var ssv = realEl.value || '';
+          var sst = realEl.options && realEl.options[realEl.selectedIndex] ? realEl.options[realEl.selectedIndex].text : '';
+          if (ssv || sst) { cloneEl.textContent = sst || ssv; }
+        }
+        var realInputs = realEl.querySelectorAll('input');
+        var cloneInputs = cloneEl.querySelectorAll('input');
+        for (var i = 0; i < realInputs.length && i < cloneInputs.length; i++) {
+          var type = (realInputs[i].type || 'text').toLowerCase();
+          if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image'].indexOf(type) >= 0) continue;
+          var val = realInputs[i].value || '';
+          if (val.trim()) {
+            cloneInputs[i].textContent = val;
+            cloneInputs[i].setAttribute('value', val);
+          }
+        }
+        var realTas = realEl.querySelectorAll('textarea');
+        var cloneTas = cloneEl.querySelectorAll('textarea');
+        for (var j = 0; j < realTas.length && j < cloneTas.length; j++) {
+          var tVal = realTas[j].value || '';
+          if (tVal.trim()) {
+            cloneTas[j].textContent = tVal;
+          }
+        }
+        var realSels = realEl.querySelectorAll('select');
+        var cloneSels = cloneEl.querySelectorAll('select');
+        for (var k = 0; k < realSels.length && k < cloneSels.length; k++) {
+          var sVal = realSels[k].value || '';
+          var sText = realSels[k].options && realSels[k].options[realSels[k].selectedIndex] ? realSels[k].options[realSels[k].selectedIndex].text : '';
+          if (sVal || sText) {
+            cloneSels[k].textContent = sText || sVal;
+          }
+        }
+      } catch(e) {}
+    })(el, clone);
+
+    clone.querySelectorAll('script, style, noscript, iframe, button, [hidden]').forEach(function(n) { n.remove(); });
+
+    // 处理表单元素：有内容的保留为文本，空的移除
+    clone.querySelectorAll('input, textarea, select').forEach(function(formEl) {
+      var txt = (formEl.textContent || '').trim();
+      if (txt) {
+        var span = document.createElement('span');
+        span.textContent = txt;
+        span.className = 'extracted-form-value';
+        formEl.parentNode && formEl.parentNode.replaceChild(span, formEl);
+      } else {
+        formEl.remove();
+      }
+    });
 
     // 图片收集（复用同样的过滤逻辑）
     var images = [];

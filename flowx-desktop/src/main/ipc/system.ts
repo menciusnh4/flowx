@@ -1,7 +1,8 @@
-import { ipcMain, shell, app, dialog, BrowserWindow } from 'electron';
+import { ipcMain, shell, app, dialog, BrowserWindow, Menu, MenuItem } from 'electron';
 import { safeInvoke } from './index';
 import type { SystemInfo, UpdateInfo, PublishLogQuery } from '../../types';
 import { getMainWindow } from '../windows/MainWindow';
+import { createAboutWindow } from '../windows/AboutWindow';
 import { getLogsDir, getPublishLogPath, getMainLogPath, queryPublishLogs, clearPublishLogs, listLogFiles, getLogPathByDate } from '../utils/logger';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -68,6 +69,19 @@ export function registerSystemIpc(): void {
 
   // 自动更新（骨架实现，真实环境需要配置 electron-updater feed）
   safeInvoke('update:check', (): UpdateInfo => ({ available: false }));
+
+  // 读取 CHANGELOG.md 内容（用于关于对话框）
+  safeInvoke('system:readChangelog', (): string => {
+    try {
+      const changelogPath = path.join(app.getAppPath(), 'CHANGELOG.md');
+      if (fs.existsSync(changelogPath)) {
+        return fs.readFileSync(changelogPath, 'utf-8');
+      }
+      return '';
+    } catch {
+      return '';
+    }
+  });
 
   // --- 日志管理 ---
 
@@ -184,5 +198,76 @@ export function registerSystemIpc(): void {
       mainPath,
       publishPath,
     };
+  });
+
+  // ========== 原生菜单（用于顶部导航栏下拉，避免 WebContentsView 遮挡）==========
+
+  interface NativeMenuItem {
+    id: string;
+    label: string;
+    icon?: string;
+    enabled?: boolean;
+    type?: 'normal' | 'separator' | 'submenu';
+    submenu?: NativeMenuItem[];
+  }
+
+  /**
+   * 弹出原生上下文菜单，返回被点击的菜单项 id
+   * 用于顶部导航栏的下拉菜单，原生菜单层级高于 WebContentsView，不会被遮挡
+   */
+  safeInvoke('system:popupNativeMenu', async (items: NativeMenuItem[], x?: number, y?: number): Promise<string | null> => {
+    const win = getMainWindow();
+    if (!win) return null;
+
+    return new Promise((resolve) => {
+      let selectedId: string | null = null;
+      let resolved = false;
+
+      const buildTemplate = (menuItems: NativeMenuItem[]): Electron.MenuItemConstructorOptions[] => {
+        return menuItems.map((item) => {
+          if (item.type === 'separator') {
+            return { type: 'separator' } as Electron.MenuItemConstructorOptions;
+          }
+          if (item.type === 'submenu' && item.submenu) {
+            return {
+              label: item.label,
+              submenu: buildTemplate(item.submenu),
+              enabled: item.enabled !== false,
+            } as Electron.MenuItemConstructorOptions;
+          }
+          return {
+            label: item.label,
+            enabled: item.enabled !== false,
+            click: () => {
+              if (!resolved) {
+                selectedId = item.id;
+              }
+            },
+          } as Electron.MenuItemConstructorOptions;
+        });
+      };
+
+      const template = buildTemplate(items);
+      const menu = Menu.buildFromTemplate(template);
+
+      // popup 的 callback 在菜单关闭时调用（无论是否点击了项）
+      menu.popup({
+        window: win,
+        x: x != null ? Math.round(x) : undefined,
+        y: y != null ? Math.round(y) : undefined,
+        callback: () => {
+          if (!resolved) {
+            resolved = true;
+            resolve(selectedId);
+          }
+        },
+      });
+    });
+  });
+
+  // 打开关于窗口（独立 BrowserWindow，避免 WebContentsView 遮挡）
+  safeInvoke('system:openAboutWindow', async (): Promise<boolean> => {
+    await createAboutWindow();
+    return true;
   });
 }

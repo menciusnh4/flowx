@@ -467,11 +467,136 @@ export interface ExtractedContent {
   /** 提取到的图片列表（已过滤） */
   images: ExtractedImage[];
   /** 提取策略 */
-  extractStrategy?: 'auto' | 'manual' | 'readability' | 'site-rule';
+  extractStrategy?: 'auto' | 'manual' | 'readability' | 'site-rule' | 'custom-rule';
   /** 置信度评分 0-100 */
   confidence?: number;
   /** 是否仅提取了图片（无文本内容） */
   isImageOnly?: boolean;
+  /** 话题/标签列表 */
+  tags?: string[];
+}
+
+// ========== 自定义站点规则 ==========
+
+/** 规则匹配方式 */
+export type RuleMatchType = 'domain' | 'regex';
+
+/** 发布类型（用于规则匹配和右键菜单排序） */
+export type PublishContentType = 'image-text' | 'video' | 'article';
+
+/** 自定义站点规则 */
+export interface CustomSiteRule {
+  /** 规则唯一 ID */
+  id: string;
+  /** 规则名称 */
+  name: string;
+  /** 是否启用 */
+  enabled: boolean;
+
+  // ===== 匹配规则 =====
+  /** 匹配方式：domain（域名包含） / regex（正则表达式） */
+  matchType: RuleMatchType;
+  /** 匹配值：domain 模式下是域名字符串，regex 模式下是正则表达式字符串 */
+  matchValue: string;
+  /** 路径匹配（可选，进一步限制路径范围） */
+  pathPattern?: string;
+  /**
+   * 适用的发布类型（可多选）
+   * 为空数组表示适用于所有类型
+   */
+  contentTypes: PublishContentType[];
+
+  // ===== 提取规则 =====
+  /** 标题选择器（CSS 选择器，可为空） */
+  titleSelector?: string;
+  /** 正文选择器（CSS 选择器，必填） */
+  contentSelector: string;
+  /** 作者/来源选择器（可选） */
+  bylineSelector?: string;
+  /** 发布时间选择器（可选） */
+  dateSelector?: string;
+  /** 站点名称（可选，不填则自动从页面获取） */
+  siteName?: string;
+  /** 图片选择器（可选，不填则从正文内自动查找） */
+  imageSelector?: string;
+  /** 话题/标签选择器（可选，提取文章的话题标签列表） */
+  tagsSelector?: string;
+  /** 需要移除的噪音元素选择器列表 */
+  removeSelectors: string[];
+
+  // ===== 元数据 =====
+  /** 规则备注/说明 */
+  remark?: string;
+  /** 规则来源：manual（手动创建）/ quick-save（一键保存）/ import（导入） */
+  source: 'manual' | 'quick-save' | 'import';
+  /** 使用次数统计 */
+  useCount: number;
+  /** 最后使用时间 */
+  lastUsedAt?: number;
+  /** 创建时间 */
+  createdAt: number;
+  /** 更新时间 */
+  updatedAt: number;
+}
+
+/** 拾取器字段类型 */
+export type PickerFieldType =
+  | 'title'
+  | 'content'
+  | 'image'
+  | 'tags'
+  | 'byline'
+  | 'date'
+  | 'remove';
+
+/** 拾取器结果 */
+export interface PickerResult {
+  /** 拾取的字段类型 */
+  pickerType: PickerFieldType;
+  /** 生成的 CSS 选择器 */
+  selector: string;
+  /** 拾取模式 */
+  mode: 'single' | 'multi';
+  /** 选中的元素数量 */
+  selectedCount: number;
+  /** 多选模式下推断选择器匹配的元素数 */
+  matchCount?: number;
+  /** 元素文本预览 */
+  previewText?: string;
+}
+
+/** 草稿规则（快速拾取时的临时状态） */
+export interface RuleDraft {
+  name: string;
+  matchType: 'domain';
+  matchValue: string;
+  contentTypes: PublishContentType[];
+  titleSelector?: string;
+  contentSelector?: string;
+  bylineSelector?: string;
+  dateSelector?: string;
+  imageSelector?: string;
+  tagsSelector?: string;
+  removeSelectors: string[];
+  /** 拾取会话是否进行中 */
+  pickerSessionActive: boolean;
+  /** 最后一次拾取的字段类型 */
+  lastPickerType?: PickerFieldType;
+}
+
+/** 规则测试结果 */
+export interface RuleTestResult {
+  success: boolean;
+  title?: string;
+  contentLength?: number;
+  imageCount?: number;
+  tags?: string[];
+  error?: string;
+  preview?: {
+    title: string;
+    excerpt: string;
+    imageCount: number;
+  };
 }
 
 /** 账号创作中心内嵌 webview 共享类型（主进程 / 渲染进程） */

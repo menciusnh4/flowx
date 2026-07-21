@@ -12,10 +12,13 @@ import {
   setIgnoreCertErrors,
   isIgnoringCertErrors,
 } from '../services/BrowserService';
-import { extractContentFromView, extractContentFromElement, startElementSelector, stopElementSelector } from '../services/ContentExtractor';
+import { extractContentFromView, extractContentFromElement, startElementSelector, stopElementSelector, extractWithCustomRule, testRuleWithView } from '../services/ContentExtractor';
 import { downloadImages } from '../services/ImageDownloader';
+import { siteRuleManager } from '../services/SiteRuleManager';
+import { elementPicker } from '../services/ElementPicker';
 import type { BrowserViewInfo } from '../services/BrowserService';
 import type { ExtractedContent } from '../services/ContentExtractor';
+import type { CustomSiteRule, PickerFieldType, RuleTestResult } from '../../types';
 import fs from 'fs';
 import path from 'path';
 
@@ -144,6 +147,91 @@ export function registerBrowserIpc(): void {
     'browser:getImageDataUrl',
     (filePath: string) => {
       return getImageDataUrl(filePath);
+    },
+  );
+
+  // ========== 自定义站点规则 ==========
+
+  safeInvoke<CustomSiteRule[]>(
+    'browser:listCustomRules',
+    () => {
+      return siteRuleManager.getCustomRules();
+    },
+  );
+
+  safeInvoke<CustomSiteRule | null>(
+    'browser:getCustomRule',
+    (id: string) => {
+      return siteRuleManager.getRuleById(id);
+    },
+  );
+
+  safeInvoke<CustomSiteRule>(
+    'browser:createCustomRule',
+    (data: Omit<CustomSiteRule, 'id' | 'createdAt' | 'updatedAt' | 'useCount'>) => {
+      return siteRuleManager.createRule(data);
+    },
+  );
+
+  safeInvoke<CustomSiteRule | null>(
+    'browser:updateCustomRule',
+    (id: string, patch: Partial<CustomSiteRule>) => {
+      return siteRuleManager.updateRule(id, patch);
+    },
+  );
+
+  safeInvoke<boolean>(
+    'browser:deleteCustomRule',
+    (id: string) => {
+      return siteRuleManager.deleteRule(id);
+    },
+  );
+
+  safeInvoke<boolean>(
+    'browser:toggleCustomRule',
+    (id: string) => {
+      return siteRuleManager.toggleRule(id);
+    },
+  );
+
+  safeInvoke<ExtractedContent | null>(
+    'browser:testCustomRule',
+    (viewId: string, rule: Partial<CustomSiteRule> & { contentSelector: string }) => {
+      return testRuleWithView(viewId, rule);
+    },
+  );
+
+  safeInvoke<ExtractedContent | null>(
+    'browser:applyCustomRule',
+    (viewId: string, ruleId: string) => {
+      return extractWithCustomRule(viewId, ruleId);
+    },
+  );
+
+  // ========== 元素拾取器 ==========
+
+  safeInvoke<boolean>(
+    'browser:startPicker',
+    (viewId: string, fieldType: PickerFieldType, mode: 'single' | 'multi' = 'single') => {
+      return elementPicker.startPicker(viewId, fieldType, mode);
+    },
+  );
+
+  safeInvoke<boolean>(
+    'browser:stopPicker',
+    (viewId: string) => {
+      return elementPicker.stopPicker(viewId);
+    },
+  );
+
+  // ========== 当前发布类型（供右键菜单排序） ==========
+
+  safeInvoke<boolean>(
+    'browser:setCurrentPublishType',
+    (type: string) => {
+      // 存储当前发布类型到全局变量，供右键菜单使用
+      (global as any).__currentPublishType = type;
+      return true;
     },
   );
 }

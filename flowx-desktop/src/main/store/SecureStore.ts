@@ -1,12 +1,13 @@
 import { safeStorage, app } from 'electron';
 import Store from 'electron-store';
 import { logger } from '../utils/logger';
-import type { AccountCredential, PublishTask, AccountCategory, BrowserEnvironment, ProxyConfig, PublishDraft, BrowserBookmark, BrowserBookmarkFolder, BrowserHistoryItem } from '../../types';
+import type { AccountCredential, PublishTask, AccountCategory, BrowserEnvironment, ProxyConfig, PublishDraft, BrowserBookmark, BrowserBookmarkFolder, BrowserHistoryItem, CustomSiteRule } from '../../types';
 
 // 本地加密存储（主进程单例）
 // - accounts: 账号列表（含凭证）
 // - publishTasks: 发布历史
 // - settings: 通用配置
+// - customSiteRules: 自定义站点规则
 //
 // 敏感字段（cookies/access_token 等）使用 Electron safeStorage 加密。
 
@@ -25,6 +26,7 @@ interface StoreSchema {
   browserBookmarkFolders: BrowserBookmarkFolder[];
   browserHistory: BrowserHistoryItem[];
   compliance?: { promptEnabled: boolean };
+  customSiteRules: CustomSiteRule[];
 }
 
 let store: Store<StoreSchema> | null = null;
@@ -47,6 +49,7 @@ export function initStore() {
       browserBookmarks: [],
       browserBookmarkFolders: [],
       browserHistory: [],
+      customSiteRules: [],
     },
   });
 

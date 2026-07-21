@@ -96,6 +96,12 @@
             </button>
           </div>
         </div>
+
+        <!-- 关于 FlowX（独立窗口，非任务页签） -->
+        <button class="nav-item" @click="openAboutWindow">
+          <span class="ic">ℹ️</span>
+          <span>关于</span>
+        </button>
       </nav>
 
       <div class="sidebar-foot">
@@ -154,6 +160,7 @@ const settingsNav: NavSubItem[] = [
   { index: '/settings/proxies', label: '代理 IP 设置', icon: '🔀' },
   { index: '/settings/api', label: '对外接口', icon: '🔌' },
   { index: '/settings/logs', label: '日志管理', icon: '📜' },
+  { index: '/settings/rules', label: '提取规则', icon: '📋' },
 ];
 
 // 工作台：可展开二级菜单（草稿准备 + 平台浏览）
@@ -184,6 +191,14 @@ function toggleSettings() {
 }
 function toggleWorkbench() {
   workbenchOpen.value = !workbenchOpen.value;
+}
+
+async function openAboutWindow() {
+  try {
+    await electronApi.openAboutWindow();
+  } catch (e) {
+    ElMessage.error(`打开关于窗口失败：${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 onMounted(async () => {

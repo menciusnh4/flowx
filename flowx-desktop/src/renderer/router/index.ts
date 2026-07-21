@@ -19,8 +19,11 @@ const routes: RouteRecordRaw[] = [
   { path: '/history', redirect: '/publish/history' },
   { path: '/settings/environments', name: 'environments', component: () => import('@/pages/BrowserEnvPanel.vue'), meta: { title: '环境配置' } },
   { path: '/settings/proxies', name: 'proxies', component: () => import('@/pages/ProxyPanel.vue'), meta: { title: '代理 IP 设置' } },
+  { path: '/settings/rules', name: 'rules', component: () => import('@/pages/RulesPanel.vue'), meta: { title: '提取规则' } },
   { path: '/settings/api', name: 'api', component: () => import('@/pages/ApiPanel.vue'), meta: { title: '对外接口' } },
   { path: '/settings/logs', name: 'logs', component: () => import('@/pages/LogPanel.vue'), meta: { title: '日志管理' } },
+  // 关于窗口（独立 BrowserWindow 使用）
+  { path: '/about-window', name: 'about-window', component: () => import('@/pages/AboutWindow.vue'), meta: { title: '关于 FlowX', hideHeader: true } },
 ];
 
 export const router = createRouter({
