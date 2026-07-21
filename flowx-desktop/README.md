@@ -76,6 +76,7 @@ flowx-desktop/
 │   │   │   └── system.ts             # 系统信息 / 日志
 │   │   ├── windows/
 │   │   │   ├── MainWindow.ts         # 主窗口
+│   │   │   ├── AboutWindow.ts        # 关于窗口（独立模态窗口，避免 WebContentsView 遮挡）
 │   │   │   └── AccountBrowserView.ts # 账号浏览窗口
 │   │   ├── store/
 │   │   │   └── SecureStore.ts        # 加密存储（safeStorage + electron-store）
@@ -90,6 +91,7 @@ flowx-desktop/
 │   │   │   ├── Publish.vue           # 一键发布
 │   │   │   ├── History.vue           # 发布历史（重试/编辑重发/重新测试/立即发布）
 │   │   │   ├── Browser.vue           # 浏览器（多标签 + 内容提取 + 发布表单分栏 + 规则面板）
+│   │   │   ├── AboutWindow.vue       # 关于窗口页面（独立窗口，无 header）
 │   │   │   ├── RulesPanel.vue        # 站点规则管理（全局规则列表）
 │   │   │   └── DraftBox.vue          # 草稿箱
 │   │   ├── components/
@@ -268,7 +270,7 @@ Vue 响应式更新 → 进度面板刷新
 
 - **项目总览 README**：[上层目录 README](../README.md)
 - **完整设计文档**：[../设计文档.md](../设计文档.md)（包含 PlatformDispatcher 工厂方法模式）
-- **用户自定义站点规则设计方案**：[`docs/用户自定义站点规则设计方案.html`](./docs/用户自定义站点规则设计方案.html)（可视化拾取 / 规则匹配 / 浏览器规则面板）
+- **用户自定义站点规则设计方案**：[`docs/用户自定义站点规则设计方案.md`](./docs/用户自定义站点规则设计方案.md)（可视化拾取 / 规则匹配 / 浏览器规则面板 / 顶部导航栏层级优化）
 - **第四阶段-高级特性设计方案**：[`docs/第四阶段-高级特性设计方案.html`](./docs/第四阶段-高级特性设计方案.html)
 - **浏览器与内容提取设计文档**：[`../content-extraction-optimization/content-extraction-optimization.html`](../content-extraction-optimization/content-extraction-optimization.html)
 - **浏览器提取设计文档**：[`docs/浏览器提取设计文档.html`](./docs/浏览器提取设计文档.html)

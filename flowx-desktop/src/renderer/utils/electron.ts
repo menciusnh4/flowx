@@ -185,6 +185,18 @@ export const electronApi = {
   async closeWindow(): Promise<boolean> {
     return invokeElectron('system.closeWindow', 'system:closeWindow');
   },
+  // 原生菜单（用于顶部导航栏下拉，避免 WebContentsView 遮挡）
+  async popupNativeMenu(
+    items: Array<{ id: string; label: string; enabled?: boolean; type?: 'normal' | 'separator' | 'submenu'; submenu?: any[] }>,
+    x?: number,
+    y?: number,
+  ): Promise<string | null> {
+    return invokeElectron('system.popupNativeMenu', 'system:popupNativeMenu', items, x, y);
+  },
+  // 打开关于窗口（独立 BrowserWindow，避免 WebContentsView 遮挡）
+  async openAboutWindow(): Promise<boolean> {
+    return invokeElectron('system.openAboutWindow', 'system:openAboutWindow');
+  },
 
   // 日志管理
   async readMainLog(options?: { limit?: number; date?: string }): Promise<string> {

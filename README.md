@@ -94,7 +94,7 @@ flowx/
 │   │   │   ├── services/           # 核心服务（账号/发布引擎/平台适配）
 │   │   │   ├── ipc/                # IPC 通道（账号/发布/系统）
 │   │   │   ├── store/              # 加密本地存储（electron-store + safeStorage）
-│   │   │   └── windows/            # 窗口管理（主窗口/发布窗口）
+│   │   │   └── windows/            # 窗口管理（主窗口/发布窗口/关于窗口）
 │   │   ├── preload/                # 主进程/渲染进程安全桥接
 │   │   ├── renderer/               # Vue 3 前端
 │   │   │   ├── pages/              # 页面（账号管理/发布/仪表盘）
@@ -141,7 +141,7 @@ flowx/
 | 文档 | 路径 | 说明 |
 |:---|:---|:---|
 | **设计文档** | [`设计文档.md`](./设计文档.md) | 完整架构设计、模块说明、扩展指南（含 PlatformDispatcher 工厂方法模式） |
-| **用户自定义站点规则设计方案** | [`flowx-desktop/docs/用户自定义站点规则设计方案.html`](./flowx-desktop/docs/用户自定义站点规则设计方案.html) | 可视化元素拾取 / 规则匹配评分 / 浏览器内规则管理面板 |
+| **用户自定义站点规则设计方案** | [`flowx-desktop/docs/用户自定义站点规则设计方案.md`](./flowx-desktop/docs/用户自定义站点规则设计方案.md) | 可视化元素拾取 / 规则匹配评分 / 浏览器内规则管理面板 / 顶部导航栏层级优化 |
 | **第四阶段-高级特性设计方案** | [`flowx-desktop/docs/第四阶段-高级特性设计方案.html`](./flowx-desktop/docs/第四阶段-高级特性设计方案.html) | 缓存优化 / 预提取 / 用户反馈 / 统计分析 |
 | **内容提取优化设计文档** | [`flowx-desktop/docs/内容提取优化设计文档.html`](./flowx-desktop/docs/内容提取优化设计文档.html) | 多策略提取引擎 / 图片智能过滤 / 置信度评分 |
 | **浏览器提取设计文档** | [`flowx-desktop/docs/浏览器提取设计文档.html`](./flowx-desktop/docs/浏览器提取设计文档.html) | 多标签浏览器 / 分栏布局 / 右键菜单提取 |
