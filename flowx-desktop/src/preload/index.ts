@@ -151,6 +151,14 @@ contextBridge.exposeInMainWorld('electron', {
       invoke('system:showSaveDialog', options),
     minimizeWindow: (): Promise<boolean> => invoke('system:minimizeWindow'),
     closeWindow: (): Promise<boolean> => invoke('system:closeWindow'),
+    // 原生菜单（用于顶部导航栏下拉，避免 WebContentsView 遮挡）
+    popupNativeMenu: (
+      items: Array<{ id: string; label: string; enabled?: boolean; type?: 'normal' | 'separator' | 'submenu'; submenu?: any[] }>,
+      x?: number,
+      y?: number,
+    ): Promise<string | null> => invoke('system:popupNativeMenu', items, x, y),
+    // 打开关于窗口（独立 BrowserWindow，避免 WebContentsView 遮挡）
+    openAboutWindow: (): Promise<boolean> => invoke('system:openAboutWindow'),
   },
 
   // ========== 日志管理 ==========
