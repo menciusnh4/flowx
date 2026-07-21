@@ -4,6 +4,71 @@ All notable changes to the FlowX Desktop project will be documented in this file
 
 ---
 
+## [v0.1.3] - 2026-07-21
+
+> 浏览器层级体验优化 · 原生菜单 · 独立模态窗口 · 拾取器滚动同步
+
+### ✨ 亮点速览
+
+- 🖱️ **顶部导航栏原生菜单** — 系统配置改用 Electron 原生 Menu，彻底解决 WebContentsView 遮挡问题，浏览器不再闪烁
+- 🪟 **关于窗口独立化** — 「关于」改为独立模态 BrowserWindow，打开时浏览器内容不消失
+- 🎯 **拾取器滚动同步** — 修复元素拾取器高亮框在网页滚动时错位的问题，滚动实时跟随
+- 📄 **设计文档 Markdown 化** — 用户自定义站点规则设计方案新增 Markdown 版本，新增顶部导航栏层级优化章节
+
+### 🚀 新功能
+
+#### 1. 原生菜单替换 HTML 下拉
+
+顶部导航栏的「系统配置」下拉菜单改用 Electron 原生 `Menu` 实现，从根本上解决 WebContentsView 层级遮挡问题。
+
+- **原生菜单层级最高**：由操作系统管理，不会被 WebContentsView 遮挡
+- **浏览器零闪烁**：移除了顶部导航栏 hover 隐藏浏览器的临时方案，鼠标经过导航栏时浏览器完全不动
+- **菜单项独立触发器**：用 `div.native-menu-trigger` + 自定义样式替代 `el-menu-item`，脱离 `el-menu` 事件系统，避免事件冲突
+- **IPC 封装**：主进程 `system:popupNativeMenu`，渲染进程 `electronApi.popupNativeMenu()`
+
+#### 2. 关于窗口独立 BrowserWindow
+
+「关于」对话框从 `el-dialog` 改为独立的模态 `BrowserWindow`，打开时不再需要隐藏浏览器。
+
+- **模态窗口**：`modal: true` + `parent: mainWindow`，保持模态对话框的交互体验
+- **无导航栏模式**：路由新增 `meta.hideHeader` 标记，`App.vue` 条件渲染顶部导航栏
+- **独立页面组件**：新增 `AboutWindow.vue`，内容与原对话框一致
+- **居中显示**：相对于主窗口居中，大小固定 720×600
+
+#### 3. 元素拾取器滚动同步修复
+
+修复了浏览器规则配置中「拾取网页元素」功能在网页滚动时高亮框错位的问题。
+
+- **坐标计算修正**：`getBoundingClientRect()` 返回视口坐标，`position: fixed` 用视口坐标，去除多余的 `scrollX/scrollY` 偏移
+- **滚动实时同步**：监听 `window.scroll` 事件，滚动时刷新所有高亮框位置
+- **窗口缩放同步**：监听 `window.resize` 事件，窗口大小变化时也刷新位置
+- **性能优化**：使用 `requestAnimationFrame` 节流，避免滚动时高频重绘
+
+### 🐛 修复
+
+- 修复顶部导航栏下拉菜单被 WebContentsView 遮挡的问题
+- 修复点击「关于」时浏览器内容隐藏的问题
+- 修复元素拾取器高亮框在网页滚动时错位的问题
+- 修复元素拾取器高亮框位置计算偏移的问题（双重滚动偏移）
+
+### 📝 文档
+
+- 新增 `用户自定义站点规则设计方案.md`（Markdown 版本，从 HTML 转换）
+- 设计文档新增第 13.3 节：顶部导航栏下拉菜单层级问题
+- 设计文档版本升级至 1.2
+- README 目录结构更新（新增 AboutWindow.ts / AboutWindow.vue）
+- 文档索引链接更新为 Markdown 版本
+
+### 📦 技术细节
+
+| 类别 | 详情 |
+|------|------|
+| 新增文件 | `src/main/windows/AboutWindow.ts`、`src/renderer/pages/AboutWindow.vue`、`docs/用户自定义站点规则设计方案.md` |
+| 修改文件 | `src/main/ipc/system.ts`、`src/preload/index.ts`、`src/renderer/App.vue`、`src/renderer/router/index.ts`、`src/renderer/utils/electron.ts`、`src/main/services/ElementPicker.ts` |
+| 移除代码 | App.vue 中 header hover 隐藏浏览器逻辑、el-dialog 关于对话框 |
+
+---
+
 ## [v0.1.2] - 2026-07-18
 
 > 用户自定义站点规则 · 可视化元素拾取 · 浏览器内规则管理 · 内容类型匹配
