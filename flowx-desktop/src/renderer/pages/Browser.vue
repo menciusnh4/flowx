@@ -8,6 +8,20 @@ import { useUiStore } from '../stores/ui'
 import PublishForm from '../components/PublishForm.vue'
 import BrowserRulePanel from '../components/BrowserRulePanel.vue'
 import type { BrowserEnvironment, PublishRequest, BrowserBookmark, BrowserHistoryItem, ExtractedContent, CustomSiteRule, PickerFieldType, PickerResult, PublishContentType } from '../../types'
+import TurndownService from 'turndown'
+
+const turndownService = new TurndownService({
+  headingStyle: 'atx',
+  codeBlockStyle: 'fenced',
+  bulletListMarker: '-',
+})
+
+turndownService.addRule('removeImages', {
+  filter: 'img',
+  replacement: function () {
+    return ''
+  },
+})
 
 const route = useRoute()
 const envStore = useEnvStore()
@@ -796,7 +810,7 @@ async function handleTestSubmit(req: PublishRequest) {
  * @param result 提取结果（images 为 ExtractedImage[]）
  * @param mode 填充模式：replace 替换，append 追加
  */
-async function fillExtractToForm(result: ExtractedContent, mode: 'replace' | 'append' = 'replace', contentType?: PublishContentType) {
+async function fillExtractToForm(result: ExtractedContent, mode: 'replace' | 'append' = 'replace', contentType?: PublishContentType, useMarkdown = false) {
   // 下载图片（使用 ExtractedImage 对象的 url 属性，优先下载内容图片）
   let downloadedImages: string[] = []
   if (result.images && result.images.length > 0) {
@@ -826,6 +840,17 @@ async function fillExtractToForm(result: ExtractedContent, mode: 'replace' | 'ap
     ? mapContentType(contentType)
     : (downloadedImages.length > 0 ? 'image' : 'article') as 'video' | 'image' | 'article'
 
+  // Markdown 转换：仅文章模式且 useMarkdown=true 时启用
+  const isArticleMarkdown = autoContentType === 'article' && useMarkdown
+  let markdownContent = ''
+  if (isArticleMarkdown && result.content) {
+    try {
+      markdownContent = turndownService.turndown(result.content)
+    } catch (e) {
+      console.warn('[Browser.vue] HTML转Markdown失败:', e)
+    }
+  }
+
   if (mode === 'append') {
     // 追加模式：获取当前表单数据，合并内容
     const current = publishFormRef.value.getFormData()
@@ -839,22 +864,32 @@ async function fillExtractToForm(result: ExtractedContent, mode: 'replace' | 'ap
     const resultTags = result.tags || []
     const mergedTags = Array.from(new Set([...currentTags, ...resultTags]))
 
-    publishFormRef.value.fillForm({
+    const fillData: any = {
       contentType: autoContentType,
       title: mergedTitle,
       content: mergedContent,
       mediaFiles: mergedMedia,
       tags: mergedTags,
-    })
+    }
+    if (isArticleMarkdown && markdownContent) {
+      fillData.contentMode = 'markdown'
+      fillData.markdownContent = (current.markdownContent?.trim() ? current.markdownContent + '\n\n' : '') + markdownContent
+    }
+    publishFormRef.value.fillForm(fillData)
   } else {
     // 替换模式（默认）：直接填充
-    publishFormRef.value.fillForm({
+    const fillData: any = {
       contentType: autoContentType,
       title: result.title,
       content: result.textContent || '',
       mediaFiles: downloadedImages,
       tags: result.tags || [],
-    })
+    }
+    if (isArticleMarkdown && markdownContent) {
+      fillData.contentMode = 'markdown'
+      fillData.markdownContent = markdownContent
+    }
+    publishFormRef.value.fillForm(fillData)
   }
 }
 
@@ -980,8 +1015,33 @@ async function toggleSelectorMode() {
   }
 }
 
+// 根据规则和提取结果解析内容类型和是否使用Markdown
+function resolveContentTypeByRule(rule: CustomSiteRule, result: ExtractedContent): { contentType: PublishContentType; useMarkdown: boolean } {
+  let contentType: PublishContentType = 'article'
+  let useMarkdown = false
+  const hasImageText = rule.contentTypes?.includes('image-text')
+  const hasArticle = rule.contentTypes?.includes('article')
+  const contentLength = result.length || 0
+
+  if (rule.contentTypes && rule.contentTypes.length > 0) {
+    if (hasImageText && hasArticle) {
+      if (contentLength > 1000) {
+        contentType = 'article'
+        useMarkdown = true
+      } else {
+        contentType = 'image-text'
+      }
+    } else {
+      contentType = rule.contentTypes[0] as PublishContentType
+    }
+  } else if (result.images && result.images.filter(i => i.isLikelyContent).length > 0) {
+    contentType = 'image-text'
+  }
+  return { contentType, useMarkdown }
+}
+
 // 处理自动提取结果事件（来自右键菜单"提取正文"）
-function handleExtractResultEvent(data: { viewId: string; result: ExtractedContent }) {
+async function handleExtractResultEvent(data: { viewId: string; result: ExtractedContent }) {
   if (data.viewId !== activeTabId.value) return
   isExtracting.value = false
   if (!data.result) {
@@ -989,10 +1049,31 @@ function handleExtractResultEvent(data: { viewId: string; result: ExtractedConte
     extractConfidence.value = null
     return
   }
-  // 自动判断内容类型
+
+  let contentType: PublishContentType = 'article'
+  let useMarkdown = false
   const imgCount = data.result.images?.filter(i => i.isLikelyContent).length ?? 0
-  const contentType: PublishContentType = imgCount > 0 ? 'image-text' : 'article'
-  fillExtractToForm(data.result, 'replace', contentType).catch((e) => {
+
+  // 如果是自定义规则提取，获取规则信息并智能判断
+  if (data.result.ruleId) {
+    try {
+      const rule = await electronApi.browser.getCustomRule(data.result.ruleId)
+      if (rule) {
+        const resolved = resolveContentTypeByRule(rule, data.result)
+        contentType = resolved.contentType
+        useMarkdown = resolved.useMarkdown
+      } else {
+        contentType = imgCount > 0 ? 'image-text' : 'article'
+      }
+    } catch (e) {
+      console.warn('[Browser.vue] 获取规则失败，使用默认判断:', e)
+      contentType = imgCount > 0 ? 'image-text' : 'article'
+    }
+  } else {
+    contentType = imgCount > 0 ? 'image-text' : 'article'
+  }
+
+  fillExtractToForm(data.result, 'replace', contentType, useMarkdown).catch((e) => {
     console.error('[Browser.vue] fillExtractToForm error', e)
   })
   if (layoutMode.value === 'browser-only') {
@@ -1000,7 +1081,8 @@ function handleExtractResultEvent(data: { viewId: string; result: ExtractedConte
     nextTick(() => updateViewBounds())
   }
   const confText = data.result.confidence != null ? `，置信度 ${Math.round(data.result.confidence)}%` : ''
-  ElMessage.success(`提取成功：${data.result.length} 字，${imgCount} 张图${confText}`)
+  const mdHint = useMarkdown ? '，Markdown 模式' : ''
+  ElMessage.success(`提取成功：${data.result.length} 字，${imgCount} 张图${confText}${mdHint}`)
 }
 
 // 处理规则面板应用提取结果
@@ -1010,29 +1092,7 @@ function handleApplyRule(payload: { rule: CustomSiteRule; result: ExtractedConte
   rightPanelTab.value = 'publish'
 
   // 根据规则的 contentTypes 和内容长度决定发布类型
-  // 如果规则同时配置了图文和文章，且正文>1000字，优先选择文章
-  let contentType: PublishContentType = 'article'
-  let useMarkdown = false
-  const hasImageText = rule.contentTypes?.includes('image-text')
-  const hasArticle = rule.contentTypes?.includes('article')
-  const contentLength = result.length || 0
-
-  if (rule.contentTypes && rule.contentTypes.length > 0) {
-    if (hasImageText && hasArticle) {
-      // 同时配置了图文和文章：根据正文长度智能选择
-      if (contentLength > 1000) {
-        contentType = 'article'
-        useMarkdown = true
-      } else {
-        contentType = 'image-text'
-      }
-    } else {
-      // 只配置了一种类型，直接使用
-      contentType = rule.contentTypes[0] as PublishContentType
-    }
-  } else if (result.images && result.images.filter(i => i.isLikelyContent).length > 0) {
-    contentType = 'image-text'
-  }
+  const { contentType, useMarkdown } = resolveContentTypeByRule(rule, result)
 
   // 填充表单
   fillExtractToForm(result, 'replace', contentType, useMarkdown).catch((e) => {

@@ -1078,6 +1078,7 @@ export async function extractWithCustomRule(
   if (result) {
     siteRuleManager.incrementUsage(ruleId);
     logger.info(`[ContentExtractor] 使用规则提取成功: ${rule.name}`);
+    (result as any).ruleId = ruleId;
   } else {
     logger.warn(`[ContentExtractor] 使用规则提取失败: ${rule.name}`);
   }
