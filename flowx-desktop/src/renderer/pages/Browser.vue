@@ -1008,15 +1008,34 @@ function handleApplyRule(payload: { rule: CustomSiteRule; result: ExtractedConte
   const { rule, result } = payload
   // 切换到发布 Tab
   rightPanelTab.value = 'publish'
-  // 根据规则的 contentTypes 决定发布类型（取第一个匹配的类型）
+
+  // 根据规则的 contentTypes 和内容长度决定发布类型
+  // 如果规则同时配置了图文和文章，且正文>1000字，优先选择文章
   let contentType: PublishContentType = 'article'
+  let useMarkdown = false
+  const hasImageText = rule.contentTypes?.includes('image-text')
+  const hasArticle = rule.contentTypes?.includes('article')
+  const contentLength = result.length || 0
+
   if (rule.contentTypes && rule.contentTypes.length > 0) {
-    contentType = rule.contentTypes[0] as PublishContentType
+    if (hasImageText && hasArticle) {
+      // 同时配置了图文和文章：根据正文长度智能选择
+      if (contentLength > 1000) {
+        contentType = 'article'
+        useMarkdown = true
+      } else {
+        contentType = 'image-text'
+      }
+    } else {
+      // 只配置了一种类型，直接使用
+      contentType = rule.contentTypes[0] as PublishContentType
+    }
   } else if (result.images && result.images.filter(i => i.isLikelyContent).length > 0) {
     contentType = 'image-text'
   }
+
   // 填充表单
-  fillExtractToForm(result, 'replace', contentType).catch((e) => {
+  fillExtractToForm(result, 'replace', contentType, useMarkdown).catch((e) => {
     console.error('[Browser.vue] fillExtractToForm error', e)
   })
   if (layoutMode.value === 'browser-only') {
@@ -1025,7 +1044,8 @@ function handleApplyRule(payload: { rule: CustomSiteRule; result: ExtractedConte
   }
   const imgCount = result.images?.filter((img) => img.isLikelyContent).length ?? result.images?.length ?? 0
   const confText = result.confidence != null ? `，置信度 ${Math.round(result.confidence)}%` : ''
-  ElMessage.success(`提取成功：${result.length} 字，${imgCount} 张图${confText}`)
+  const mdHint = useMarkdown ? '，Markdown 模式' : ''
+  ElMessage.success(`提取成功：${result.length} 字，${imgCount} 张图${confText}${mdHint}`)
 }
 
 // 处理提取错误事件
