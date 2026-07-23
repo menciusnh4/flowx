@@ -1,6 +1,6 @@
 import { safeInvoke } from './index';
 import { PublishEngine } from '../services/PublishEngine';
-import type { PublishRequest, PublishLogQuery } from '../../types';
+import type { PublishRequest, PublishLogQuery, PublishQueryFilter } from '../../types';
 
 export function registerPublishIpc(): void {
   // 提交发布任务 -> 返回 taskId
@@ -15,9 +15,9 @@ export function registerPublishIpc(): void {
   // 获取所有任务（历史记录）
   safeInvoke('publish:list', () => PublishEngine.listTasks());
 
-  // 分页查询任务列表
-  safeInvoke('publish:listPaged', (page?: number, pageSize?: number) =>
-    PublishEngine.listTasksPaged(page || 1, pageSize || 20),
+  // 分页查询任务列表（筛选 + 分页下推主进程）
+  safeInvoke('publish:listPaged', (page?: number, pageSize?: number, filter?: PublishQueryFilter) =>
+    PublishEngine.listTasksPaged(page || 1, pageSize || 20, filter),
   );
 
   // 获取统计信息（轻量级）

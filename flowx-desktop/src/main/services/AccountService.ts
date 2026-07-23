@@ -13,6 +13,8 @@ import type {
   PlatformType,
   HealthCheckConfig,
   AccountCategory,
+  AccountQueryFilter,
+  PagedResult,
 } from '../../types';
 
 // =======================================================================
@@ -285,6 +287,57 @@ export class AccountService {
   static listAccounts(): AccountInfo[] {
     const list = this.loadCredentials();
     return list.map((c) => this.toInfo(c));
+  }
+
+  /**
+   * 服务端分页查询账号：筛选（分类 / 平台 / 关键字）+ limit/offset 切片。
+   * 分类筛选含 'unclassified' 特殊项（表示未绑定任何分类）。
+   */
+  static queryAccounts(
+    filter: AccountQueryFilter = {},
+    page = 1,
+    pageSize = 10,
+  ): PagedResult<AccountInfo> {
+    const all = this.loadCredentials().map((c) => this.toInfo(c));
+    let list = all;
+
+    const categoryIds = filter.categoryIds || [];
+    if (categoryIds.length > 0) {
+      const catSet = new Set(categoryIds);
+      list = list.filter((a) => {
+        const catIds = a.categoryIds || [];
+        const matchUnclassified = catSet.has('unclassified') && catIds.length === 0;
+        const matchCat = catIds.some((cid) => catSet.has(cid));
+        return matchUnclassified || matchCat;
+      });
+    }
+
+    const platform = filter.platform || [];
+    if (platform.length > 0) {
+      const set = new Set(platform);
+      list = list.filter((a) => !!a.platform && set.has(a.platform));
+    }
+
+    const q = (filter.keyword || '').trim().toLowerCase();
+    if (q) {
+      list = list.filter((a) => {
+        const platName = getPlatform(a.platform)?.meta.name || '';
+        return (
+          (a.nickname || '').toLowerCase().includes(q) ||
+          (a.platformAccountId || '').toLowerCase().includes(q) ||
+          (a.userId || '').toLowerCase().includes(q) ||
+          platName.toLowerCase().includes(q)
+        );
+      });
+    }
+
+    const total = list.length;
+    const safePage = Math.max(1, Math.floor(page) || 1);
+    const safeSize = Math.min(100, Math.max(1, Math.floor(pageSize) || 10));
+    const totalPages = Math.max(1, Math.ceil(total / safeSize));
+    const start = (safePage - 1) * safeSize;
+    const items = list.slice(start, start + safeSize);
+    return { items, total, page: safePage, pageSize: safeSize, totalPages };
   }
 
   static getAccount(id: string): AccountInfo | null {

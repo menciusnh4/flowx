@@ -122,10 +122,10 @@
     </section>
 
     <!-- 账号展示：平铺 / 列表 可切换 -->
-    <section class="acct-body" v-loading="accountStore.loading" ref="acctBodyRef">
+    <section class="acct-body" v-loading="accountStore.loading || listLoading" ref="acctBodyRef">
       <!-- 平铺（卡片网格） -->
       <div class="grid" v-if="viewMode === 'grid'">
-        <article class="acct-card" :data-account-id="a.id" v-for="a in pagedAccounts" :key="a.id">
+        <article class="acct-card" :data-account-id="a.id" v-for="a in pagedResult.items" :key="a.id">
           <header class="ac-top">
             <div class="ac-plat" :style="platChipStyle(a.platform)">
               <img v-if="getPlatformIcon(a.platform)" :src="getPlatformIcon(a.platform)" class="ac-plat-ic" />
@@ -197,7 +197,7 @@
           <div class="lr-actions">操作</div>
         </header>
 
-        <article class="list-row" :data-account-id="a.id" v-for="a in pagedAccounts" :key="a.id">
+        <article class="list-row" :data-account-id="a.id" v-for="a in pagedResult.items" :key="a.id">
           <div class="lr-plat">
             <span class="ac-plat" :style="platChipStyle(a.platform)">
               <img v-if="getPlatformIcon(a.platform)" :src="getPlatformIcon(a.platform)" class="ac-plat-ic" />
@@ -238,23 +238,25 @@
           </div>
 
           <div class="lr-actions">
-            <el-button size="small" type="success" @click="openCreator(a)" :loading="openingId === a.id" title="创作中心">
-              <el-icon><Link /></el-icon>
-            </el-button>
-            <el-button size="small" type="primary" @click="editRemark(a)" title="编辑">
+            <button class="icon-btn success" type="button" title="创作中心" :disabled="openingId === a.id" @click="openCreator(a)">
+              <el-icon v-if="openingId === a.id" class="spin"><Loading /></el-icon>
+              <el-icon v-else><Link /></el-icon>
+            </button>
+            <button class="icon-btn primary" type="button" title="编辑" @click="editRemark(a)">
               <el-icon><Setting /></el-icon>
-            </el-button>
-            <el-button size="small" type="warning" @click="refreshToken(a)" :loading="refreshingId === a.id" title="刷新">
-              <el-icon><Refresh /></el-icon>
-            </el-button>
-            <el-button size="small" type="danger" @click="remove(a)" title="删除">
+            </button>
+            <button class="icon-btn warning" type="button" title="刷新" :disabled="refreshingId === a.id" @click="refreshToken(a)">
+              <el-icon v-if="refreshingId === a.id" class="spin"><Loading /></el-icon>
+              <el-icon v-else><Refresh /></el-icon>
+            </button>
+            <button class="icon-btn danger" type="button" title="删除" @click="remove(a)">
               <el-icon><Delete /></el-icon>
-            </el-button>
+            </button>
           </div>
         </article>
       </div>
 
-      <div v-if="filteredAccounts.length === 0 && !accountStore.loading" class="empty-hint">
+      <div v-if="pagedResult.items.length === 0 && !listLoading && !accountStore.loading" class="empty-hint">
         {{ filterCategoryIds.length || searchText || filterPlatform.length ? '没有匹配的账号。' : '还没有账号，点击右上角"授权新账号"开始。' }}
         <div v-if="!filterCategoryIds.length && !searchText" style="font-size:12px; color:var(--muted); margin-top:6px">
           授权会弹出平台登录窗口，扫码完成后点击右上角红色"✅ 登录完成，保存账号"按钮，或直接关闭窗口即可。
@@ -262,31 +264,15 @@
       </div>
     </section>
 
-    <!-- 分页（平铺 / 列表 共用） -->
-    <div class="pager" v-if="filteredAccounts.length > 0">
-      <div class="pager-info">
-        共 <b>{{ filteredAccounts.length }}</b> 个账号，第 <b>{{ currentPage }}</b>/<b>{{ totalPages }}</b> 页
-      </div>
-      <div class="pager-ctrl">
-        <button class="pg-btn" :disabled="currentPage <= 1" title="首页" @click="goPage(1)">«</button>
-        <button class="pg-btn" :disabled="currentPage <= 1" title="上一页" @click="goPage(currentPage - 1)">‹</button>
-        <template v-for="p in pageNumbers" :key="p.key">
-          <span v-if="p.ellipsis" class="pg-ellipsis">…</span>
-          <button v-else class="pg-btn" :class="{ active: p.page === currentPage }" @click="goPage(p.page ?? 1)">{{ p.page }}</button>
-        </template>
-        <button class="pg-btn" :disabled="currentPage >= totalPages" title="下一页" @click="goPage(currentPage + 1)">›</button>
-        <button class="pg-btn" :disabled="currentPage >= totalPages" title="末页" @click="goPage(totalPages)">»</button>
-      </div>
-      <div class="pager-size">
-        <span>每页</span>
-        <el-select v-model="pageSize" class="pg-select" @change="onPageSizeChange">
-          <el-option :value="10" label="10" />
-          <el-option :value="20" label="20" />
-          <el-option :value="50" label="50" />
-        </el-select>
-        <span>条</span>
-      </div>
-    </div>
+    <!-- 分页（平铺 / 列表 共用，统一分页组件） -->
+    <ListPager
+      v-if="pagedResult.total > 0"
+      v-model:page="currentPage"
+      v-model:pageSize="pageSize"
+      :total="pagedResult.total"
+      unit="个账号"
+      @change="onPagerChange"
+    />
 
     <!-- 健康检测配置对话框 -->
     <el-dialog v-model="healthCheckDialogVisible" title="定时检测设置" width="440px">
@@ -400,12 +386,13 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, reactive, ref, computed, watch, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Refresh, Link, Monitor, Setting, Folder, Delete, Search } from '@element-plus/icons-vue';
+import { Plus, Refresh, Link, Monitor, Setting, Folder, Delete, Search, Loading } from '@element-plus/icons-vue';
 import { useAccountStore } from '../stores/account';
 import { useEnvStore } from '../stores/env';
 import { useWorkspaceStore } from '../stores/workspace';
 import { electronApi } from '../utils/electron';
-import type { AccountInfo, AccountCategory } from '../../types';
+import ListPager from '../components/ListPager.vue';
+import type { AccountInfo, AccountCategory, PagedResult, AccountQueryFilter } from '../../types';
 
 // 平台图标（SVG/PNG，通过 Vite import 引入）
 import iconXiaohongshu from '../assets/xiaohongshu.svg';
@@ -673,33 +660,8 @@ const unclassifiedCount = computed(
   () => accountStore.accounts.filter((a) => !a.categoryIds || a.categoryIds.length === 0).length,
 );
 
-// 根据分类 + 平台 + 搜索过滤账号
-const filteredAccounts = computed(() => {
-  let list = accountStore.accounts;
-  if (filterCategoryIds.value.length > 0) {
-    const catSet = new Set(filterCategoryIds.value);
-    list = list.filter((a) => {
-      const catIds = a.categoryIds || [];
-      const matchUnclassified = catSet.has('unclassified') && catIds.length === 0;
-      const matchCat = catIds.some((cid) => catSet.has(cid));
-      return matchUnclassified || matchCat;
-    });
-  }
-  if (filterPlatform.value.length > 0) {
-    const set = new Set(filterPlatform.value);
-    list = list.filter((a) => !!a.platform && set.has(a.platform));
-  }
-  const q = searchText.value.trim().toLowerCase();
-  if (q) {
-    list = list.filter((a) =>
-      (a.nickname || '').toLowerCase().includes(q) ||
-      (a.platformAccountId || '').toLowerCase().includes(q) ||
-      (a.userId || '').toLowerCase().includes(q) ||
-      platformName(a.platform).toLowerCase().includes(q),
-    );
-  }
-  return list;
-});
+// 注：分类 / 平台 / 关键字筛选逻辑已下推至主进程 AccountService.queryAccounts，
+// 列表展示走服务端分页（loadAccountsPaged），此处不再做前端过滤切片。
 
 /** 平台筛选：多选切换（同一平台可叠加） */
 function togglePlatformFilter(key: string) {
@@ -711,60 +673,60 @@ function togglePlatformFilter(key: string) {
   }
 }
 
-// ============ 分页（平铺 / 列表 共用） ============
+// ============ 服务端分页（筛选下推主进程，列表走 queryAccounts） ============
 const currentPage = ref(1);
 const pageSize = ref(10); // 默认每页 10 条
-
-const totalPages = computed(() =>
-  Math.max(1, Math.ceil(filteredAccounts.value.length / pageSize.value)),
-);
-
-/** 当前页数据切片（grid 与 list 共用） */
-const pagedAccounts = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value;
-  return filteredAccounts.value.slice(start, start + pageSize.value);
+const listLoading = ref(false);
+const pagedResult = ref<PagedResult<AccountInfo>>({
+  items: [],
+  total: 0,
+  page: 1,
+  pageSize: 10,
+  totalPages: 1,
 });
 
-/**
- * 页码按钮：始终显示首页、末页、当前页±1，其余用省略号折叠，最多 7 个按钮。
- * 每项带唯一 key 以便 v-for 稳定渲染。
- */
-const pageNumbers = computed<{ key: string; page?: number; ellipsis?: boolean }[]>(() => {
-  const max = totalPages.value;
-  const cur = currentPage.value;
-  const out: { key: string; page?: number; ellipsis?: boolean }[] = [];
-  if (max <= 7) {
-    for (let i = 1; i <= max; i++) out.push({ key: String(i), page: i });
-  } else {
-    out.push({ key: '1', page: 1 });
-    if (cur > 3) out.push({ key: 'e1', ellipsis: true });
-    for (let i = Math.max(2, cur - 1); i <= Math.min(max - 1, cur + 1); i++) {
-      out.push({ key: String(i), page: i });
+/** 加载当前筛选条件下的某一页（服务端分页）；越界页码回退到末页，避免删除/刷新后空白 */
+async function loadList(page: number, size: number) {
+  listLoading.value = true;
+  try {
+    const filter: AccountQueryFilter = {
+      categoryIds: filterCategoryIds.value,
+      platform: filterPlatform.value,
+      keyword: searchText.value,
+    };
+    let res = await accountStore.loadAccountsPaged(filter, page, size);
+    if (res.items.length === 0 && res.total > 0 && page !== res.totalPages) {
+      res = await accountStore.loadAccountsPaged(filter, res.totalPages, size);
     }
-    if (cur < max - 2) out.push({ key: 'e2', ellipsis: true });
-    out.push({ key: String(max), page: max });
+    pagedResult.value = res;
+    currentPage.value = res.page;
+  } finally {
+    listLoading.value = false;
   }
-  return out;
-});
-
-/** 跳转到指定页（自动夹取到合法范围） */
-function goPage(p: number) {
-  currentPage.value = Math.min(Math.max(1, p), totalPages.value);
 }
 
-/** 切换每页条数后回到首页 */
-function onPageSizeChange() {
-  currentPage.value = 1;
+/** 翻页 / 改每页大小：由 ListPager 的 @change 触发 */
+function onPagerChange(page: number, size: number) {
+  loadList(page, size);
 }
 
-// 过滤条件变化时回到首页，避免停留在已不存在的页码导致空白
-watch([filterCategoryIds, searchText, filterPlatform], () => {
-  currentPage.value = 1;
+// 分类 / 平台筛选：立即回到首页重新请求
+watch([filterCategoryIds, filterPlatform], () => {
+  loadList(1, pageSize.value);
 });
-// 数据源刷新（如删除/授权后）可能导致总页数变少，夹取当前页
-watch(filteredAccounts, () => {
-  if (currentPage.value > totalPages.value) currentPage.value = totalPages.value;
+// 关键字：防抖 300ms，避免输入过程频繁请求
+let kwTimer: ReturnType<typeof setTimeout> | undefined;
+watch(searchText, () => {
+  if (kwTimer) clearTimeout(kwTimer);
+  kwTimer = setTimeout(() => loadList(1, pageSize.value), 300);
 });
+// 全量账号变化（删除 / 授权 / 检测 / 刷新）后同步列表当前页
+watch(
+  () => accountStore.accounts,
+  () => {
+    loadList(currentPage.value, pageSize.value);
+  },
+);
 
 // 全局搜索点击账号结果 → 定位（覆盖重新点击同一账号：highlightNonce 自增会再次触发）
 watch(() => accountStore.highlightNonce, onHighlightNonce);
@@ -1049,6 +1011,7 @@ onMounted(async () => {
   await accountStore.loadPlatforms();
   await accountStore.refreshAccounts();
   await accountStore.loadCategories();
+  loadList(1, pageSize.value);
   envStore.loadAll().catch(() => {});
   // 异步加载健康检测配置（不阻塞 UI）
   accountStore.loadHealthCheckConfig().catch(() => {});
@@ -1607,7 +1570,7 @@ onBeforeUnmount(() => {
 }
 .list-head .lr-actions,
 .list-row .lr-actions {
-  justify-self: end;
+  justify-self: start;
 }
 .lr-plat {
   display: flex;
@@ -1658,58 +1621,7 @@ onBeforeUnmount(() => {
   gap: 6px;
   flex-shrink: 0;
 }
-/* 列表行 4 个图标按钮 → 原型 .icon-btn 风格 */
-.lr-actions :deep(.el-button) {
-  margin: 0;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border-radius: 9px;
-  border: 1px solid var(--line-strong);
-  background: var(--surface);
-  color: var(--slate);
-  font-family: inherit;
-  transition: all var(--t-fast) var(--ease);
-}
-.lr-actions :deep(.el-button:hover) {
-  background: var(--surface-2);
-}
-.lr-actions :deep(.el-button--success) {
-  color: var(--success);
-  border-color: rgba(16, 185, 129, 0.35);
-  background: var(--surface);
-}
-.lr-actions :deep(.el-button--success:hover) {
-  background: rgba(16, 185, 129, 0.1);
-  color: var(--success);
-}
-.lr-actions :deep(.el-button--primary) {
-  color: var(--brand-indigo);
-  border-color: rgba(99, 102, 241, 0.35);
-  background: var(--surface);
-}
-.lr-actions :deep(.el-button--primary:hover) {
-  background: var(--brand-grad-soft);
-  color: var(--brand-indigo);
-}
-.lr-actions :deep(.el-button--warning) {
-  color: var(--warning);
-  border-color: rgba(245, 158, 11, 0.35);
-  background: var(--surface);
-}
-.lr-actions :deep(.el-button--warning:hover) {
-  background: rgba(245, 158, 11, 0.1);
-  color: var(--warning);
-}
-.lr-actions :deep(.el-button--danger) {
-  color: var(--danger);
-  border-color: rgba(239, 68, 68, 0.35);
-  background: var(--surface);
-}
-.lr-actions :deep(.el-button--danger:hover) {
-  background: rgba(239, 68, 68, 0.1);
-  color: var(--danger);
-}
+/* 列表行 4 个图标按钮 → 共享 .icon-btn（见 components.css） */
 
 /* 列表响应式：窄屏隐藏表头、行退化为卡片堆叠 */
 @media (max-width: 880px) {
@@ -1734,85 +1646,6 @@ onBeforeUnmount(() => {
   text-align: center;
   padding: 60px 16px;
   font-size: 14px;
-}
-
-/* 分页（对齐原型 .pager 设计） */
-.pager {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  flex-wrap: wrap;
-  padding: 14px 18px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-xs);
-}
-.pager-info {
-  font-size: 12.5px;
-  color: var(--muted);
-  font-weight: 600;
-  white-space: nowrap;
-}
-.pager-info b {
-  color: var(--ink);
-  font-weight: 800;
-}
-.pager-ctrl {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.pg-btn {
-  min-width: 34px;
-  height: 34px;
-  padding: 0 8px;
-  border-radius: 9px;
-  border: 1px solid var(--line-strong);
-  background: var(--surface);
-  font-size: 12.5px;
-  font-weight: 700;
-  color: var(--slate);
-  cursor: pointer;
-  transition: all var(--t-fast) var(--ease);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-family: inherit;
-  line-height: 1;
-}
-.pg-btn:hover:not(:disabled) {
-  border-color: var(--brand-indigo);
-  color: var(--brand-indigo);
-  background: var(--brand-grad-soft);
-}
-.pg-btn.active {
-  background: var(--brand-grad);
-  color: #fff;
-  border-color: transparent;
-  box-shadow: var(--shadow-sm);
-}
-.pg-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.pg-ellipsis {
-  padding: 0 4px;
-  color: var(--faint);
-  font-weight: 700;
-  font-size: 13px;
-}
-.pager-size {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12.5px;
-  color: var(--muted);
-  font-weight: 600;
-}
-.pg-select {
-  width: 76px;
 }
 
 /* 授权对话框 - 平台选项统一样式 */

@@ -1,6 +1,6 @@
 import { getStore } from '../store/SecureStore';
 import { logger } from '../utils/logger';
-import type { CustomSiteRule, PublishContentType, RuleTestResult } from '../../types';
+import type { CustomSiteRule, PublishContentType, RuleTestResult, PagedResult, RuleQueryFilter } from '../../types';
 
 /**
  * 站点规则管理器
@@ -34,6 +34,48 @@ class SiteRuleManager {
   getCustomRules(): CustomSiteRule[] {
     this.ensureInit();
     return [...this.customRules].sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /** 服务端分页查询自定义规则（预留 keyword/matchType/enabled/contentTypes 筛选） */
+  queryRules(
+    filter: RuleQueryFilter = {},
+    page = 1,
+    pageSize = 10,
+  ): PagedResult<CustomSiteRule> {
+    this.ensureInit();
+    let list = [...this.customRules].sort((a, b) => b.updatedAt - a.updatedAt);
+    const q = (filter.keyword || '').trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (r) =>
+          r.name.toLowerCase().includes(q) ||
+          r.matchValue.toLowerCase().includes(q),
+      );
+    }
+    if (filter.matchType) {
+      list = list.filter((r) => r.matchType === filter.matchType);
+    }
+    if (typeof filter.enabled === 'boolean') {
+      list = list.filter((r) => r.enabled === filter.enabled);
+    }
+    if (filter.contentTypes && filter.contentTypes.length > 0) {
+      const want = new Set(filter.contentTypes);
+      list = list.filter(
+        (r) => r.contentTypes.length === 0 || r.contentTypes.some((t) => want.has(t)),
+      );
+    }
+    const total = list.length;
+    const safePage = Math.max(1, Math.floor(page) || 1);
+    const safeSize = Math.min(100, Math.max(1, Math.floor(pageSize) || 10));
+    const totalPages = Math.max(1, Math.ceil(total / safeSize));
+    const start = (safePage - 1) * safeSize;
+    return {
+      items: list.slice(start, start + safeSize),
+      total,
+      page: safePage,
+      pageSize: safeSize,
+      totalPages,
+    };
   }
 
   /** 获取启用的自定义规则 */

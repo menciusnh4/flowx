@@ -331,10 +331,8 @@ onMounted(async () => {
   overflow-y: auto;
   background: var(--bg);
 }
-.panel {
-  max-width: 1200px;
-  margin: 0 auto;
-}
+/* 页面卡片铺满内容区：沿用全局 .panel（含 18px 内边距、背景与 18px 下边距），
+   与「环境配置 / 提取规则」等系统页统一，不再居中限宽 */
 .header {
   display: flex;
   align-items: center;

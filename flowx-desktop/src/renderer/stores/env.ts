@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { electronApi } from '../utils/electron';
-import type { ProxyConfig, BrowserEnvironment, ProxyTestResult } from '../../types';
+import type { ProxyConfig, BrowserEnvironment, ProxyTestResult, PagedResult, ProxyQueryFilter, EnvQueryFilter } from '../../types';
 
 export const useEnvStore = defineStore('env', {
   state: () => ({
@@ -26,6 +26,26 @@ export const useEnvStore = defineStore('env', {
         console.error('[EnvStore] 数据加载失败:', err);
       } finally {
         this.loading = false;
+      }
+    },
+
+    /** 服务端分页查询代理 IP（筛选下推主进程），供列表使用 */
+    async loadProxiesPaged(filter: ProxyQueryFilter = {}, page = 1, pageSize = 10): Promise<PagedResult<ProxyConfig>> {
+      try {
+        return await electronApi.listProxiesPaged(filter, page, pageSize);
+      } catch (err) {
+        console.error('[EnvStore] loadProxiesPaged failed:', err);
+        return { items: [], total: 0, page, pageSize, totalPages: 1 };
+      }
+    },
+
+    /** 服务端分页查询浏览器环境（筛选下推主进程），供列表使用 */
+    async loadEnvironmentsPaged(filter: EnvQueryFilter = {}, page = 1, pageSize = 10): Promise<PagedResult<BrowserEnvironment>> {
+      try {
+        return await electronApi.listEnvironmentsPaged(filter, page, pageSize);
+      } catch (err) {
+        console.error('[EnvStore] loadEnvironmentsPaged failed:', err);
+        return { items: [], total: 0, page, pageSize, totalPages: 1 };
       }
     },
 

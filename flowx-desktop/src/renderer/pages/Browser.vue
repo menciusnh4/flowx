@@ -36,7 +36,7 @@ const browserRulePanelRef = ref<InstanceType<typeof BrowserRulePanel> | null>(nu
 
 // 布局模式：browser-only | split | publish-only
 const layoutMode = ref<'browser-only' | 'split' | 'publish-only'>('split')
-const leftWidth = ref(70) // 左侧浏览器占比（%）
+const leftWidth = ref(60) // 左侧浏览器占比（%）；默认 60/40，给右侧发布编辑面板留出更舒适的宽度
 
 // 右侧面板 Tab
 const rightPanelTab = ref<'publish' | 'rules'>('publish')

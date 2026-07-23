@@ -308,6 +308,40 @@ export interface PagedResult<T> {
   totalPages: number;
 }
 
+// ========== 各列表服务端分页筛选条件（filter 下推主进程） ==========
+
+/** 账号管理筛选：分类（含 'unclassified'）/ 平台 / 关键字 */
+export interface AccountQueryFilter {
+  categoryIds?: string[];
+  platform?: string[];
+  keyword?: string;
+}
+
+/** 代理 IP 筛选 */
+export interface ProxyQueryFilter {
+  keyword?: string;
+  type?: 'http' | 'socks5';
+}
+
+/** 浏览器环境筛选 */
+export interface EnvQueryFilter {
+  keyword?: string;
+}
+
+/** 自定义提取规则筛选 */
+export interface RuleQueryFilter {
+  keyword?: string;
+  matchType?: 'domain' | 'regex';
+  enabled?: boolean;
+  contentTypes?: PublishContentType[];
+}
+
+/** 发布历史筛选 */
+export interface PublishQueryFilter {
+  keyword?: string;
+  status?: PublishStatus | 'all';
+}
+
 /** 发布统计信息（轻量级，不加载完整任务列表） */
 export interface PublishStats {
   /** 总任务数 */

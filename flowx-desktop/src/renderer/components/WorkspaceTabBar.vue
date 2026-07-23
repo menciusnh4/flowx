@@ -362,8 +362,8 @@ watch(
           @clear="gsClose"
         />
       </div>
-      <div class="win-dots">
-        <i class="r" title="最小化" role="button" @click="winMin"></i><i class="y" title="最大化" role="button" @click="winMax"></i><i class="g" title="关闭" role="button" @click="winClose"></i>
+      <div class="win-dots" role="group" aria-label="窗口控制">
+        <i class="r" title="关闭" role="button" aria-label="关闭窗口" @click="winClose"></i><i class="y" title="最小化" role="button" aria-label="最小化窗口" @click="winMin"></i><i class="g" title="最大化" role="button" aria-label="最大化窗口" @click="winMax"></i>
       </div>
     </div>
 
@@ -606,8 +606,9 @@ watch(
   -webkit-app-region: no-drag;
 }
 .win-dots i {
-  width: 12px;
-  height: 12px;
+  position: relative;
+  width: 15px;
+  height: 15px;
   border-radius: 50%;
   display: inline-block;
   cursor: pointer;
@@ -615,7 +616,7 @@ watch(
 }
 .win-dots i:hover {
   transform: scale(1.18);
-  filter: brightness(1.08);
+  filter: brightness(1.06);
   box-shadow: 0 0 0 4px rgba(15, 23, 42, 0.06);
 }
 .win-dots .r {

@@ -18,7 +18,7 @@ import { siteRuleManager } from '../services/SiteRuleManager';
 import { elementPicker } from '../services/ElementPicker';
 import type { BrowserViewInfo } from '../services/BrowserService';
 import type { ExtractedContent } from '../services/ContentExtractor';
-import type { CustomSiteRule, PickerFieldType, RuleTestResult } from '../../types';
+import type { CustomSiteRule, PickerFieldType, RuleTestResult, PagedResult, RuleQueryFilter } from '../../types';
 import fs from 'fs';
 import path from 'path';
 
@@ -156,6 +156,14 @@ export function registerBrowserIpc(): void {
     'browser:listCustomRules',
     () => {
       return siteRuleManager.getCustomRules();
+    },
+  );
+
+  // 服务端分页查询自定义规则（筛选下推主进程）
+  safeInvoke<PagedResult<CustomSiteRule>>(
+    'browser:listCustomRulesPaged',
+    (filter?: RuleQueryFilter, page?: number, pageSize?: number) => {
+      return siteRuleManager.queryRules(filter || {}, page || 1, pageSize || 10);
     },
   );
 

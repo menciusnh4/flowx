@@ -39,47 +39,44 @@
         </div>
       </div>
 
-      <el-table
-        v-loading="publishStore.loading"
-        :data="displayList"
-        border
-        class="hist-table"
-        style="margin-top: 14px"
-      >
-        <el-table-column label="任务ID" width="180">
-          <template #default="{ row }">
+      <!-- 发布历史列表：对齐账号管理列表视觉语言（圆角边框容器 + 品牌色表头 + hover 行） -->
+      <div class="hist-list" v-loading="publishStore.loading">
+        <header class="hist-head">
+          <div class="hr-id">任务ID</div>
+          <div class="hr-type">类型</div>
+          <div class="hr-title">标题/备注</div>
+          <div class="hr-status">状态</div>
+          <div class="hr-accounts">各账号结果</div>
+          <div class="hr-time">时间</div>
+          <div class="hr-actions">操作</div>
+        </header>
+
+        <article class="hist-row" v-for="row in publishStore.history" :key="row.id">
+          <div class="hr-id">
             <span class="task-id">{{ row.id }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="类型" width="110">
-          <template #default="{ row }">
+          </div>
+          <div class="hr-type">
             <span class="tag" :class="typeTagClass(row.request?.contentType)">
               {{ typeLabel(row.request?.contentType) }}
             </span>
-          </template>
-        </el-table-column>
-        <el-table-column label="标题/备注" min-width="200">
-          <template #default="{ row }">
-            <div style="font-weight:500; color: var(--ink)">{{ row.request?.title || row.request?.remark || '-' }}</div>
+          </div>
+          <div class="hr-title">
+            <div class="hr-title-main">{{ row.request?.title || row.request?.remark || '-' }}</div>
             <div class="cell-muted">
               目标账号：{{ row.items.length }} 个
               <span v-if="row.request?.tags?.length" style="margin-left:8px">
                 标签：{{ formatTags(row.request.tags) }}
               </span>
             </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="140">
-          <template #default="{ row }">
+          </div>
+          <div class="hr-status">
             <div class="hstatus-stack">
               <span class="tag" :class="statusTagClass(row.status)">{{ statusLabel(row.status) }}</span>
               <span v-if="isTestTask(row)" class="tag warn">🔍 测试</span>
             </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="各账号结果" min-width="240">
-          <template #default="{ row }">
-            <el-space wrap>
+          </div>
+          <div class="hr-accounts">
+            <div class="acc-chips">
               <span
                 v-for="item in row.items.slice(0, 4)"
                 :key="item.accountId"
@@ -96,99 +93,90 @@
               >
                 <span class="acc-chip more">+{{ row.items.length - 4 }}</span>
               </el-tooltip>
-            </el-space>
-          </template>
-        </el-table-column>
-        <el-table-column label="时间" width="180">
-          <template #default="{ row }">
-            <div style="font-size:13px; color:var(--ink)">创建：{{ fmt(row.createdAt) }}</div>
-            <div v-if="row.request?.scheduledAt" style="font-size:12px; color:var(--warning); margin-top:3px">
-              定时：{{ fmt(row.request.scheduledAt) }}
             </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="420" fixed="right">
-          <template #default="{ row }">
+          </div>
+          <div class="hr-time">
+            <div class="hr-time-main">创建：{{ fmt(row.createdAt) }}</div>
+            <div v-if="row.request?.scheduledAt" class="hr-time-sched">定时：{{ fmt(row.request.scheduledAt) }}</div>
+          </div>
+          <div class="hr-actions">
             <div class="hact">
-              <button class="act view" type="button" @click="showDetail(row)">
-                <span class="ic">👁</span><span>详情</span>
+              <button class="icon-btn primary" type="button" title="详情" @click="showDetail(row)">
+                <span>👁</span>
               </button>
 
               <button
                 v-if="row.status === 'scheduled'"
-                class="act danger"
+                class="icon-btn danger"
                 type="button"
+                title="取消发布"
                 @click="cancelTask(row)"
               >
-                <span class="ic">✕</span><span>取消发布</span>
+                <span>✕</span>
               </button>
 
               <button
                 v-if="hasFailedItems(row)"
-                class="act"
+                class="icon-btn"
                 type="button"
+                title="重试"
                 :disabled="retryingId === row.id"
                 @click="retryTask(row)"
               >
-                <span v-if="retryingId === row.id" class="act-spin"></span>
-                <span v-else class="ic">↻</span>
-                <span>{{ retryingId === row.id ? '重试中' : '重试' }}</span>
+                <span v-if="retryingId === row.id" class="spin">↻</span>
+                <span v-else>↻</span>
               </button>
 
               <button
                 v-if="hasFailedItems(row)"
-                class="act"
+                class="icon-btn primary"
                 type="button"
+                title="编辑重发"
                 @click="openEditDialog(row)"
               >
-                <span class="ic">✎</span><span>编辑重发</span>
+                <span>✎</span>
               </button>
 
               <template v-if="isTestTask(row) && row.status !== 'running' && row.status !== 'queued'">
                 <button
-                  class="act"
+                  class="icon-btn warning"
                   type="button"
+                  title="重新测试"
                   :disabled="retryingId === row.id"
                   @click="retryTest(row)"
                 >
-                  <span v-if="retryingId === row.id" class="act-spin"></span>
-                  <span v-else class="ic">🧪</span>
-                  <span>{{ retryingId === row.id ? '测试中' : '重新测试' }}</span>
+                  <span v-if="retryingId === row.id" class="spin">🧪</span>
+                  <span v-else>🧪</span>
                 </button>
-                <button class="act go" type="button" @click="retryAsPublish(row)">
-                  <span class="ic">🚀</span><span>立即发布</span>
+                <button class="icon-btn success" type="button" title="立即发布" @click="retryAsPublish(row)">
+                  <span>🚀</span>
                 </button>
               </template>
 
               <el-popconfirm title="确定删除此历史记录？" @confirm="deleteTask(row)">
                 <template #reference>
-                  <button class="act danger" type="button">
-                    <span class="ic">🗑</span><span>删除</span>
+                  <button class="icon-btn danger" type="button" title="删除">
+                    <span>🗑</span>
                   </button>
                 </template>
               </el-popconfirm>
             </div>
-          </template>
-        </el-table-column>
-      </el-table>
+          </div>
+        </article>
+      </div>
 
-      <div v-if="displayList.length === 0 && !publishStore.loading" class="empty-hint">
+      <div v-if="publishStore.history.length === 0 && !publishStore.loading" class="empty-hint">
         {{ (keyword || statusFilter !== 'all') ? '没有匹配的发布记录，试试调整搜索词或筛选条件' : '暂无发布记录，请到「一键发布」创建第一个任务。' }}
       </div>
 
-      <!-- 分页控件 -->
-      <div v-if="publishStore.historyTotal > 0" class="pagination-wrapper">
-        <el-pagination
-          v-model:current-page="publishStore.historyPage"
-          v-model:page-size="publishStore.historyPageSize"
-          :page-sizes="[10, 20, 50, 100]"
-          :total="publishStore.historyTotal"
-          layout="total, sizes, prev, pager, next, jumper"
-          background
-          @size-change="handleSizeChange"
-          @current-change="handlePageChange"
-        />
-      </div>
+      <!-- 分页控件（统一分页组件，样式/功能对齐账号管理） -->
+      <ListPager
+        v-if="publishStore.historyTotal > 0"
+        :page="publishStore.historyPage"
+        :page-size="publishStore.historyPageSize"
+        :total="publishStore.historyTotal"
+        @change="onPagerChange"
+      />
     </div>
 
     <!-- 详情弹窗 -->
@@ -483,13 +471,14 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue';
+import { onMounted, ref, computed, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { RefreshRight, Refresh, Edit, Plus, Promotion, Search } from '@element-plus/icons-vue';
 import { usePublishStore } from '../stores/publish';
 import { useAccountStore } from '../stores/account';
 import { electronApi } from '../utils/electron';
-import type { PublishTask, PlatformType, PublishStatus, PublishLogEntry, PublishItemProgress, PublishRequest, ContentType } from '../../types';
+import ListPager from '../components/ListPager.vue';
+import type { PublishTask, PlatformType, PublishStatus, PublishLogEntry, PublishItemProgress, PublishRequest, ContentType, PublishQueryFilter } from '../../types';
 
 const publishStore = usePublishStore();
 const accountStore = useAccountStore();
@@ -512,26 +501,26 @@ const statusOptions = [
   { value: 'queued', label: '等待中' },
 ];
 
-// 后端 listTasksPaged 仅支持分页，不支持搜索/筛选，这里对当前页加载的数据做客户端过滤
-const displayList = computed(() => {
-  const kw = keyword.value.trim().toLowerCase();
-  return publishStore.history.filter((h: any) => {
-    if (statusFilter.value !== 'all' && h.status !== statusFilter.value) return false;
-    if (kw) {
-      const accNames = h.items.map((i: any) => nicknameOf(i.accountId)).join(' ');
-      const platNames = h.items.map((i: any) => platformLabel(i.platform)).join(' ');
-      const hay = [
-        h.id,
-        h.request?.title || '',
-        h.request?.remark || '',
-        accNames,
-        platNames,
-        (h.request?.tags || []).join(' '),
-      ].join(' ').toLowerCase();
-      if (!hay.includes(kw)) return false;
-    }
-    return true;
-  });
+// 后端 listTasksPaged 已支持「状态 + 关键字」服务端筛选并分页，
+// 这里把筛选条件下推主进程，监听 keyword / statusFilter 变化 → 重置到第 1 页重新请求，
+// 彻底解决之前"只过滤当前页、跨页搜不到"的问题。
+const currentFilter = computed<PublishQueryFilter>(() => ({
+  keyword: keyword.value.trim(),
+  status: statusFilter.value as PublishQueryFilter['status'],
+}));
+
+// 关键字：防抖 300ms，避免输入过程频繁请求；变化时重置到第 1 页
+let kwTimer: ReturnType<typeof setTimeout> | undefined;
+watch(keyword, () => {
+  if (kwTimer) clearTimeout(kwTimer);
+  kwTimer = setTimeout(() => {
+    publishStore.loadHistoryPaged(1, publishStore.historyPageSize, currentFilter.value);
+  }, 300);
+});
+
+// 状态筛选：立即重置到第 1 页重新请求
+watch(statusFilter, () => {
+  publishStore.loadHistoryPaged(1, publishStore.historyPageSize, currentFilter.value);
 });
 
 // ========== 编辑重发相关 ==========
@@ -644,17 +633,13 @@ async function submitEditAndPublish() {
 
 async function refresh() {
   await Promise.all([
-    publishStore.loadHistoryPaged(),
+    publishStore.loadHistoryPaged(publishStore.historyPage, publishStore.historyPageSize, currentFilter.value),
     publishStore.loadStats(),
   ]);
 }
 
-function handlePageChange(page: number) {
-  publishStore.loadHistoryPaged(page);
-}
-
-function handleSizeChange(size: number) {
-  publishStore.loadHistoryPaged(1, size);
+function onPagerChange(page: number, size: number) {
+  publishStore.loadHistoryPaged(page, size, currentFilter.value);
 }
 
 function nicknameOf(id: string): string {
@@ -917,7 +902,7 @@ async function cancelTask(row: any) {
 onMounted(async () => {
   await accountStore.loadPlatforms();
   await accountStore.refreshAccounts();
-  await publishStore.loadHistoryPaged(1);
+  await publishStore.loadHistoryPaged(1, undefined, currentFilter.value);
 });
 </script>
 
@@ -929,31 +914,99 @@ onMounted(async () => {
   font-size: 14px;
 }
 
-/* ========== 主列表表格设计系统化（对齐全局 .el-table 品牌化，统一全应用表格风格） ========== */
-.hist-table {
+/* ========== 发布历史列表：对齐账号管理列表视觉语言 ========== */
+.hist-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
   border-radius: var(--r-md);
   overflow: hidden;
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow-sm);
-  --el-table-border-color: var(--line);
+  background: var(--surface);
+  margin-top: 14px;
 }
-.hist-table :deep(.el-table__header-wrapper th.el-table__cell .cell) {
-  font-size: 12.5px;
-  font-weight: 700;
-  color: var(--slate);
-  padding: 11px 14px;
-  letter-spacing: 0.01em;
+.hist-head,
+.hist-row {
+  display: grid;
+  grid-template-columns:
+    190px
+    110px
+    minmax(200px, 1.6fr)
+    140px
+    minmax(220px, 1.8fr)
+    180px
+    minmax(280px, 1fr);
+  align-items: center;
+  column-gap: 18px;
+  padding: 13px 20px;
 }
-.hist-table :deep(.el-table__body-wrapper td.el-table__cell) {
-  padding: 12px 14px;
+.hist-head {
+  background: var(--brand-grad-soft);
+  border-bottom: 1px solid var(--line);
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--brand-indigo);
+  letter-spacing: 0.04em;
+}
+.hist-row {
+  border-bottom: 1px solid var(--line);
+  transition: background var(--t);
+}
+.hist-row:last-child {
+  border-bottom: none;
+}
+.hist-row:hover {
+  background: var(--surface-2);
+}
+.hist-head .hr-actions,
+.hist-row .hr-actions {
+  justify-self: start;
+}
+.hr-title-main {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hr-time-main {
+  font-size: 13px;
   color: var(--ink);
 }
-.hist-table :deep(.el-table .cell) {
-  line-height: 1.5;
+.hr-time-sched {
+  font-size: 12px;
+  color: var(--warning);
+  margin-top: 3px;
+}
+.acc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+/* 操作列按钮组左对齐，与账号列表操作列一致 */
+.hr-actions .hact {
+  justify-content: flex-start;
 }
 .cell-muted {
   color: var(--muted);
   font-size: 12px;
+}
+/* 列表响应式：窄屏隐藏表头、行退化为卡片堆叠 */
+@media (max-width: 1080px) {
+  .hist-head {
+    display: none;
+  }
+  .hist-row {
+    grid-template-columns: 1fr;
+    row-gap: 10px;
+    padding: 14px 16px;
+  }
+  .hist-row .hr-actions {
+    justify-self: start;
+  }
+  .hr-actions .hact {
+    justify-content: flex-start;
+  }
 }
 
 /* ========== 类型 / 状态标签（对齐原型 .tag 系统） ========== */
@@ -1103,97 +1156,13 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-/* ========== 发布历史操作按钮（对齐原型 .hact .act 三档语义色） ========== */
+/* ========== 发布历史操作按钮：复用共享 .icon-btn（见 components.css） ========== */
 .hact {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-start;
   align-items: center;
-}
-.hact .act {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 28px;
-  padding: 0 9px;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-  border-radius: 7px;
-  border: 1px solid var(--line);
-  background: #fff;
-  color: var(--ink);
-  cursor: pointer;
-  font-family: inherit;
-  transition: all var(--t-fast) var(--ease);
-}
-.hact .act .ic {
-  font-size: 13px;
-  line-height: 1;
-}
-.hact .act:hover {
-  border-color: rgba(99, 102, 241, 0.45);
-  color: var(--brand-indigo);
-  background: rgba(99, 102, 241, 0.06);
-}
-.hact .act:focus-visible {
-  outline: 2px solid var(--brand-indigo);
-  outline-offset: 2px;
-}
-/* 主操作：详情（靛蓝浅底描边，轻量常驻，不再用强渐变填充） */
-.hact .act.view {
-  background: rgba(99, 102, 241, 0.10);
-  color: var(--brand-indigo);
-  border-color: rgba(99, 102, 241, 0.35);
-}
-.hact .act.view:hover {
-  background: rgba(99, 102, 241, 0.16);
-  border-color: var(--brand-indigo);
-}
-/* 危险操作：取消发布 / 删除（红，常态浅红底） */
-.hact .act.danger {
-  color: var(--danger);
-  border-color: rgba(244, 63, 94, 0.35);
-  background: rgba(244, 63, 94, 0.08);
-}
-.hact .act.danger:hover {
-  background: rgba(244, 63, 94, 0.14);
-  border-color: var(--danger);
-  color: var(--danger);
-}
-/* 推进操作：立即发布（绿浅底描边，仅测试任务可见） */
-.hact .act.go {
-  background: rgba(16, 185, 129, 0.10);
-  color: #059669;
-  border-color: rgba(16, 185, 129, 0.35);
-}
-.hact .act.go:hover {
-  background: rgba(16, 185, 129, 0.16);
-  border-color: #059669;
-}
-/* 加载态：重试 / 重新测试 */
-.hact .act:disabled {
-  opacity: 0.7;
-  cursor: default;
-}
-.act-spin {
-  width: 12px;
-  height: 12px;
-  border: 2px solid currentColor;
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: act-spin 0.6s linear infinite;
-}
-@keyframes act-spin {
-  to { transform: rotate(360deg); }
-}
-.pagination-wrapper {
-  display: flex;
-  justify-content: center;
-  margin-top: 20px;
-  padding: 16px 0;
 }
 .detail-content {
   max-height: 60vh;

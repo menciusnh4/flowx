@@ -3,6 +3,9 @@
    落地自 flowx-ui-redesign 原型，对齐 feature/ui-redesign
    ============================================================ */
 
+/* 共享组件样式（列表系统 .data-list / 按钮 .btn .icon-btn / el-button 主题） */
+@import './components.css';
+
 :root {
   /* ---- 品牌渐变 ---- */
   --brand-indigo: #6366f1;
@@ -125,7 +128,7 @@ body {
 
 /* ---------- 左侧导航 ---------- */
 .sidebar {
-  width: 250px;
+  width: 180px;
   flex-shrink: 0;
   height: 100vh;
   display: flex;
@@ -215,6 +218,7 @@ body {
   width: 100%;
   text-align: left;
   font-family: inherit;
+  white-space: nowrap;
 }
 .nav-item .ic {
   width: 20px;
@@ -298,6 +302,7 @@ body {
   width: calc(100% - 16px);
   text-align: left;
   font-family: inherit;
+  white-space: nowrap;
 }
 .nav-sub-item .dot {
   width: 6px;
@@ -363,6 +368,178 @@ body {
   color: var(--faint);
   font-weight: 600;
   text-align: center;
+}
+
+/* ============ 侧栏收起态 ============ */
+.sidebar.collapsed {
+  width: 64px;
+  padding: 18px 12px;
+  gap: 8px;
+}
+
+/* Logo 收为方块 */
+.sidebar.collapsed .sidebar-logo {
+  justify-content: center;
+  padding: 2px 0 16px;
+}
+.sidebar.collapsed .sidebar-logo .logo-text {
+  opacity: 0;
+  transform: translateX(-8px);
+  width: 0;
+  pointer-events: none;
+  transition: opacity var(--t), transform var(--t);
+}
+
+/* 导航项：仅图标居中，隐藏文字与箭头 */
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding: 0;
+  gap: 0;
+}
+.sidebar.collapsed .nav-item .label {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t);
+}
+.sidebar.collapsed .nav-item .caret {
+  display: none;
+}
+.sidebar.collapsed .nav-item.active::before {
+  left: -12px;
+}
+
+/* 内联二级菜单在收起态隐藏（改用悬浮飞出面板） */
+.sidebar.collapsed .nav-sub {
+  display: none;
+}
+
+/* Footer 收起态 */
+.sidebar.collapsed .sidebar-foot {
+  padding: 14px 0 4px;
+  align-items: center;
+}
+.sidebar.collapsed .side-user {
+  gap: 0;
+  justify-content: center;
+  padding: 9px 0;
+}
+.sidebar.collapsed .side-user-name {
+  opacity: 0;
+  width: 0;
+  pointer-events: none;
+  transition: opacity var(--t);
+}
+.sidebar.collapsed .side-ver {
+  opacity: 0;
+  height: 0;
+  overflow: hidden;
+  transition: opacity var(--t);
+}
+
+/* 收起/展开开关 */
+.collapse-toggle {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-2, #f6f7fb);
+  color: var(--slate);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--t-fast), color var(--t-fast), justify-content var(--t);
+  overflow: hidden;
+}
+.collapse-toggle:hover {
+  background: var(--brand-grad-soft);
+  color: var(--brand-indigo);
+}
+.collapse-toggle .tg-ic {
+  font-size: 15px;
+  flex-shrink: 0;
+  transition: transform var(--t);
+  line-height: 1;
+}
+.collapse-toggle .tg-label {
+  white-space: nowrap;
+  opacity: 1;
+  transition: opacity var(--t);
+}
+.sidebar.collapsed .collapse-toggle {
+  justify-content: center;
+  padding: 0;
+}
+.sidebar.collapsed .collapse-toggle .tg-label {
+  opacity: 0;
+  width: 0;
+  pointer-events: none;
+}
+.sidebar.collapsed .collapse-toggle .tg-ic {
+  transform: rotate(180deg);
+}
+
+/* 收起态：叶子项提示气泡（CSS，悬停显示） */
+.sidebar.collapsed .nav-item:not(.has-sub)::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 16px);
+  top: 50%;
+  transform: translateY(-50%) translateX(-6px);
+  background: #1f2433;
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 7px;
+  white-space: nowrap;
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 200;
+  transition: opacity var(--t-fast), transform var(--t-fast);
+}
+.sidebar.collapsed .nav-item:not(.has-sub):hover::after {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+/* ============ 收起态：父级悬浮飞出子面板 ============ */
+.flyout {
+  position: fixed;
+  z-index: 80;
+  min-width: 184px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  opacity: 0;
+  transform: translateX(-6px) scale(0.98);
+  pointer-events: none;
+  transition: opacity var(--t-fast), transform var(--t-fast);
+}
+.flyout.show {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+  pointer-events: auto;
+}
+.flyout .fly-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--faint);
+  text-transform: uppercase;
+  padding: 6px 10px 4px;
+}
+.flyout .nav-sub-item {
+  margin-left: 0;
+  width: 100%;
 }
 
 /* ---------- 内容区 ---------- */

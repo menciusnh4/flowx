@@ -8,36 +8,47 @@
         </el-button>
       </div>
 
-      <el-table v-loading="envStore.loading" :data="envStore.environments" border stripe style="margin-top: 16px">
-        <el-table-column label="环境名称" prop="name" min-width="150" />
-        <el-table-column label="浏览器 User-Agent" prop="userAgent" min-width="260" show-overflow-tooltip />
-        <el-table-column label="绑定的代理 IP" min-width="180">
-          <template #default="{ row }">
-            <el-tag v-if="row.proxyId" type="success" size="small">
-              {{ getProxyLabel(row.proxyId) }}
+      <div v-loading="envStore.loading || listLoading" class="data-list" style="--cols: minmax(150px,1.4fr) minmax(260px,2.4fr) minmax(180px,1.8fr) 160px 150px; margin-top: 16px">
+        <header class="data-list__head">
+          <div>环境名称</div>
+          <div>浏览器 User-Agent</div>
+          <div>绑定的代理 IP</div>
+          <div>创建时间</div>
+          <div class="data-list__actions">操作</div>
+        </header>
+
+        <article class="data-list__row" v-for="env in pagedResult.items" :key="env.id">
+          <div class="cell-name">{{ env.name }}</div>
+          <div class="cell-mono" :title="env.userAgent">{{ env.userAgent }}</div>
+          <div>
+            <el-tag v-if="env.proxyId" type="success" size="small">
+              {{ getProxyLabel(env.proxyId) }}
             </el-tag>
             <span v-else style="color:#c0c4cc; font-size:12px">未绑定代理（使用本机直连）</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="创建时间" width="160">
-          <template #default="{ row }">
-            {{ formatTime(row.createdAt) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" type="primary" link @click="openEditDialog(asEnv(row))">编辑</el-button>
-            <el-popconfirm title="确定删除此环境配置？（绑定了此环境的账号将变更为未绑定环境）" @confirm="handleDelete(asEnv(row).id)">
-              <template #reference>
-                <el-button size="small" type="danger" link>删除</el-button>
-              </template>
-            </el-popconfirm>
-          </template>
-        </el-table-column>
-      </el-table>
+          </div>
+          <div>{{ formatTime(env.createdAt) }}</div>
+          <div class="data-list__actions">
+            <button class="icon-btn primary" type="button" title="编辑" @click="openEditDialog(asEnv(env))">
+              <el-icon><Edit /></el-icon>
+            </button>
+            <button class="icon-btn danger" type="button" title="删除" @click="handleDelete(env.id)">
+              <el-icon><Delete /></el-icon>
+            </button>
+          </div>
+        </article>
+      </div>
 
-      <div v-if="envStore.environments.length === 0 && !envStore.loading" class="empty-hint">
-        暂无环境配置，点击右上角“添加环境配置”创建。
+      <ListPager
+        v-if="pagedResult.total > 0"
+        v-model:page="currentPage"
+        v-model:pageSize="pageSize"
+        :total="pagedResult.total"
+        unit="个环境"
+        @change="onPagerChange"
+      />
+
+      <div v-if="pagedResult.items.length === 0 && !listLoading && !envStore.loading" class="empty-hint">
+        暂无环境配置，点击右上角"添加环境配置"创建。
       </div>
     </div>
 
@@ -71,11 +82,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ref, onMounted, reactive, watch } from 'vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus } from '@element-plus/icons-vue';
 import { useEnvStore } from '../stores/env';
-import type { BrowserEnvironment } from '../../types';
+import type { BrowserEnvironment, PagedResult } from '../../types';
+import ListPager from '../components/ListPager.vue';
 
 // 内置的 5 个主流浏览器 UA 指纹模板，用于一键随机生成
 const UA_TEMPLATES = [
@@ -106,7 +118,46 @@ const rules = {
 
 onMounted(async () => {
   await envStore.loadAll();
+  loadList(1, pageSize.value);
 });
+
+// ============ 服务端分页（筛选下推主进程，列表走 queryEnvironments） ============
+const currentPage = ref(1);
+const pageSize = ref(10);
+const listLoading = ref(false);
+const pagedResult = ref<PagedResult<BrowserEnvironment>>({
+  items: [],
+  total: 0,
+  page: 1,
+  pageSize: 10,
+  totalPages: 1,
+});
+
+/** 加载某一页（服务端分页）；越界页码回退到末页，避免删除/刷新后空白 */
+async function loadList(page: number, size: number) {
+  listLoading.value = true;
+  try {
+    let res = await envStore.loadEnvironmentsPaged({}, page, size);
+    if (res.items.length === 0 && res.total > 0 && page !== res.totalPages) {
+      res = await envStore.loadEnvironmentsPaged({}, res.totalPages, size);
+    }
+    pagedResult.value = res;
+    currentPage.value = res.page;
+  } finally {
+    listLoading.value = false;
+  }
+}
+
+/** 翻页 / 改每页大小：由 ListPager 的 @change 触发 */
+function onPagerChange(page: number, size: number) {
+  loadList(page, size);
+}
+
+// 全量环境变化（删除 / 新增 / 编辑）后同步列表当前页
+watch(
+  () => envStore.environments,
+  () => loadList(currentPage.value, pageSize.value),
+);
 
 function getProxyLabel(proxyId: string): string {
   const p = envStore.proxies.find((x) => x.id === proxyId);
@@ -166,6 +217,15 @@ async function handleSave() {
 }
 
 async function handleDelete(id: string) {
+  try {
+    await ElMessageBox.confirm(
+      '确定删除此环境配置？（绑定了此环境的账号将变更为未绑定环境）',
+      '确认删除',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    );
+  } catch {
+    return; // 用户取消
+  }
   try {
     const ok = await envStore.deleteEnvironment(id);
     if (ok) {

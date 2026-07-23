@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { electronApi } from '../utils/electron';
-import type { AccountInfo, PlatformMeta, PlatformType, HealthCheckConfig, AccountCategory } from '../../types';
+import type { AccountInfo, PlatformMeta, PlatformType, HealthCheckConfig, AccountCategory, PagedResult, AccountQueryFilter } from '../../types';
 
 export const useAccountStore = defineStore('account', {
   state: () => ({
@@ -33,6 +33,16 @@ export const useAccountStore = defineStore('account', {
         this.error = e instanceof Error ? e.message : String(e);
       } finally {
         this.loading = false;
+      }
+    },
+
+    /** 服务端分页查询账号（筛选下推主进程），供账号管理列表使用 */
+    async loadAccountsPaged(filter: AccountQueryFilter = {}, page = 1, pageSize = 10): Promise<PagedResult<AccountInfo>> {
+      try {
+        return await electronApi.listAccountsPaged(filter, page, pageSize);
+      } catch (e) {
+        this.error = e instanceof Error ? e.message : String(e);
+        return { items: [], total: 0, page, pageSize, totalPages: 1 };
       }
     },
     async beginAuth(platform: PlatformType, envId?: string | null) {

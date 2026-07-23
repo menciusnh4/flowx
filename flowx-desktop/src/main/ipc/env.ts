@@ -9,6 +9,11 @@ export function registerEnvIpc(): void {
     return BrowserEnvService.listProxies();
   });
 
+  // 服务端分页查询代理 IP
+  safeInvoke('env:listProxiesPaged', (filter, page, pageSize) =>
+    BrowserEnvService.queryProxies(filter, page, pageSize),
+  );
+
   safeInvoke('env:createProxy', (data: Omit<ProxyConfig, 'id' | 'createdAt'>) => {
     return BrowserEnvService.createProxy(data);
   });
@@ -30,6 +35,11 @@ export function registerEnvIpc(): void {
   safeInvoke('env:listEnvironments', () => {
     return BrowserEnvService.listEnvironments();
   });
+
+  // 服务端分页查询浏览器环境
+  safeInvoke('env:listEnvironmentsPaged', (filter, page, pageSize) =>
+    BrowserEnvService.queryEnvironments(filter, page, pageSize),
+  );
 
   safeInvoke('env:createEnvironment', (data: Omit<BrowserEnvironment, 'id' | 'createdAt'>) => {
     return BrowserEnvService.createEnvironment(data);

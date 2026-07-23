@@ -2,6 +2,7 @@
 import { ref, computed, reactive, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox, ElInput } from 'element-plus'
 import { useAccountStore } from '../stores/account'
+import { useUiStore } from '../stores/ui'
 import { getPlatformIcon } from '../utils/platformIcons'
 import { electronApi } from '../utils/electron'
 import type { PublishRequest, PlatformType } from '../../types'
@@ -10,6 +11,8 @@ import ComplianceBadge from './ComplianceBadge.vue'
 import ComplianceDetailPanel from './ComplianceDetailPanel.vue'
 import ComplianceNoticeModal from './ComplianceNoticeModal.vue'
 import type { ComplianceSettings } from '../../types/compliance'
+
+const uiStore = useUiStore()
 import MarkdownEditor from './MarkdownEditor.vue'
 import MediaLightbox from './MediaLightbox.vue'
 import { complianceHighlight } from '../directives/complianceHighlight'
@@ -135,6 +138,9 @@ const contentPlaceholder = computed(() => {
 
 function openExpand() {
   expandOpen.value = true
+  // 正文展开模态是 HTML 浮层，但浏览器模块左侧是 WebContentsView 原生层（永远盖在 HTML 之上，
+  // CSS z-index 无效），弹窗会被原生浏览器层盖住。故通知全局弹层计数 → Browser.vue 自动隐藏浏览器。
+  uiStore.pushOverlay('publish-expand-modal')
   nextTick(() => {
     if (!(contentType.value === 'article' && contentMode.value === 'markdown')) {
       const ta = (modalContentRef.value as any)?.textarea as HTMLTextAreaElement | undefined
@@ -145,6 +151,7 @@ function openExpand() {
 function closeExpand() {
   if (!expandOpen.value) return
   expandOpen.value = false
+  uiStore.popOverlay('publish-expand-modal')
   nextTick(() => {
     if (!(contentType.value === 'article' && contentMode.value === 'markdown')) {
       ;(contentTextareaRef.value as any)?.textarea?.focus()
@@ -1324,6 +1331,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('drop', preventFileNavigation)
   window.removeEventListener('keydown', onGlobalKeydown)
   window.removeEventListener('resize', onWinResize)
+  // 兜底：展开模态仍激活时卸载（如离开浏览器模块），清掉弹层计数避免浏览器原生层被永久隐藏
+  if (expandOpen.value) uiStore.popOverlay('publish-expand-modal')
 })
 
 /**
@@ -1844,7 +1853,7 @@ function setType(t: 'video' | 'image' | 'article') {
   padding: 20px 22px;
   box-shadow: var(--shadow-xs);
 }
-.pub-card { overflow-y: auto; min-height: 0; }
+.pub-card { overflow-y: auto; overflow-x: hidden; min-height: 0; }
 .acc-card { display: flex; flex-direction: column; min-height: 0; align-self: stretch; }
 .pick-scroll { overflow-y: auto; min-height: 0; flex: 1; padding-right: 4px; }
 
@@ -2153,9 +2162,9 @@ function setType(t: 'video' | 'image' | 'article') {
 .empty { padding: 20px 0; }
 
 /* ===== 合规预检头部（对齐原型 compliance-prototype.html）===== */
-.comp-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.comp-head-label { font-size: 13px; font-weight: 800; color: var(--ink); display: inline-flex; align-items: center; gap: 6px; }
-.mode-switch { display: inline-flex; align-items: center; gap: 0; background: #f1f5f9; border-radius: 11px; padding: 3px; }
+.comp-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.comp-head-label { font-size: 13px; font-weight: 800; color: var(--ink); display: inline-flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.mode-switch { display: inline-flex; align-items: center; gap: 0; background: #f1f5f9; border-radius: 11px; padding: 3px; flex-shrink: 0; flex-wrap: wrap; }
 .mode-switch .ms {
   height: 32px; padding: 0 14px; border-radius: 9px; font-size: 12.5px; font-weight: 700;
   color: var(--slate); background: transparent; border: none; cursor: pointer; transition: all 0.2s;

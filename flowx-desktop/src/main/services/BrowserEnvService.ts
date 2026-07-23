@@ -1,7 +1,7 @@
 import { getStore } from '../store/SecureStore';
 import { logger } from '../utils/logger';
 import { session, net } from 'electron';
-import type { ProxyConfig, BrowserEnvironment, ProxyTestResult } from '../../types';
+import type { ProxyConfig, BrowserEnvironment, ProxyTestResult, PagedResult, ProxyQueryFilter, EnvQueryFilter } from '../../types';
 
 const PROXIES_KEY = 'proxies';
 const ENVIRONMENTS_KEY = 'environments';
@@ -16,6 +16,39 @@ export class BrowserEnvService {
   static listProxies(): ProxyConfig[] {
     const store = getStore();
     return (store.get(PROXIES_KEY) as ProxyConfig[] | undefined) || [];
+  }
+
+  /** 服务端分页查询代理 IP（预留 keyword/type 筛选，当前页面无筛选 UI 也可正确分页） */
+  static queryProxies(
+    filter: ProxyQueryFilter = {},
+    page = 1,
+    pageSize = 10,
+  ): PagedResult<ProxyConfig> {
+    let list = this.listProxies();
+    const q = (filter.keyword || '').trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          p.host.toLowerCase().includes(q) ||
+          String(p.port).includes(q),
+      );
+    }
+    if (filter.type) {
+      list = list.filter((p) => p.type === filter.type);
+    }
+    const total = list.length;
+    const safePage = Math.max(1, Math.floor(page) || 1);
+    const safeSize = Math.min(100, Math.max(1, Math.floor(pageSize) || 10));
+    const totalPages = Math.max(1, Math.ceil(total / safeSize));
+    const start = (safePage - 1) * safeSize;
+    return {
+      items: list.slice(start, start + safeSize),
+      total,
+      page: safePage,
+      pageSize: safeSize,
+      totalPages,
+    };
   }
 
   /**
@@ -224,6 +257,36 @@ export class BrowserEnvService {
   static listEnvironments(): BrowserEnvironment[] {
     const store = getStore();
     return (store.get(ENVIRONMENTS_KEY) as BrowserEnvironment[] | undefined) || [];
+  }
+
+  /** 服务端分页查询浏览器环境（预留 keyword 筛选） */
+  static queryEnvironments(
+    filter: EnvQueryFilter = {},
+    page = 1,
+    pageSize = 10,
+  ): PagedResult<BrowserEnvironment> {
+    let list = this.listEnvironments();
+    const q = (filter.keyword || '').trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (e) =>
+          e.name.toLowerCase().includes(q) ||
+          e.userAgent.toLowerCase().includes(q) ||
+          (e.proxyId || '').toLowerCase().includes(q),
+      );
+    }
+    const total = list.length;
+    const safePage = Math.max(1, Math.floor(page) || 1);
+    const safeSize = Math.min(100, Math.max(1, Math.floor(pageSize) || 10));
+    const totalPages = Math.max(1, Math.ceil(total / safeSize));
+    const start = (safePage - 1) * safeSize;
+    return {
+      items: list.slice(start, start + safeSize),
+      total,
+      page: safePage,
+      pageSize: safeSize,
+      totalPages,
+    };
   }
 
   /**

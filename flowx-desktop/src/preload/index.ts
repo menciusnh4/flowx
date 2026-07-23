@@ -33,6 +33,11 @@ import type {
   RuleDraft,
   RuleTestResult,
   PublishContentType,
+  AccountQueryFilter,
+  ProxyQueryFilter,
+  EnvQueryFilter,
+  RuleQueryFilter,
+  PublishQueryFilter,
 } from '../types';
 
 // Preload 脚本：通过 contextBridge 暴露安全 API
@@ -64,6 +69,8 @@ contextBridge.exposeInMainWorld('electron', {
   account: {
     listPlatforms: (): Promise<PlatformMeta[]> => invoke('account:listPlatforms'),
     list: (): Promise<AccountInfo[]> => invoke('account:list'),
+    listPaged: (filter: AccountQueryFilter = {}, page = 1, size = 10): Promise<PagedResult<AccountInfo>> =>
+      invoke('account:listPaged', filter, page, size),
     get: (id: string): Promise<AccountInfo | null> => invoke('account:get', id),
     beginAuth: (platform: PlatformType, envId?: string | null): Promise<AccountInfo> =>
       invoke('account:beginAuth', platform, envId),
@@ -115,8 +122,8 @@ contextBridge.exposeInMainWorld('electron', {
       invoke('publish:progress', taskId),
     cancel: (taskId: string): Promise<boolean> => invoke('publish:cancel', taskId),
     list: (): Promise<PublishTask[]> => invoke('publish:list'),
-    listPaged: (page?: number, pageSize?: number): Promise<PagedResult<PublishTask>> =>
-      invoke('publish:listPaged', page, pageSize),
+    listPaged: (page?: number, pageSize?: number, filter?: PublishQueryFilter): Promise<PagedResult<PublishTask>> =>
+      invoke('publish:listPaged', page, pageSize, filter),
     getStats: (): Promise<PublishStats> => invoke('publish:getStats'),
     retry: (taskId: string): Promise<string | null> => invoke('publish:retry', taskId),
     retryAsTest: (taskId: string): Promise<string | null> => invoke('publish:retryAsTest', taskId),
@@ -233,6 +240,8 @@ contextBridge.exposeInMainWorld('electron', {
 
     // 自定义站点规则
     listCustomRules: (): Promise<CustomSiteRule[]> => invoke('browser:listCustomRules'),
+    listCustomRulesPaged: (filter: RuleQueryFilter = {}, page = 1, size = 10): Promise<PagedResult<CustomSiteRule>> =>
+      invoke('browser:listCustomRulesPaged', filter, page, size),
     getCustomRule: (id: string): Promise<CustomSiteRule | null> => invoke('browser:getCustomRule', id),
     createCustomRule: (data: Omit<CustomSiteRule, 'id' | 'createdAt' | 'updatedAt' | 'useCount'>): Promise<CustomSiteRule> =>
       invoke('browser:createCustomRule', data),
@@ -463,6 +472,8 @@ contextBridge.exposeInMainWorld('electron', {
   // ========== 系统环境配置与指纹代理 ==========
   env: {
     listProxies: (): Promise<ProxyConfig[]> => invoke('env:listProxies'),
+    listProxiesPaged: (filter: ProxyQueryFilter = {}, page = 1, size = 10): Promise<PagedResult<ProxyConfig>> =>
+      invoke('env:listProxiesPaged', filter, page, size),
     createProxy: (data: Omit<ProxyConfig, 'id' | 'createdAt'>): Promise<ProxyConfig> => invoke('env:createProxy', data),
     updateProxy: (id: string, patch: Partial<Omit<ProxyConfig, 'id' | 'createdAt'>>): Promise<ProxyConfig | null> => invoke('env:updateProxy', id, patch),
     deleteProxy: (id: string): Promise<boolean> => invoke('env:deleteProxy', id),
@@ -470,6 +481,8 @@ contextBridge.exposeInMainWorld('electron', {
       invoke('env:testProxy', id, testUrl, timeoutMs),
 
     listEnvironments: (): Promise<BrowserEnvironment[]> => invoke('env:listEnvironments'),
+    listEnvironmentsPaged: (filter: EnvQueryFilter = {}, page = 1, size = 10): Promise<PagedResult<BrowserEnvironment>> =>
+      invoke('env:listEnvironmentsPaged', filter, page, size),
     createEnvironment: (data: Omit<BrowserEnvironment, 'id' | 'createdAt'>): Promise<BrowserEnvironment> => invoke('env:createEnvironment', data),
     updateEnvironment: (id: string, patch: Partial<Omit<BrowserEnvironment, 'id' | 'createdAt'>>): Promise<BrowserEnvironment | null> => invoke('env:updateEnvironment', id, patch),
     deleteEnvironment: (id: string): Promise<boolean> => invoke('env:deleteEnvironment', id),
@@ -497,6 +510,7 @@ declare global {
       account: {
         listPlatforms: () => Promise<PlatformMeta[]>;
         list: () => Promise<AccountInfo[]>;
+        listPaged: (filter?: AccountQueryFilter, page?: number, size?: number) => Promise<PagedResult<AccountInfo>>;
         get: (id: string) => Promise<AccountInfo | null>;
         beginAuth: (platform: PlatformType, envId?: string | null) => Promise<AccountInfo>;
         delete: (id: string) => Promise<boolean>;
@@ -527,7 +541,7 @@ declare global {
         progress: (taskId: string) => Promise<ProgressInfo | null>;
         cancel: (taskId: string) => Promise<boolean>;
         list: () => Promise<PublishTask[]>;
-        listPaged: (page?: number, pageSize?: number) => Promise<PagedResult<PublishTask>>;
+        listPaged: (page?: number, pageSize?: number, filter?: PublishQueryFilter) => Promise<PagedResult<PublishTask>>;
         getStats: () => Promise<PublishStats>;
         retry: (taskId: string) => Promise<string | null>;
         retryAsTest: (taskId: string) => Promise<string | null>;
@@ -595,12 +609,14 @@ declare global {
       };
       env: {
         listProxies: () => Promise<ProxyConfig[]>;
+        listProxiesPaged: (filter?: ProxyQueryFilter, page?: number, size?: number) => Promise<PagedResult<ProxyConfig>>;
         createProxy: (data: Omit<ProxyConfig, 'id' | 'createdAt'>) => Promise<ProxyConfig>;
         updateProxy: (id: string, patch: Partial<Omit<ProxyConfig, 'id' | 'createdAt'>>) => Promise<ProxyConfig | null>;
         deleteProxy: (id: string) => Promise<boolean>;
         testProxy: (id: string, testUrl?: string, timeoutMs?: number) => Promise<ProxyTestResult>;
 
         listEnvironments: () => Promise<BrowserEnvironment[]>;
+        listEnvironmentsPaged: (filter?: EnvQueryFilter, page?: number, size?: number) => Promise<PagedResult<BrowserEnvironment>>;
         createEnvironment: (data: Omit<BrowserEnvironment, 'id' | 'createdAt'>) => Promise<BrowserEnvironment>;
         updateEnvironment: (id: string, patch: Partial<Omit<BrowserEnvironment, 'id' | 'createdAt'>>) => Promise<BrowserEnvironment | null>;
         deleteEnvironment: (id: string) => Promise<boolean>;

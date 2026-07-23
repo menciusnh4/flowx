@@ -11,6 +11,11 @@ export function registerAccountIpc(): void {
   // 获取所有账号
   safeInvoke('account:list', () => AccountService.listAccounts());
 
+  // 服务端分页查询账号（筛选 + 分页下推主进程）
+  safeInvoke('account:listPaged', (filter, page, pageSize) =>
+    AccountService.queryAccounts(filter, page, pageSize),
+  );
+
   // 单个账号详情
   safeInvoke('account:get', (id: string) => AccountService.getAccount(id));
 

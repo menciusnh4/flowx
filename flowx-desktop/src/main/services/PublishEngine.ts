@@ -13,6 +13,7 @@ import type {
   PlatformType,
   PublishLogEntry,
   PublishLogQuery,
+  PublishQueryFilter,
 } from '../../types';
 
 const TASKS_KEY = 'publishTasks';
@@ -238,7 +239,7 @@ class PublishEngineClass {
    * @param pageSize 每页数量，默认20
    * @returns { items: PublishTask[], total: number, page: number, pageSize: number }
    */
-  listTasksPaged(page = 1, pageSize = 20): {
+  listTasksPaged(page = 1, pageSize = 20, filter?: PublishQueryFilter): {
     items: PublishTask[];
     total: number;
     page: number;
@@ -246,12 +247,41 @@ class PublishEngineClass {
     totalPages: number;
   } {
     const all = Array.from(this.running.values()).sort((a, b) => b.createdAt - a.createdAt);
-    const total = all.length;
+    let list = all;
+
+    if (filter && filter.status && filter.status !== 'all') {
+      list = list.filter((t) => t.status === filter.status);
+    }
+    const q = (filter?.keyword || '').trim().toLowerCase();
+    if (q) {
+      const accounts = AccountService.listAccounts();
+      const nickMap = new Map<string, string>();
+      const platMap = new Map<string, string>();
+      for (const a of accounts) {
+        nickMap.set(a.id, a.nickname || '');
+        platMap.set(a.id, getPlatform(a.platform)?.meta.name || '');
+      }
+      list = list.filter((t) => {
+        const accNames = t.items.map((i) => nickMap.get(i.accountId) || '').join(' ');
+        const platNames = t.items.map((i) => platMap.get(i.accountId) || '').join(' ');
+        const hay = [
+          t.id,
+          t.request?.title || '',
+          t.request?.remark || '',
+          accNames,
+          platNames,
+          (t.request?.tags || []).join(' '),
+        ].join(' ').toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
+    const total = list.length;
     const safePage = Math.max(1, page | 0);
     const safeSize = Math.min(100, Math.max(5, pageSize | 0));
     const totalPages = Math.max(1, Math.ceil(total / safeSize));
     const start = (safePage - 1) * safeSize;
-    const items = all.slice(start, start + safeSize);
+    const items = list.slice(start, start + safeSize);
     return { items, total, page: safePage, pageSize: safeSize, totalPages };
   }
 

@@ -5,6 +5,7 @@ import type {
   PublishTask,
   PublishStatus,
   PublishStats,
+  PublishQueryFilter,
 } from '../../types';
 import { electronApi } from '../utils/electron';
 
@@ -287,14 +288,19 @@ export const usePublishStore = defineStore('publish', {
       }
     },
 
-    async loadHistoryPaged(page?: number, pageSize?: number) {
+    async loadHistoryPaged(page?: number, pageSize?: number, filter?: PublishQueryFilter) {
       if (page != null) this.historyPage = page;
       if (pageSize != null) this.historyPageSize = pageSize;
       this.loading = true;
       this.historyError = '';
-      this._logLine('info', `loadHistoryPaged: page=${this.historyPage}, pageSize=${this.historyPageSize}`);
+      this._logLine('info', `loadHistoryPaged: page=${this.historyPage}, pageSize=${this.historyPageSize}, filter=${JSON.stringify(filter || {})}`);
       try {
-        const result = await electronApi.listTasksPaged(this.historyPage, this.historyPageSize);
+        let result = await electronApi.listTasksPaged(this.historyPage, this.historyPageSize, filter);
+        // 越界页码（删除后总页数变少）回退到末页，避免空白页
+        if (result.items.length === 0 && result.total > 0 && this.historyPage > result.totalPages) {
+          this.historyPage = result.totalPages;
+          result = await electronApi.listTasksPaged(this.historyPage, this.historyPageSize, filter);
+        }
         this.history = result.items || [];
         this.historyTotal = result.total;
         this.historyPage = result.page;

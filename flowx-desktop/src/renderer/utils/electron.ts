@@ -28,6 +28,11 @@ import type {
   CustomSiteRule,
   PickerFieldType,
   PickerResult,
+  AccountQueryFilter,
+  ProxyQueryFilter,
+  EnvQueryFilter,
+  RuleQueryFilter,
+  PublishQueryFilter,
 } from '../../types';
 import type { ComplianceScanRequest, ComplianceResult, ComplianceSettings } from '../../types/compliance';
 
@@ -41,6 +46,9 @@ export const electronApi = {
   },
   async listAccounts(): Promise<AccountInfo[]> {
     return invokeElectron('account.list', 'account:list');
+  },
+  async listAccountsPaged(filter: AccountQueryFilter = {}, page = 1, pageSize = 10): Promise<PagedResult<AccountInfo>> {
+    return invokeElectron('account.listPaged', 'account:listPaged', filter, page, pageSize);
   },
   async getAccount(id: string): Promise<AccountInfo | null> {
     return invokeElectron('account.get', 'account:get', id);
@@ -128,8 +136,8 @@ export const electronApi = {
   async listTasks(): Promise<PublishTask[]> {
     return invokeElectron('publish.list', 'publish:list');
   },
-  async listTasksPaged(page?: number, pageSize?: number): Promise<PagedResult<PublishTask>> {
-    return invokeElectron('publish.listPaged', 'publish:listPaged', page, pageSize);
+  async listTasksPaged(page?: number, pageSize?: number, filter?: PublishQueryFilter): Promise<PagedResult<PublishTask>> {
+    return invokeElectron('publish.listPaged', 'publish:listPaged', page, pageSize, filter);
   },
   async getPublishStats(): Promise<PublishStats> {
     return invokeElectron('publish.getStats', 'publish:getStats');
@@ -267,6 +275,9 @@ export const electronApi = {
   async listProxies(): Promise<ProxyConfig[]> {
     return invokeElectron('env.listProxies', 'env:listProxies');
   },
+  async listProxiesPaged(filter: ProxyQueryFilter = {}, page = 1, pageSize = 10): Promise<PagedResult<ProxyConfig>> {
+    return invokeElectron('env.listProxiesPaged', 'env:listProxiesPaged', filter, page, pageSize);
+  },
   async createProxy(data: Omit<ProxyConfig, 'id' | 'createdAt'>): Promise<ProxyConfig> {
     return invokeElectron('env.createProxy', 'env:createProxy', data);
   },
@@ -281,6 +292,9 @@ export const electronApi = {
   },
   async listEnvironments(): Promise<BrowserEnvironment[]> {
     return invokeElectron('env.listEnvironments', 'env:listEnvironments');
+  },
+  async listEnvironmentsPaged(filter: EnvQueryFilter = {}, page = 1, pageSize = 10): Promise<PagedResult<BrowserEnvironment>> {
+    return invokeElectron('env.listEnvironmentsPaged', 'env:listEnvironmentsPaged', filter, page, pageSize);
   },
   async createEnvironment(data: Omit<BrowserEnvironment, 'id' | 'createdAt'>): Promise<BrowserEnvironment> {
     return invokeElectron('env.createEnvironment', 'env:createEnvironment', data);
@@ -379,6 +393,9 @@ export const electronApi = {
     // 自定义站点规则
     async listCustomRules(): Promise<CustomSiteRule[]> {
       return invokeElectron('browser.listCustomRules', 'browser:listCustomRules');
+    },
+    async listCustomRulesPaged(filter: RuleQueryFilter = {}, page = 1, pageSize = 10): Promise<PagedResult<CustomSiteRule>> {
+      return invokeElectron('browser.listCustomRulesPaged', 'browser:listCustomRulesPaged', filter, page, pageSize);
     },
     async getCustomRule(id: string): Promise<CustomSiteRule | null> {
       return invokeElectron('browser.getCustomRule', 'browser:getCustomRule', id);
