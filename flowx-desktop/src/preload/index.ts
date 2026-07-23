@@ -157,6 +157,14 @@ contextBridge.exposeInMainWorld('electron', {
       invoke('system:showSaveDialog', options),
     minimizeWindow: (): Promise<boolean> => invoke('system:minimizeWindow'),
     closeWindow: (): Promise<boolean> => invoke('system:closeWindow'),
+    // 窗口最大化/还原（toggle）
+    maximizeWindow: (): Promise<boolean> => invoke('system:maximizeWindow'),
+    isMaximizedWindow: (): Promise<boolean> => invoke('system:isMaximizedWindow'),
+    // 自定义边缘缩放：读取/设置窗口几何
+    getWindowBounds: (): Promise<{ x: number; y: number; width: number; height: number } | null> =>
+      invoke('system:getWindowBounds'),
+    setWindowBounds: (b: { x: number; y: number; width: number; height: number }): Promise<boolean> =>
+      invoke('system:setWindowBounds', b),
     // 原生菜单（用于顶部导航栏下拉，避免 WebContentsView 遮挡）
     popupNativeMenu: (
       items: Array<{ id: string; label: string; enabled?: boolean; type?: 'normal' | 'separator' | 'submenu'; submenu?: any[] }>,
@@ -542,6 +550,10 @@ declare global {
         showSaveDialog: (options?: Electron.SaveDialogOptions) => Promise<{ canceled: boolean; filePath?: string }>;
         minimizeWindow: () => Promise<boolean>;
         closeWindow: () => Promise<boolean>;
+        maximizeWindow: () => Promise<boolean>;
+        isMaximizedWindow: () => Promise<boolean>;
+        getWindowBounds: () => Promise<{ x: number; y: number; width: number; height: number } | null>;
+        setWindowBounds: (bounds: { x: number; y: number; width: number; height: number }) => Promise<boolean>;
       };
       log: {
         readMain: (options?: { limit?: number; date?: string }) => Promise<string>;

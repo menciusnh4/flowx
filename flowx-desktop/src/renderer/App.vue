@@ -119,6 +119,9 @@
       <WorkspaceTabBar />
       <WorkspaceView />
     </div>
+
+    <!-- 自定义窗口边缘缩放热区（frame:false 后替代 OS 原生边框缩放） -->
+    <WindowResizeFrame />
   </div>
 </template>
 
@@ -130,6 +133,7 @@ import { electronApi } from './utils/electron';
 import { useWorkspaceStore } from './stores/workspace';
 import WorkspaceTabBar from './components/WorkspaceTabBar.vue';
 import WorkspaceView from './components/WorkspaceView.vue';
+import WindowResizeFrame from './components/WindowResizeFrame.vue';
 
 const route = useRoute();
 const router = useRouter();

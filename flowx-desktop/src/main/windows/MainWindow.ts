@@ -119,6 +119,7 @@ export async function createMainWindow(): Promise<BrowserWindow> {
     title: 'FlowX - 多平台内容发布',
     backgroundColor: '#ffffff',
     show: false,
+    frame: false, // 去除 OS 原生标题栏，改用渲染层自定义交通灯（r/y/g）控制窗口
     autoHideMenuBar: true,
     icon: appIcon,
     webPreferences: {

@@ -66,6 +66,26 @@ export function registerSystemIpc(): void {
     return true;
   });
 
+  // 最大化/还原主窗口（toggle，供自定义 titlebar 黄点使用），返回切换后是否最大化
+  safeInvoke('system:maximizeWindow', (): boolean => {
+    const win = getMainWindow();
+    if (!win) return false;
+    if (win.isMaximized()) win.unmaximize();
+    else win.maximize();
+    return win.isMaximized();
+  });
+  safeInvoke('system:isMaximizedWindow', (): boolean => !!getMainWindow()?.isMaximized());
+
+  // 自定义边缘缩放（frame:false 后原生边框缩放失效，由渲染层 hit-test + setBounds 实现）
+  safeInvoke('system:getWindowBounds', (): { x: number; y: number; width: number; height: number } | null => {
+    const b = getMainWindow()?.getBounds();
+    return b ? { x: b.x, y: b.y, width: b.width, height: b.height } : null;
+  });
+  safeInvoke('system:setWindowBounds', (b: { x: number; y: number; width: number; height: number }): boolean => {
+    getMainWindow()?.setBounds(b);
+    return true;
+  });
+
   // 自动更新（骨架实现，真实环境需要配置 electron-updater feed）
   safeInvoke('update:check', (): UpdateInfo => ({ available: false }));
 

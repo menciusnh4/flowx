@@ -191,6 +191,18 @@ export const electronApi = {
   async closeWindow(): Promise<boolean> {
     return invokeElectron('system.closeWindow', 'system:closeWindow');
   },
+  async maximizeWindow(): Promise<boolean> {
+    return invokeElectron('system.maximizeWindow', 'system:maximizeWindow');
+  },
+  async isMaximizedWindow(): Promise<boolean> {
+    return invokeElectron('system.isMaximizedWindow', 'system:isMaximizedWindow');
+  },
+  async getWindowBounds(): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    return invokeElectron('system.getWindowBounds', 'system:getWindowBounds');
+  },
+  async setWindowBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<boolean> {
+    return invokeElectron('system.setWindowBounds', 'system.setWindowBounds', bounds);
+  },
   // 原生菜单（用于顶部导航栏下拉，避免 WebContentsView 遮挡）
   async popupNativeMenu(
     items: Array<{ id: string; label: string; enabled?: boolean; type?: 'normal' | 'separator' | 'submenu'; submenu?: any[] }>,

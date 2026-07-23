@@ -37,6 +37,17 @@ function onSearchFocus() {
   updateAnchor();
   gsOnFocus();
 }
+
+// —— 自定义窗口控制（替代已移除的 OS 原生标题栏）——
+async function winMin() {
+  await electronApi.minimizeWindow();
+}
+async function winMax() {
+  await electronApi.maximizeWindow();
+}
+async function winClose() {
+  await electronApi.closeWindow();
+}
 function onSearchKeydown(e: Event | KeyboardEvent) {
   const ke = e as KeyboardEvent;
   if (ke.key === 'ArrowDown') {
@@ -352,7 +363,7 @@ watch(
         />
       </div>
       <div class="win-dots">
-        <i class="r"></i><i class="y"></i><i class="g"></i>
+        <i class="r" title="最小化" role="button" @click="winMin"></i><i class="y" title="最大化" role="button" @click="winMax"></i><i class="g" title="关闭" role="button" @click="winClose"></i>
       </div>
     </div>
 
@@ -387,6 +398,17 @@ watch(
   border-bottom: 1px solid var(--line);
   position: relative;
   z-index: 100;
+  /* frame:false 后窗口不可拖动 → 顶栏作为拖拽区（交互子元素单独 no-drag） */
+  -webkit-app-region: drag;
+}
+/* 交互子元素必须排除出拖拽区，否则点击失效 */
+.ws-tabbar .ws-nav,
+.ws-tabbar .ws-tab,
+.ws-tabbar .ws-search,
+.ws-tabbar .ws-add,
+.ws-tabbar .ws-divider,
+.ws-tabbar .win-dots {
+  -webkit-app-region: no-drag;
 }
 
 /* —— 中部弹性区：承载任务选项卡 + 翻页按钮 + 新增按钮 —— */
@@ -581,12 +603,20 @@ watch(
 .win-dots {
   display: flex;
   gap: 8px;
+  -webkit-app-region: no-drag;
 }
 .win-dots i {
   width: 12px;
   height: 12px;
   border-radius: 50%;
   display: inline-block;
+  cursor: pointer;
+  transition: transform 0.15s var(--ease), filter 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.win-dots i:hover {
+  transform: scale(1.18);
+  filter: brightness(1.08);
+  box-shadow: 0 0 0 4px rgba(15, 23, 42, 0.06);
 }
 .win-dots .r {
   background: #ff5f57;
