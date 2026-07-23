@@ -421,6 +421,18 @@ export async function createBrowserView(options?: { url?: string; envId?: string
     if (message === '__FLOWX_PICKER_CANCEL__') {
       notifyRender('browser:pickerCancelled', { viewId });
     }
+    // 拾取器请求检查元素
+    if (message.startsWith('__FLOWX_PICKER_INSPECT__:')) {
+      try {
+        const data = JSON.parse(message.replace('__FLOWX_PICKER_INSPECT__:', ''));
+        wc.openDevTools({ mode: 'detach' });
+        wc.once('devtools-opened', () => {
+          wc.inspectElement(Math.round(data.x), Math.round(data.y));
+        });
+      } catch (err) {
+        console.error('[BrowserService] 检查元素失败:', err);
+      }
+    }
   });
 
   // 加载初始 URL

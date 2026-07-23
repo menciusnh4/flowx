@@ -474,6 +474,8 @@ export interface ExtractedContent {
   isImageOnly?: boolean;
   /** 话题/标签列表 */
   tags?: string[];
+  /** 自定义规则 ID（规则提取时填充） */
+  ruleId?: string;
 }
 
 // ========== 自定义站点规则 ==========

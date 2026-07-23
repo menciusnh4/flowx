@@ -82,7 +82,6 @@ flowx-data/
 /.uploads/
 /browser-extract-design/
 /content-extraction-optimization/
-
 # 产品文档与 UI 原型（按约定不纳入源码提交）
 # - 产品需求文档（PRD）：根目录 PRD-*.md
 # - 产品工作区：pm/（需求、评审回执、方法论文档）
