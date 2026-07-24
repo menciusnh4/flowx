@@ -1074,6 +1074,13 @@ function fillForm(data: Partial<PublishRequest>) {
     for (const k of Object.keys(selectedIds)) delete selectedIds[k]
     data.accountIds.forEach((id) => { selectedIds[id] = true })
   }
+  // 接收 Markdown 模式（规则提取文章时由 Browser.vue 设置 contentMode='markdown' + markdownContent）
+  if (data.contentMode !== undefined) contentMode.value = data.contentMode
+  if (data.markdownContent !== undefined) markdownContent.value = data.markdownContent
+  // 兜底：标记为 markdown 却无 markdown 正文时，用纯文本 content 作为 markdown
+  if (contentMode.value === 'markdown' && !markdownContent.value && content.value) {
+    markdownContent.value = content.value
+  }
   notifyChange()
   // 草稿/外部数据载入后重建基线，避免「刚加载」就被判为脏（M4）
   resetBaseline()

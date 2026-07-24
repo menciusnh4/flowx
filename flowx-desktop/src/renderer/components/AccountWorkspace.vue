@@ -397,8 +397,29 @@ function home() {
 function newInner() {
   addTab(homeUrl.value || 'about:blank', '新标签页');
 }
+// 解析「在浏览器打开」的目标地址：
+// 当前页若是平台中转/召唤页（如抖音 summon.bytedance.com），优先用其来源参数(from)指向的真实页，
+// 避免把带一堆参数的中转丑地址甩到外部浏览器；非中转页或解析失败时回退首页。
+function resolveOpenUrl(current: string, home: string): string {
+  try {
+    const u = new URL(current);
+    const relayHosts = ['summon.bytedance.com'];
+    if (relayHosts.includes(u.host)) {
+      const from = u.searchParams.get('from');
+      if (from) return decodeURIComponent(from);
+    }
+  } catch {
+    /* current 非法 URL 时忽略，走下方回退 */
+  }
+  return current || home;
+}
 function openInBrowser() {
-  if (activeUrl.value) electronApi.openExternal(activeUrl.value).catch(() => {});
+  if (!activeUrl.value) {
+    if (homeUrl.value) electronApi.openExternal(homeUrl.value).catch(() => {});
+    return;
+  }
+  const target = resolveOpenUrl(activeUrl.value, homeUrl.value);
+  electronApi.openExternal(target).catch(() => {});
 }
 function toggleDevTools() {
   const w = activeWebview();

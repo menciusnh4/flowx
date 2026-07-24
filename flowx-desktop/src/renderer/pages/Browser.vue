@@ -889,11 +889,16 @@ async function fillExtractToForm(result: ExtractedContent, mode: 'replace' | 'ap
   // Markdown 转换：仅文章模式且 useMarkdown=true 时启用
   const isArticleMarkdown = autoContentType === 'article' && useMarkdown
   let markdownContent = ''
-  if (isArticleMarkdown && result.content) {
-    try {
-      markdownContent = turndownService.turndown(result.content)
-    } catch (e) {
-      console.warn('[Browser.vue] HTML转Markdown失败:', e)
+  if (isArticleMarkdown) {
+    if (result.content) {
+      try {
+        markdownContent = turndownService.turndown(result.content)
+      } catch (e) {
+        console.warn('[Browser.vue] HTML转Markdown失败:', e)
+      }
+    } else if (result.textContent) {
+      // 无 HTML 正文时，以纯文本作为 Markdown 兜底，保证进入 Markdown 模式
+      markdownContent = result.textContent
     }
   }
 
@@ -1071,12 +1076,17 @@ function resolveContentTypeByRule(rule: CustomSiteRule, result: ExtractedContent
 
   if (rule.contentTypes && rule.contentTypes.length > 0) {
     if (hasImageText && hasArticle) {
+      // 图文+文章混合：长文判为文章并转 Markdown，短文按图文处理
       if (contentLength > 1000) {
         contentType = 'article'
         useMarkdown = true
       } else {
         contentType = 'image-text'
       }
+    } else if (hasArticle) {
+      // 纯文章规则：直接按文章处理并默认转 Markdown
+      contentType = 'article'
+      useMarkdown = true
     } else {
       contentType = rule.contentTypes[0] as PublishContentType
     }
