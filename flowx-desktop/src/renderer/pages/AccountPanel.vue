@@ -135,7 +135,7 @@
           </header>
 
           <div class="ac-body">
-            <el-avatar :size="48" :src="a.avatar" :style="avatarStyle(a)">{{ (a.nickname || 'U').slice(0, 1) }}</el-avatar>
+            <el-avatar :size="48" :src="avatarSrc(a)" :style="avatarStyle(a)" @error="onAvatarErr(a)">{{ (a.nickname || 'U').slice(0, 1) }}</el-avatar>
             <div class="ac-id">
               <div class="ac-name" :title="a.nickname">{{ a.nickname }}</div>
               <div class="ac-sub" v-if="a.platformAccountId">
@@ -207,7 +207,7 @@
           </div>
 
           <div class="lr-id">
-            <el-avatar :size="38" :src="a.avatar" :style="avatarStyle(a)">{{ (a.nickname || 'U').slice(0, 1) }}</el-avatar>
+            <el-avatar :size="38" :src="avatarSrc(a)" :style="avatarStyle(a)" @error="onAvatarErr(a)">{{ (a.nickname || 'U').slice(0, 1) }}</el-avatar>
             <div class="lr-idtext">
               <div class="ac-name" :title="a.nickname">{{ a.nickname }}</div>
               <div class="ac-sub" v-if="a.platformAccountId">{{ platformAccountLabel(a.platform) }}：{{ a.platformAccountId }}</div>
@@ -628,10 +628,20 @@ function setView(m: 'grid' | 'list') {
   }
 }
 
-/** 头像兜底样式：无图时用品牌色填充并显示首字母 */
+/** 头像加载失败兜底：单个远程头像加载失败时降级为首字母 + 品牌色，避免裂图/空白（抖音等 CDN 偶发防盗链/超时导致） */
+const avatarFail = reactive<Record<string, boolean>>({});
+function avatarSrc(a: AccountInfo): string {
+  return avatarFail[a.id] ? '' : a.avatar || '';
+}
+function onAvatarErr(a: AccountInfo): void {
+  avatarFail[a.id] = true;
+}
+
+/** 头像兜底样式：无图（或加载失败降级）时用品牌色填充并显示首字母 */
 function avatarStyle(a: AccountInfo): Record<string, string> {
+  const hasImg = !!avatarSrc(a);
   return {
-    background: a.avatar ? 'transparent' : 'var(--brand-indigo)',
+    background: hasImg ? 'transparent' : 'var(--brand-indigo)',
     color: '#fff',
     fontWeight: '600',
     flexShrink: '0',
@@ -805,6 +815,8 @@ async function startAuth() {
 
 async function refresh() {
   await accountStore.refreshAccounts();
+  // 主动刷新后重置头像失败兜底，让所有头像重新尝试加载
+  Object.keys(avatarFail).forEach((k) => { delete avatarFail[k]; });
   ElMessage.success('账号列表已刷新');
 }
 
@@ -815,7 +827,8 @@ async function openCreator(row: AccountInfo) {
     // 1) 在全局任务选项卡内打开/激活该账号的创作中心 tab（渲染端）
     workspaceStore.openAccountTab(row.id, {
       title: row.nickname,
-      icon: PLATFORM_EMOJI[row.platform] || '📕',
+      // 优先用与账号卡片一致的真实平台 logo，缺失时回退 emoji / 通用书图标
+      icon: getPlatformIcon(row.platform) || PLATFORM_EMOJI[row.platform] || '📕',
       envBadge: row.envId ? '🔒' : undefined,
     });
     // 2) 通知主进程预创建/复用内嵌隔离视图

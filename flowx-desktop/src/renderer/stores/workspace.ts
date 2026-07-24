@@ -128,6 +128,8 @@ export const useWorkspaceStore = defineStore('workspace', {
       const id = `acct:${accountId}`;
       const existing = this.tabs.find((t) => t.id === id);
       if (existing) {
+        // 重新打开时同步最新图标（如平台 logo 资源更新），其余 meta 不变
+        if (meta.icon) existing.icon = meta.icon;
         this.activeId = id;
         this.scrollNonce++;
         return true;

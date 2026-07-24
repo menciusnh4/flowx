@@ -70,6 +70,18 @@ const tabs = computed(() => store.tabs);
 const activeId = computed(() => store.activeId);
 const canAdd = computed(() => store.canAdd);
 
+/** tab 图标是否为图片 URL（平台真实 logo）；否则按文本 emoji 渲染 */
+function isImageIcon(icon?: string): boolean {
+  if (!icon) return false;
+  return (
+    /^data:image\//i.test(icon) ||
+    /\.(svg|png|jpe?g|webp|gif|ico)(\?|$)/i.test(icon) ||
+    icon.startsWith('/') ||
+    icon.startsWith('http://') ||
+    icon.startsWith('https://')
+  );
+}
+
 // 溢出翻页状态：仅当标签总宽超过可视区时出现 ◀ ▶
 const trackRef = ref<HTMLElement | null>(null);
 const overflowLeft = ref(false);
@@ -312,7 +324,8 @@ watch(
           @contextmenu.prevent="openTabCtxMenu($event, t.id)"
           :title="t.title"
         >
-          <span class="ws-tab-ic">{{ t.icon }}</span>
+          <img v-if="isImageIcon(t.icon)" :src="t.icon" class="ws-tab-ic ws-tab-ic-img" :alt="t.title" />
+          <span v-else class="ws-tab-ic">{{ t.icon }}</span>
           <span class="ws-tab-title">{{ t.title }}</span>
           <span v-if="t.kind === 'account' && t.envBadge" class="ws-env" :title="t.envBadge">🔒</span>
           <span v-if="t.dirty" class="ws-dot" title="有未保存内容"></span>
@@ -501,6 +514,14 @@ watch(
 .ws-tab-ic {
   font-size: 15px;
   line-height: 1;
+}
+/* 平台真实 logo（图片）：与文字 emoji 共用 .ws-tab-ic 定位，单独定尺寸 */
+.ws-tab-ic-img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  border-radius: 4px;
+  flex-shrink: 0;
 }
 .ws-tab-title {
   max-width: 140px;

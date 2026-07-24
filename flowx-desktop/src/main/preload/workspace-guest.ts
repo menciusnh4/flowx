@@ -34,16 +34,90 @@ function send(type: string, payload?: unknown): void {
 
 // ---- 平台无关的轻量诊断实现（仅读 DOM，不触碰主进程、不依赖 Node） ----
 
-/** 登录态嗅探：能找到用户菜单且找不到登录入口，通常视为已登录 */
+/** 元素是否在视口中可见（排除 display:none / 零尺寸，避免已登录页残留的隐藏登录链接误判未登录） */
+function isVisibleEl(el: any): boolean {
+  try {
+    if (!el) return false;
+    if (el.offsetWidth > 0 && el.offsetHeight > 0) return true;
+    if (el.getClientRects && el.getClientRects().length > 0) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 登录态嗅探：综合「不在登录页 + 有用户菜单/账号信息 + 无可见登录入口」判定已登录。
+ * 选择器汇集主进程各平台 adapter 的 DOM 判断（zhihu.ts / wechat_official.ts 等）。
+ *
+ * 微信公众号特殊处理：已登录也可能停在 loginpage 形态 URL（cookie 仍有效，主进程以
+ * 强 cookie 绕过），guest 读不到 cookie，故微信不以 URL 含 login 直接判未登录，而是
+ * 完全以 DOM 信号为准（对齐 wechat_official.ts buildDetectLoggedInScript）。
+ */
 function detectLogin(): boolean {
   try {
-    const loginEntry = document.querySelector(
-      'a[href*="login"], a[href*="passport"], button.login, .login-btn, [class*="login-entry"]',
-    );
-    const userMenu = document.querySelector(
-      '[class*="avatar"], [class*="user-menu"], [class*="userMenu"], img[class*="avatar"], [class*="userinfo"]',
-    );
-    return !!userMenu && !loginEntry;
+    const href = (location.href || '').toLowerCase();
+    const isWechat = href.indexOf('mp.weixin.qq.com') !== -1;
+
+    // 1) 通用登录页直接判未登录（微信除外，见上）
+    if (!isWechat && /(^|\/)(login|signin|sign_in|passport|sso)(\b|[\/?#])/i.test(href)) return false;
+
+    // 取页面文本（供「退出」/微信关键词信号使用）
+    let txt = '';
+    try {
+      txt = (document.body && (document.body.innerText || document.body.textContent)) || '';
+    } catch {
+      /* noop */
+    }
+
+    // 2) 微信公众号：对齐主进程 buildDetectLoggedInScript，纯 DOM 三选一
+    if (isWechat) {
+      const wechatKws = ['首页', '图文素材', '已发送', '用户管理', '功能', '设置', '退出'];
+      let kw = 0;
+      for (let i = 0; i < wechatKws.length; i++) {
+        if (txt.indexOf(wechatKws[i]) !== -1) kw++;
+      }
+      const hasLogout = txt.indexOf('退出') !== -1 && txt.indexOf('设置') !== -1;
+      const hasAccountInfo =
+        !!document.querySelector('.weui-desktop_name') ||
+        !!document.querySelector('.weui-desktop-person_info') ||
+        !!document.querySelector('.weui-desktop-account__nickname') ||
+        !!document.querySelector('[class*="desktop_name"]');
+      return kw >= 2 || hasLogout || hasAccountInfo;
+    }
+
+    // 3) 通用强信号：页面含「退出」字样（已登录专属）
+    if (txt.indexOf('退出') !== -1) return true;
+
+    // 4) 正向信号：各平台已登录的 DOM 特征
+    const userSel = [
+      // 通用
+      '[class*="avatar" i]',
+      'img[class*="avatar" i]',
+      '[class*="user-menu" i]',
+      '[class*="userMenu" i]',
+      '[class*="userinfo" i]',
+      '[class*="profile" i]',
+      // 知乎 creator.zhihu.com
+      '.AppHeader-profile',
+      '.AppHeader-userInfo',
+      '.CreatorHomeProfile-name',
+      'a.UserLink-link',
+    ].join(',');
+    const userMenu = document.querySelector(userSel);
+    if (!userMenu) return false;
+
+    // 5) 负向信号：仅当存在「可见」的登录入口才推翻（已登录页残留的隐藏登录链接不计入）
+    const loginSel =
+      'a[href*="login" i], a[href*="passport" i], a[href*="signin" i], a[href*="sign_in" i], button.login, .login-btn, [class*="login-entry" i]';
+    const loginNodes: any = document.querySelectorAll(loginSel);
+    let hasVisibleLogin = false;
+    if (loginNodes && loginNodes.forEach) {
+      loginNodes.forEach((n: any) => {
+        if (isVisibleEl(n)) hasVisibleLogin = true;
+      });
+    }
+    return !hasVisibleLogin;
   } catch {
     return false;
   }
