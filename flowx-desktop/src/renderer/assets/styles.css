@@ -375,9 +375,10 @@ body {
 
 /* ============ 侧栏收起态 ============ */
 .sidebar.collapsed {
-  /* 关键：收起态水平内边距与展开态一致(左14/右0)，保证所有图标 x 坐标不变 → 零漂移 */
-  width: 72px;
-  padding: 18px 0 18px 14px;
+  /* 对齐 UI 原型(flowx-ui-redesign/sidebar-collapse-prototype)：栏宽 64px、水平内边距 12px、
+     图标整体居中，配合 .sidebar 的 width/padding 过渡(0.3s) 平滑收拢，无挤压跳变 */
+  width: 64px;
+  padding: 18px 12px;
   gap: 8px;
 }
 
@@ -396,17 +397,18 @@ body {
 
 /* 导航项：仅图标居中，隐藏文字与箭头 */
 .sidebar.collapsed .nav-item {
-  /* 与展开态一致：左对齐 + 同一图标列缩进 → 图标像素级不动，不再漂移 */
-  justify-content: flex-start;
-  padding: 0 0 0 20px;
+  /* 对齐 UI 原型：图标整体居中（与展开态左对齐形成自然收拢，width 过渡下不跳变） */
+  justify-content: center;
+  padding: 0;
   gap: 0;
 }
 .sidebar.collapsed .nav-item .label {
-  position: absolute;
+  /* 对齐 UI 原型：淡出 + 收宽为 0（不用 absolute，避免脱离文档流导致布局抖动） */
   opacity: 0;
-  transform: translateX(-8px);
+  width: 0;
+  overflow: hidden;
   pointer-events: none;
-  transition: opacity var(--t), transform var(--t);
+  transition: opacity var(--t);
 }
 .sidebar.collapsed .nav-item .caret {
   display: none;
@@ -433,22 +435,19 @@ body {
 
 /* Footer 收起态 */
 .sidebar.collapsed .sidebar-foot {
-  /* 左内边距与展开态一致(12px) → 头像 x 不变 */
-  padding: 14px 12px 4px;
+  padding: 14px 0 4px;
   align-items: center;
 }
 .sidebar.collapsed .side-user {
   gap: 0;
-  justify-content: flex-start;
-  /* 左内边距与展开态一致(11px) → 头像 x 与展开态同为 37px，零漂移 */
-  padding: 9px 0 9px 11px;
+  justify-content: center;
 }
 .sidebar.collapsed .side-user-name {
-  position: absolute;
   opacity: 0;
-  transform: translateX(-6px);
+  width: 0;
+  overflow: hidden;
   pointer-events: none;
-  transition: opacity var(--t), transform var(--t);
+  transition: opacity var(--t);
 }
 .sidebar.collapsed .side-ver {
   opacity: 0;
@@ -492,16 +491,15 @@ body {
   transition: opacity var(--t);
 }
 .sidebar.collapsed .collapse-toggle {
-  justify-content: flex-start;
-  /* 左内边距与展开态一致(10px) → 按钮图标 x 与展开态同为 24px，零漂移 */
-  padding: 0 0 0 10px;
+  justify-content: center;
+  padding: 0;
 }
 .sidebar.collapsed .collapse-toggle .tg-label {
-  position: absolute;
   opacity: 0;
-  transform: translateX(-6px);
+  width: 0;
+  overflow: hidden;
   pointer-events: none;
-  transition: opacity var(--t), transform var(--t);
+  transition: opacity var(--t);
 }
 .sidebar.collapsed .collapse-toggle .tg-ic {
   transform: rotate(180deg);

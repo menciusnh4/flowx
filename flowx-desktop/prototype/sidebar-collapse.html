@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FlowX · 侧栏收起效果原型（可审查）</title>
+<style>
+  :root {
+    /* —— FlowX 设计令牌（对齐 styles.css）—— */
+    --brand-indigo: #6366f1;
+    --brand-sky: #38bdf8;
+    --brand-grad: linear-gradient(135deg, #6366f1 0%, #38bdf8 100%);
+    --brand-grad-soft: linear-gradient(135deg, rgba(99,102,241,0.14), rgba(56,189,248,0.06));
+    --bg: #f6f7fc;
+    --surface: #ffffff;
+    --surface-2: #fbfcfe;
+    --line: #eceef5;
+    --line-strong: #e2e5ef;
+    --ink: #1f2433;
+    --slate: #4b5165;
+    --muted: #8b91a7;
+    --faint: #aeb4c7;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #f43f5e;
+    --r-sm: 10px;
+    --r-md: 14px;
+    --r-lg: 20px;
+    --shadow-sm: 0 1px 2px rgba(31,36,51,0.04), 0 2px 6px rgba(79,70,229,0.05);
+    --shadow-md: 0 4px 14px rgba(79,70,229,0.08), 0 2px 4px rgba(31,36,51,0.04);
+    --shadow-lg: 0 14px 36px rgba(79,70,229,0.12), 0 4px 10px rgba(31,36,51,0.05);
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+    --t-fast: 0.15s;
+    --t: 0.25s;
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+      'PingFang SC', 'Microsoft YaHei', sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: radial-gradient(1200px 600px at 70% -10%, #eef1ff 0%, var(--bg) 55%);
+    font-family: var(--font-sans);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ============ 审查控制条 ============ */
+  .review-bar {
+    width: 1100px; max-width: 100%;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+    padding: 14px 18px;
+    background: rgba(255,255,255,0.78);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-sm);
+  }
+  .review-bar h1 { font-size: 15px; margin: 0; font-weight: 700; letter-spacing: .2px; }
+  .review-bar .sub { font-size: 12px; color: var(--muted); margin-left: -6px; }
+  .spacer { flex: 1; }
+  .rb-group { display: flex; align-items: center; gap: 8px; }
+  .rb-btn {
+    border: 1px solid var(--line-strong); background: var(--surface);
+    color: var(--ink); font: inherit; font-size: 13px; font-weight: 600;
+    padding: 8px 14px; border-radius: var(--r-sm); cursor: pointer;
+    transition: background var(--t-fast), border-color var(--t-fast), transform var(--t-fast);
+  }
+  .rb-btn:hover { background: var(--brand-grad-soft); border-color: var(--brand-indigo); }
+  .rb-btn:active { transform: scale(0.97); }
+  .rb-check { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--slate); cursor: pointer; user-select: none; }
+  .rb-check input { width: 15px; height: 15px; accent-color: var(--brand-indigo); }
+
+  /* ============ 窗口外壳 ============ */
+  .window {
+    width: 1100px; max-width: 100%;
+    height: 680px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    position: relative;
+  }
+  .titlebar {
+    height: 46px; flex-shrink: 0;
+    display: flex; align-items: center;
+    padding: 0 16px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+  .titlebar .t-title { font-size: 13px; color: var(--muted); font-weight: 600; }
+
+  /* macOS 交通灯（18px，悬停符号同色系暗色版，mac 一比一） */
+  .win-dots {
+    position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+    display: flex; gap: 9px; padding: 4px; border-radius: 12px; flex-shrink: 0;
+    transition: background .18s var(--ease);
+  }
+  .win-dots:hover { background: rgba(15,23,42,.05); }
+  .win-dots i {
+    position: relative; width: 18px; height: 18px; border-radius: 50%;
+    display: inline-block; cursor: pointer;
+    transition: transform .16s var(--ease), filter .16s var(--ease), box-shadow .16s var(--ease);
+  }
+  .win-dots i::before {
+    content: ''; position: absolute; inset: 0; display: grid; place-items: center;
+    font-family: -apple-system, 'SF Pro Text', 'Segoe UI Symbol', 'Segoe UI', system-ui, sans-serif;
+    font-size: 11px; font-weight: 700; line-height: 1; color: inherit;
+    opacity: 0; pointer-events: none; transition: opacity .16s var(--ease);
+  }
+  .win-dots .r::before { content: '\00D7'; }
+  .win-dots .y::before { content: '\2212'; }
+  .win-dots .g::before { content: '\2922'; }
+  .win-dots:hover i::before { opacity: 1; }
+  .win-dots i:hover { transform: scale(1.12); filter: brightness(1.08); box-shadow: 0 0 0 4px rgba(15,23,42,.07); }
+  .win-dots i:hover::before { filter: brightness(.82); }
+  .win-dots .r { background: #ff5f57; color: #c0291f; }
+  .win-dots .y { background: #febc2e; color: #9c7400; }
+  .win-dots .g { background: #28c840; color: #138a2a; }
+
+  .app-shell { flex: 1; display: flex; min-height: 0; }
+
+  /* ============ 侧栏 ============ */
+  .sidebar {
+    position: relative;
+    width: 180px;
+    background: var(--surface);
+    border-right: 1px solid var(--line);
+    padding: 18px 14px;
+    display: flex; flex-direction: column; gap: 8px;
+    flex-shrink: 0;
+    transition: width .3s var(--ease), padding .3s var(--ease);
+    z-index: 20;
+  }
+  .sidebar.collapsed {
+    width: 64px;
+    padding: 18px 12px;
+    gap: 8px;
+  }
+
+  .sidebar-logo { display: flex; align-items: center; gap: 10px; padding: 2px 0 16px; }
+  .logo-mark {
+    width: 40px; height: 40px; border-radius: 13px; flex-shrink: 0;
+    background: var(--brand-grad); color: #fff;
+    display: grid; place-items: center; font-weight: 800; font-size: 20px;
+    box-shadow: var(--shadow-md);
+  }
+  .logo-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+  .logo-text .name { font-weight: 800; font-size: 15px; }
+  .logo-text small { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+  .sidebar.collapsed .sidebar-logo { justify-content: center; padding: 2px 0 16px; }
+  .sidebar.collapsed .logo-text {
+    opacity: 0; transform: translateX(-8px); width: 0; pointer-events: none;
+    transition: opacity var(--t), transform var(--t);
+  }
+
+  .nav-group { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; flex: 1; }
+  .nav-label {
+    font-size: 11px; font-weight: 700; color: var(--faint);
+    text-transform: uppercase; letter-spacing: .6px;
+    padding: 10px 14px 4px; transition: opacity var(--t);
+  }
+  .sidebar.collapsed .nav-label {
+    opacity: 0; height: 0; padding-top: 0; padding-bottom: 0; overflow: hidden; pointer-events: none;
+  }
+
+  .nav-item {
+    position: relative;
+    display: flex; align-items: center; gap: 10px;
+    height: 42px; padding: 0 14px 0 20px;
+    border: none; background: transparent; cursor: pointer;
+    border-radius: var(--r-sm); color: var(--slate);
+    font: inherit; font-size: 14px; font-weight: 600; text-align: left;
+    transition: background var(--t-fast), color var(--t-fast);
+  }
+  .nav-item .ic { font-size: 17px; flex-shrink: 0; width: 20px; text-align: center; line-height: 1; }
+  .nav-item .label { white-space: nowrap; }
+  .nav-item .caret { margin-left: auto; font-size: 11px; color: var(--faint); transition: transform var(--t-fast); }
+  .nav-item:hover { background: var(--brand-grad-soft); color: var(--brand-indigo); }
+  .nav-item.active {
+    background: var(--brand-grad-soft); color: var(--brand-indigo);
+    box-shadow: inset 3px 0 0 var(--brand-indigo);
+  }
+  .nav-item.active::before {
+    content: ''; position: absolute; left: -14px; top: 9px; bottom: 9px; width: 3px;
+    border-radius: 0 3px 3px 0; background: var(--brand-indigo);
+  }
+  .nav-item.has-sub.expanded .caret { transform: rotate(90deg); }
+  .sidebar.collapsed .nav-item { justify-content: center; padding: 0; gap: 0; }
+  .sidebar.collapsed .nav-item .label { opacity: 0; width: 0; overflow: hidden; pointer-events: none; transition: opacity var(--t); }
+  .sidebar.collapsed .nav-item .caret { display: none; }
+  .sidebar.collapsed .nav-item.active::before { left: -12px; }
+
+  /* 内联二级菜单（展开态内联，收起态隐藏） */
+  .nav-sub { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--t); }
+  .nav-sub.open { grid-template-rows: 1fr; }
+  .nav-sub-inner { overflow: hidden; display: flex; flex-direction: column; gap: 2px; }
+  .nav-sub-item {
+    display: flex; align-items: center; gap: 9px;
+    margin-left: 34px; padding: 8px 12px;
+    border: none; background: transparent; cursor: pointer; border-radius: 8px;
+    color: var(--slate); font: inherit; font-size: 13px; font-weight: 500; text-align: left;
+    transition: background var(--t-fast), color var(--t-fast);
+  }
+  .nav-sub-item .ic { font-size: 14px; }
+  .nav-sub-item .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); margin: 0 4px; }
+  .nav-sub-item:hover { background: var(--brand-grad-soft); color: var(--brand-indigo); }
+  .nav-sub-item.active { color: var(--brand-indigo); font-weight: 700; }
+  .sidebar.collapsed .nav-sub { display: none; }
+
+  .sidebar-foot { display: flex; flex-direction: column; gap: 8px; padding: 14px 12px 4px; border-top: 1px solid var(--line); }
+  .side-user { display: flex; align-items: center; gap: 11px; padding: 9px 0; }
+  .side-avatar {
+    width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+    background: var(--brand-grad); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 13px;
+  }
+  .side-user-name { font-weight: 700; font-size: 13.5px; }
+  .side-ver { font-size: 11px; color: var(--faint); padding-left: 8px; }
+  .collapse-toggle {
+    margin-top: 4px; display: flex; align-items: center; gap: 8px;
+    height: 38px; padding: 0 10px; border-radius: var(--r-sm);
+    border: 1px solid var(--line); background: var(--surface-2);
+    color: var(--slate); font-weight: 600; font-size: 13px; cursor: pointer; font-family: inherit;
+    transition: background var(--t-fast), color var(--t-fast);
+  }
+  .collapse-toggle:hover { background: var(--brand-grad-soft); color: var(--brand-indigo); }
+  .collapse-toggle .tg-ic { font-size: 15px; flex-shrink: 0; line-height: 1; transition: transform var(--t); }
+  .collapse-toggle .tg-label { white-space: nowrap; }
+  .sidebar.collapsed .sidebar-foot { padding: 14px 12px 4px; align-items: center; }
+  .sidebar.collapsed .side-user { gap: 0; justify-content: center; }
+  .sidebar.collapsed .side-user-name { opacity: 0; width: 0; overflow: hidden; pointer-events: none; transition: opacity var(--t); }
+  .sidebar.collapsed .side-ver { opacity: 0; height: 0; overflow: hidden; transition: opacity var(--t); }
+  .sidebar.collapsed .collapse-toggle { justify-content: center; padding: 0; }
+  .sidebar.collapsed .collapse-toggle .tg-label { opacity: 0; width: 0; overflow: hidden; pointer-events: none; transition: opacity var(--t); }
+  .sidebar.collapsed .collapse-toggle .tg-ic { transform: rotate(180deg); }
+
+  /* 收起态：叶子项提示气泡 */
+  .sidebar.collapsed .nav-item:not(.has-sub)::after {
+    content: attr(data-tip);
+    position: absolute; left: calc(100% + 12px); top: 50%;
+    transform: translateY(-50%) translateX(-6px);
+    background: #1f2433; color: #fff; font-size: 12.5px; font-weight: 600;
+    padding: 6px 10px; border-radius: 8px; white-space: nowrap;
+    opacity: 0; pointer-events: none; transition: opacity var(--t-fast), transform var(--t-fast);
+    box-shadow: var(--shadow-md); z-index: 40;
+  }
+  .sidebar.collapsed .nav-item:not(.has-sub):hover::after { opacity: 1; transform: translateY(-50%) translateX(0); }
+
+  /* 收起态：父级悬浮飞出子面板 */
+  .flyout {
+    position: absolute; top: 0; left: 86px;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--r-md); box-shadow: var(--shadow-lg);
+    padding: 8px; min-width: 168px; z-index: 50;
+    opacity: 0; transform: translateX(-6px); pointer-events: none;
+    transition: opacity var(--t-fast), transform var(--t-fast);
+  }
+  .flyout.show { opacity: 1; transform: translateX(0); pointer-events: auto; }
+  .fly-title { font-size: 11px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: .5px; padding: 4px 10px 8px; }
+
+  /* ============ 内容区（示意） ============ */
+  .content { flex: 1; min-width: 0; padding: 26px; overflow-y: auto; background: var(--bg); }
+  .content h2 { margin: 0 0 4px; font-size: 20px; }
+  .content .lead { color: var(--muted); font-size: 13px; margin: 0 0 22px; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+    padding: 18px; box-shadow: var(--shadow-sm);
+  }
+  .card .k { font-size: 12px; color: var(--muted); }
+  .card .v { font-size: 26px; font-weight: 800; margin-top: 6px; }
+  .card .v small { font-size: 13px; font-weight: 600; color: var(--success); margin-left: 6px; }
+  .panel { margin-top: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 18px; box-shadow: var(--shadow-sm); }
+  .panel h3 { margin: 0 0 12px; font-size: 14px; }
+
+  /* ============ 对齐参考线（审查用） ============ */
+  .guides { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity var(--t-fast); z-index: 60; }
+  .window.show-guides .guides { opacity: 1; }
+  .guides .gl {
+    position: absolute; top: 0; bottom: 0; width: 0;
+    border-left: 2px dashed rgba(244,63,94,.55);
+  }
+  .guides .gl.nav { left: 34px; }
+  .guides .gl.avatar { left: 37px; border-left-color: rgba(99,102,241,.6); }
+  .guides .gl.toggle { left: 24px; border-left-color: rgba(16,185,129,.6); }
+  .guides .gl .tag {
+    position: absolute; top: 8px; left: 4px; font-size: 10px; font-weight: 700;
+    color: #fff; background: rgba(244,63,94,.9); padding: 2px 6px; border-radius: 6px; white-space: nowrap;
+  }
+  .guides .gl.avatar .tag { background: rgba(99,102,241,.9); }
+  .guides .gl.toggle .tag { background: rgba(16,185,129,.9); }
+
+  /* 减弱动效 */
+  .window.reduce-motion .sidebar,
+  .window.reduce-motion .sidebar * { transition-duration: 0.01s !important; }
+</style>
+</head>
+<body>
+  <div style="display:flex;flex-direction:column;align-items:center;gap:16px;padding:24px;min-height:100vh;">
+    <!-- 审查控制条 -->
+    <div class="review-bar">
+      <h1>侧栏收起效果原型</h1>
+      <span class="sub">FlowX · UI 审查稿</span>
+      <div class="spacer"></div>
+      <div class="rb-group">
+        <button class="rb-btn" id="toggleBtn">收起菜单</button>
+      </div>
+      <label class="rb-check"><input type="checkbox" id="guideChk" /> 显示图标对齐参考线</label>
+      <label class="rb-check"><input type="checkbox" id="motionChk" /> 减弱动效</label>
+    </div>
+
+    <!-- 窗口 -->
+    <div class="window" id="window">
+      <div class="titlebar">
+        <span class="t-title">FlowX 工作台</span>
+        <div class="win-dots" title="窗口控制">
+          <i class="r" onclick="alert('关闭窗口')"></i>
+          <i class="y" onclick="alert('最小化')"></i>
+          <i class="g" onclick="alert('最大化 / 还原')"></i>
+        </div>
+      </div>
+
+      <div class="app-shell">
+        <!-- 侧栏 -->
+        <aside class="sidebar" id="sidebar">
+          <div class="sidebar-logo">
+            <div class="logo-mark">F</div>
+            <div class="logo-text"><span class="name">FlowX</span><small>多平台内容发布助手</small></div>
+          </div>
+
+          <nav class="nav-group">
+            <div class="nav-label">工作区</div>
+            <button class="nav-item active" data-tip="仪表盘">
+              <span class="ic">🏠</span><span class="label">仪表盘</span>
+            </button>
+            <button class="nav-item" data-tip="账号管理">
+              <span class="ic">👤</span><span class="label">账号管理</span>
+            </button>
+
+            <button class="nav-item has-sub expanded" data-group="workbench" data-tip="工作台">
+              <span class="ic">🧰</span><span class="label">工作台</span><span class="caret">▸</span>
+            </button>
+            <div class="nav-sub open">
+              <div class="nav-sub-inner">
+                <button class="nav-sub-item" data-tip="草稿箱"><span class="ic">📝</span>草稿箱</button>
+                <button class="nav-sub-item" data-tip="浏览器"><span class="ic">🌐</span>浏览器</button>
+              </div>
+            </div>
+
+            <button class="nav-item has-sub expanded" data-group="pub" data-tip="一键发布">
+              <span class="ic">🚀</span><span class="label">一键发布</span><span class="caret">▸</span>
+            </button>
+            <div class="nav-sub open">
+              <div class="nav-sub-inner">
+                <button class="nav-sub-item"><span class="ic">🎬</span>发布视频</button>
+                <button class="nav-sub-item"><span class="ic">🖼️</span>发布图文</button>
+                <button class="nav-sub-item"><span class="ic">📄</span>发布文章</button>
+                <button class="nav-sub-item"><span class="ic">🕘</span>发布历史</button>
+              </div>
+            </div>
+
+            <button class="nav-item has-sub expanded" data-group="settings" data-tip="系统配置">
+              <span class="ic">⚙️</span><span class="label">系统配置</span><span class="caret">▸</span>
+            </button>
+            <div class="nav-sub open">
+              <div class="nav-sub-inner">
+                <button class="nav-sub-item"><span class="ic">🌍</span>环境配置</button>
+                <button class="nav-sub-item"><span class="ic">🔀</span>代理 IP 设置</button>
+                <button class="nav-sub-item"><span class="ic">🔌</span>对外接口</button>
+                <button class="nav-sub-item"><span class="ic">📜</span>日志管理</button>
+                <button class="nav-sub-item"><span class="ic">📋</span>提取规则</button>
+              </div>
+            </div>
+
+            <div class="nav-label">账号</div>
+            <button class="nav-item" data-tip="关于">
+              <span class="ic">ℹ️</span><span class="label">关于</span>
+            </button>
+          </nav>
+
+          <div class="sidebar-foot">
+            <div class="side-user">
+              <span class="side-avatar">A</span>
+              <span class="side-user-name">管理员</span>
+            </div>
+            <div class="side-ver">v0.1.0</div>
+            <button class="collapse-toggle" id="toggleBtn2" type="button">
+              <span class="tg-ic">«</span><span class="tg-label">收起菜单</span>
+            </button>
+          </div>
+
+          <!-- 对齐参考线（审查用） -->
+          <div class="guides">
+            <div class="gl nav"><span class="tag">导航图标列 34px</span></div>
+            <div class="gl avatar"><span class="tag">头像列 37px</span></div>
+            <div class="gl toggle"><span class="tag">收起按钮 24px</span></div>
+          </div>
+        </aside>
+
+        <!-- 内容区示意 -->
+        <main class="content">
+          <h2>仪表盘</h2>
+          <p class="lead">这是内容区示意，用于呈现侧栏收起时的整体观感。点击左下角「收起菜单」预览效果。</p>
+          <div class="cards">
+            <div class="card"><div class="k">已连接账号</div><div class="v">12<small>+2</small></div></div>
+            <div class="card"><div class="k">今日发布</div><div class="v">23</div></div>
+            <div class="card"><div class="k">待处理草稿</div><div class="v">5</div></div>
+          </div>
+          <div class="panel">
+            <h3>最近发布</h3>
+            <p style="color:var(--muted);font-size:13px;margin:0;">（此处省略列表，仅用于原型布局占位）</p>
+          </div>
+        </main>
+
+        <!-- 父级飞出面板（收起态） -->
+        <div class="flyout" id="flyout">
+          <div class="fly-title" id="flyTitle"></div>
+          <div id="flyItems"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const sidebar = document.getElementById('sidebar');
+  const windowEl = document.getElementById('window');
+  const flyout = document.getElementById('flyout');
+  const flyTitle = document.getElementById('flyTitle');
+  const flyItems = document.getElementById('flyItems');
+
+  const SUBMAP = {
+    workbench: { label: '工作台', items: [['📝','草稿箱'],['🌐','浏览器']] },
+    pub:       { label: '一键发布', items: [['🎬','发布视频'],['🖼️','发布图文'],['📄','发布文章'],['🕘','发布历史']] },
+    settings:  { label: '系统配置', items: [['🌍','环境配置'],['🔀','代理 IP 设置'],['🔌','对外接口'],['📜','日志管理'],['📋','提取规则']] },
+  };
+
+  function setCollapsed(v) {
+    sidebar.classList.toggle('collapsed', v);
+    document.getElementById('toggleBtn').textContent = v ? '展开菜单' : '收起菜单';
+    if (v) hideFlyout();
+  }
+  function toggle() { setCollapsed(!sidebar.classList.contains('collapsed')); }
+
+  document.getElementById('toggleBtn').addEventListener('click', toggle);
+  document.getElementById('toggleBtn2').addEventListener('click', toggle);
+
+  document.getElementById('guideChk').addEventListener('change', e => {
+    windowEl.classList.toggle('show-guides', e.target.checked);
+  });
+  document.getElementById('motionChk').addEventListener('change', e => {
+    windowEl.classList.toggle('reduce-motion', e.target.checked);
+  });
+
+  // 展开态：点击父级 → 内联展开/收起
+  document.querySelectorAll('.nav-item.has-sub').forEach(item => {
+    item.addEventListener('click', () => {
+      if (sidebar.classList.contains('collapsed')) { toggleFlyoutPin(item); return; }
+      item.classList.toggle('expanded');
+      const sub = item.nextElementSibling;
+      if (sub && sub.classList.contains('nav-sub')) sub.classList.toggle('open');
+    });
+    item.addEventListener('mouseenter', () => {
+      if (!sidebar.classList.contains('collapsed')) return;
+      showFlyout(item);
+    });
+    item.addEventListener('mouseleave', () => {
+      if (sidebar.classList.contains('collapsed')) scheduleHide();
+    });
+  });
+
+  let hideTimer;
+  function showFlyout(item) {
+    clearTimeout(hideTimer);
+    const g = item.dataset.group;
+    const data = SUBMAP[g];
+    flyTitle.textContent = data.label;
+    flyItems.innerHTML = data.items.map(([ic, lb]) =>
+      `<button class="nav-sub-item"><span class="ic">${ic}</span>${lb}</button>`).join('');
+    // 定位到该父级项右侧，垂直对齐
+    const shellRect = document.querySelector('.app-shell').getBoundingClientRect();
+    const r = item.getBoundingClientRect();
+    flyout.style.top = (r.top - shellRect.top + 6) + 'px';
+    flyout.classList.add('show');
+  }
+  function scheduleHide() {
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => flyout.classList.remove('show'), 160);
+  }
+  function hideFlyout() { flyout.classList.remove('show'); }
+  flyout.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+  flyout.addEventListener('mouseleave', scheduleHide);
+
+  let pinned = false;
+  function toggleFlyoutPin(item) {
+    if (pinned) { pinned = false; hideFlyout(); }
+    else { pinned = true; showFlyout(item); }
+  }
+</script>
+</body>
+</html>
