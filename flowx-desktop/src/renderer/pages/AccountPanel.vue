@@ -166,7 +166,7 @@
 
           <div class="ac-time">
             <span>授权 {{ fmt(a.authorizedAt) }}</span>
-            <span v-if="a.lastChecked">· 检测 {{ fmt(a.lastChecked) }}</span>
+            <span v-if="a.lastChecked">检测 {{ fmt(a.lastChecked) }}</span>
           </div>
 
           <footer class="ac-actions">
@@ -234,7 +234,7 @@
 
           <div class="lr-time">
             <span>授权 {{ fmt(a.authorizedAt) }}</span>
-            <span v-if="a.lastChecked">· 检测 {{ fmt(a.lastChecked) }}</span>
+            <span v-if="a.lastChecked">检测 {{ fmt(a.lastChecked) }}</span>
           </div>
 
           <div class="lr-actions">
@@ -1474,8 +1474,11 @@ onBeforeUnmount(() => {
   font-size: 11.5px;
   color: var(--muted);
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 3px;
+}
+.ac-time span {
+  white-space: nowrap;
 }
 .ac-actions {
   display: grid;
@@ -1638,9 +1641,12 @@ onBeforeUnmount(() => {
   font-size: 11.5px;
   color: var(--muted);
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 3px;
   flex-shrink: 0;
+}
+.lr-time span {
+  white-space: nowrap;
 }
 .lr-actions {
   display: flex;
