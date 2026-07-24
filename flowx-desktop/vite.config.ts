@@ -5,6 +5,15 @@ import renderer from 'vite-plugin-electron-renderer';
 import { resolve } from 'path';
 import type { Plugin } from 'vite';
 
+// 开发期避让：本进程若继承自宿主 Electron 的 ELECTRON_RUN_AS_NODE=1，
+// 会让 vite-plugin-electron spawn 出来的"应用 Electron"退化成 Node 模式，
+// 导致主进程里 require('electron') 拿到二进制路径字符串而非原生模块
+// （electron.protocol 为 undefined 直接崩溃，应用起不来）。
+// 在启动应用 Electron 之前清掉该变量（只影响本 dev 进程及其子进程，不动宿主）。
+if (process.env.ELECTRON_RUN_AS_NODE) {
+  delete process.env.ELECTRON_RUN_AS_NODE;
+}
+
 /**
  * 消除开发期 MaxListenersExceededWarning：
  * vite-plugin-electron 在每次主进程/preload 热重启时会向同一个 Vite
