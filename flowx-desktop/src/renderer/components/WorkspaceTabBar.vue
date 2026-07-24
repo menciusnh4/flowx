@@ -602,31 +602,68 @@ watch(
 }
 .win-dots {
   display: flex;
-  gap: 8px;
+  gap: 9px;
+  padding: 3px;
+  border-radius: 10px;
+  flex-shrink: 0;
   -webkit-app-region: no-drag;
+  transition: background 0.18s var(--ease);
+}
+.win-dots:hover {
+  background: rgba(15, 23, 42, 0.05);
 }
 .win-dots i {
   position: relative;
-  width: 15px;
-  height: 15px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   display: inline-block;
   cursor: pointer;
-  transition: transform 0.15s var(--ease), filter 0.15s var(--ease), box-shadow 0.15s var(--ease);
+  transition: transform 0.16s var(--ease), filter 0.16s var(--ease), box-shadow 0.16s var(--ease);
 }
+/* 标记符号：默认隐藏；移入灯组时三个圆点同时淡入（macOS 红黄绿交通灯交互） */
+.win-dots i::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-family: 'Segoe UI Symbol', 'Apple Symbols', -apple-system, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: inherit;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s var(--ease), filter 0.16s var(--ease);
+}
+.win-dots .r::before { content: '\00D7'; } /* × 关闭：改用 U+00D7 标准乘号，Segoe UI 原生支持，避免回退字形偏移 */
+.win-dots .y::before { content: '\2212'; } /* − 最小化 */
+.win-dots .g::before { content: '\2922'; } /* ⤢ 最大化 / 全屏 */
+/* 规则1：移入任意圆点 → 三个标记同时淡入 */
+.win-dots:hover i::before {
+  opacity: 1;
+}
+/* 规则2：悬停单个圆点 → 轻微放大 + 符号加深 */
 .win-dots i:hover {
-  transform: scale(1.18);
-  filter: brightness(1.06);
-  box-shadow: 0 0 0 4px rgba(15, 23, 42, 0.06);
+  transform: scale(1.12);
+  filter: brightness(1.08);
+  box-shadow: 0 0 0 4px rgba(15, 23, 42, 0.07);
+}
+.win-dots i:hover::before {
+  filter: brightness(0.82);
 }
 .win-dots .r {
   background: #ff5f57;
+  color: #c0291f; /* 符号暗红，mac 同色系 */
 }
 .win-dots .y {
   background: #febc2e;
+  color: #9c7400; /* 符号暗黄 */
 }
 .win-dots .g {
   background: #28c840;
+  color: #138a2a; /* 符号暗绿 */
 }
 
 /* 窄屏：搜索栏收窄，保持与标签区的美观距离 */

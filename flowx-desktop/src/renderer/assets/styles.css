@@ -139,6 +139,8 @@ body {
   border-right: 1px solid var(--line);
   position: relative;
   z-index: 20;
+  /* 收起/展开时宽度与内边距平滑过渡，消除“挤压”跳变 */
+  transition: width 0.3s var(--ease), padding 0.3s var(--ease);
 }
 
 .sidebar-logo {
@@ -204,7 +206,8 @@ body {
   align-items: center;
   gap: 11px;
   height: 42px;
-  padding: 0 12px;
+  /* 左缩进 20px 形成固定“图标列”，与收起态图标位置一致 → 切换时图标零漂移 */
+  padding: 0 14px 0 20px;
   border-radius: var(--r-sm);
   color: var(--slate);
   font-weight: 600;
@@ -372,8 +375,8 @@ body {
 
 /* ============ 侧栏收起态 ============ */
 .sidebar.collapsed {
-  width: 64px;
-  padding: 18px 12px;
+  width: 68px;
+  padding: 18px 0;
   gap: 8px;
 }
 
@@ -392,15 +395,17 @@ body {
 
 /* 导航项：仅图标居中，隐藏文字与箭头 */
 .sidebar.collapsed .nav-item {
-  justify-content: center;
-  padding: 0;
+  /* 与展开态一致：左对齐 + 同一图标列缩进 → 图标像素级不动，不再漂移 */
+  justify-content: flex-start;
+  padding: 0 0 0 20px;
   gap: 0;
 }
 .sidebar.collapsed .nav-item .label {
   position: absolute;
   opacity: 0;
+  transform: translateX(-8px);
   pointer-events: none;
-  transition: opacity var(--t);
+  transition: opacity var(--t), transform var(--t);
 }
 .sidebar.collapsed .nav-item .caret {
   display: none;
@@ -421,14 +426,16 @@ body {
 }
 .sidebar.collapsed .side-user {
   gap: 0;
-  justify-content: center;
-  padding: 9px 0;
+  /* 头像与导航图标列左缘对齐，收起态排成一条整洁的图标列 */
+  justify-content: flex-start;
+  padding: 9px 0 9px 20px;
 }
 .sidebar.collapsed .side-user-name {
+  position: absolute;
   opacity: 0;
-  width: 0;
+  transform: translateX(-6px);
   pointer-events: none;
-  transition: opacity var(--t);
+  transition: opacity var(--t), transform var(--t);
 }
 .sidebar.collapsed .side-ver {
   opacity: 0;
@@ -472,13 +479,16 @@ body {
   transition: opacity var(--t);
 }
 .sidebar.collapsed .collapse-toggle {
-  justify-content: center;
-  padding: 0;
+  /* 收起按钮图标与图标列对齐，避免从中段跳到正中 */
+  justify-content: flex-start;
+  padding: 0 0 0 20px;
 }
 .sidebar.collapsed .collapse-toggle .tg-label {
+  position: absolute;
   opacity: 0;
-  width: 0;
+  transform: translateX(-6px);
   pointer-events: none;
+  transition: opacity var(--t), transform var(--t);
 }
 .sidebar.collapsed .collapse-toggle .tg-ic {
   transform: rotate(180deg);
@@ -488,7 +498,7 @@ body {
 .sidebar.collapsed .nav-item:not(.has-sub)::after {
   content: attr(data-tip);
   position: absolute;
-  left: calc(100% + 16px);
+  left: calc(100% + 12px);
   top: 50%;
   transform: translateY(-50%) translateX(-6px);
   background: #1f2433;
