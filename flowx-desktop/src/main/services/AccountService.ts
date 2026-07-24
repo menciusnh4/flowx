@@ -254,6 +254,24 @@ export class AccountService {
   }
 
   /**
+   * 创作中心内手动重新登录成功后调用：将该账号的授权有效期顺延 14 天。
+   * 仅当当前 expiresAt 已过期或缺失时才顺延，避免覆盖仍在有效期内的健康账号。
+   * 这样回到账号列表时 status 会由 toInfo 自动推断为 active，无需手动刷新。
+   */
+  static async notifyLoginSuccess(id: string): Promise<AccountInfo | null> {
+    const list = AccountService.loadCredentials();
+    const idx = list.findIndex((c) => c.id === id);
+    if (idx < 0) return null;
+    const c = list[idx];
+    if (!c.expiresAt || c.expiresAt < Date.now()) {
+      c.expiresAt = Date.now() + 14 * 24 * 3600 * 1000;
+      logger.info(`[Account] ✅ ${c.platform}/${c.nickname}: 创作中心重新登录成功，授权有效期顺延 14 天`);
+      AccountService.saveCredentials(list);
+    }
+    return AccountService.toInfo(list[idx]);
+  }
+
+  /**
    * 批量检测所有账号健康状态（串行执行，避免同时打开过多浏览器窗口导致 CPU 占用太高）。
    * 返回：更新后的账号列表。
    */

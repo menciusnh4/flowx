@@ -96,25 +96,44 @@ contextBridge.exposeInMainWorld('flowxGuest', {
   url: () => location.href,
 });
 
-// 自动上报：页面就绪后上报一次，并轻量持续监控登录态（10s 周期）
+// 自动上报：页面就绪即上报，并在 SPA 异步渲染期快速轮询，避免「页面已加载但登录态迟迟不刷新」
 function scheduleAuto(): void {
   try {
     send('ready', { title: document.title });
   } catch {
     /* noop */
   }
-  try {
-    send('login', { loggedIn: detectLogin() });
-  } catch {
-    /* noop */
-  }
-  setInterval(() => {
+
+  const reportLogin = (): void => {
     try {
       send('login', { loggedIn: detectLogin() });
     } catch {
       /* noop */
     }
-  }, 10000);
+  };
+
+  // 1) 立即上报一次（DOM 就绪）
+  reportLogin();
+
+  // 2) 完整 load（含子资源）后再上报一次：SPA 此时通常已渲染出用户菜单/头像
+  if (document.readyState === 'complete') {
+    reportLogin();
+  } else {
+    window.addEventListener('load', reportLogin, { once: true });
+  }
+
+  // 3) 快速收敛阶段：前 ~8s 以 1.2s 短间隔轮询，覆盖异步渲染的头像/用户菜单出现窗口，
+  //    头像一出现即可在 1.2s 内翻成「已登录」，而非盲等 10s；之后回落到低频 10s 持续监控。
+  let fastTicks = 0;
+  const FAST_INTERVAL = 1200;
+  const FAST_MAX_TICKS = 7; // 7 * 1.2s ≈ 8.4s
+  const fastInterval = setInterval(() => {
+    reportLogin();
+    if (++fastTicks >= FAST_MAX_TICKS) {
+      clearInterval(fastInterval);
+      setInterval(reportLogin, 10000);
+    }
+  }, FAST_INTERVAL);
 }
 
 if (document.readyState === 'loading') {

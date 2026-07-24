@@ -68,6 +68,10 @@ export const electronApi = {
   async refreshToken(id: string): Promise<AccountInfo> {
     return invokeElectron('account.refresh', 'account:refresh', id);
   },
+  /** 创作中心内手动重新登录成功后，通知主进程刷新该账号授权有效期 */
+  async notifyLoginSuccess(id: string): Promise<AccountInfo | null> {
+    return invokeElectron('account.notifyLoginSuccess', 'account:notifyLoginSuccess', id);
+  },
   async openCreator(accountId: string): Promise<{
     ok: boolean;
     url: string;

@@ -53,6 +53,9 @@ export function registerAccountIpc(): void {
   // 批量检测所有账号的登录态/统计信息
   safeInvoke('account:healthCheckAll', () => AccountService.checkAllAccountsHealth());
 
+  // 创作中心内手动重新登录成功后，刷新该账号授权有效期（使账号列表状态实时同步）
+  safeInvoke('account:notifyLoginSuccess', (id: string) => AccountService.notifyLoginSuccess(id));
+
   // 启动/配置定时健康检测（intervalMs = 0 停止）
   safeInvoke(
     'account:setHealthCheckInterval',

@@ -2,10 +2,12 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { electronApi } from '../utils/electron';
 import { useWorkspaceStore } from '../stores/workspace';
+import { useAccountStore } from '../stores/account';
 import type { WorkspaceTab } from '../stores/workspace';
 
 const props = defineProps<{ tab: WorkspaceTab }>();
 const store = useWorkspaceStore();
+const accountStore = useAccountStore();
 const accountId = props.tab.accountId || '';
 // partition 在组件实例生命周期内稳定（按账号固定），作为静态属性绑定，避免响应式重设触发 guest 重建
 const partitionName = `persist:account_${accountId}`;
@@ -278,7 +280,16 @@ function onGuestMessage(id: string, e: any) {
   if (!msg || typeof msg !== 'object') return;
   if (id !== activeInnerId.value) return; // 仅处理当前激活子页签
   if (msg.type === 'login') {
-    loginState.value = !!(msg.payload && msg.payload.loggedIn);
+    const now = !!(msg.payload && msg.payload.loggedIn);
+    const prev = loginState.value;
+    loginState.value = now;
+    // 刚刚从「未登录/失效」变为「已登录」：通知主进程刷新授权有效期，
+    // 使账号列表状态实时同步，无需手动刷新。
+    if (now && (prev === false || prev === null)) {
+      electronApi.notifyLoginSuccess(accountId)
+        .then(() => accountStore.refreshAccounts())
+        .catch(() => {});
+    }
   }
   // stats/diagnosis/ready 等由「体检」按钮主动拉取，不常驻刷新
 }

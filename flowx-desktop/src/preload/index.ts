@@ -95,6 +95,8 @@ contextBridge.exposeInMainWorld('electron', {
       invoke('account:openAccountTab', id),
     /** 静默检测单个账号的登录态 */
     healthCheck: (id: string): Promise<AccountInfo | null> => invoke('account:healthCheck', id),
+    /** 创作中心内手动重新登录成功后，刷新该账号授权有效期 */
+    notifyLoginSuccess: (id: string): Promise<AccountInfo | null> => invoke('account:notifyLoginSuccess', id),
     /** 静默检测所有账号 */
     healthCheckAll: (): Promise<AccountInfo[]> => invoke('account:healthCheckAll'),
     /** 配置定时检测：intervalMs 为毫秒间隔 */
