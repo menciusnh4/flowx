@@ -689,9 +689,10 @@ const pagedResult = ref<PagedResult<AccountInfo>>({
 async function loadList(page: number, size: number) {
   listLoading.value = true;
   try {
+    // ⚠️ 必须展开为纯数组：Vue reactive Proxy 数组无法通过 Electron IPC 的结构化克隆
     const filter: AccountQueryFilter = {
-      categoryIds: filterCategoryIds.value,
-      platform: filterPlatform.value,
+      categoryIds: [...filterCategoryIds.value],
+      platform: [...filterPlatform.value],
       keyword: searchText.value,
     };
     let res = await accountStore.loadAccountsPaged(filter, page, size);
@@ -1355,7 +1356,8 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 .ac-plat {
   display: inline-flex;
@@ -1367,10 +1369,20 @@ onBeforeUnmount(() => {
   border: 1px solid transparent;
   font-size: 12.5px;
   font-weight: 700;
+  max-width: 130px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.ac-plat span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ac-plat-ic {
   width: 16px;
   height: 16px;
+  flex-shrink: 0;
   object-fit: contain;
 }
 .ac-body {
@@ -1398,15 +1410,16 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
 }
 .ac-stats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
   padding: 12px 0;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
 }
 .ac-stat {
   text-align: center;
+  min-width: 0;
 }
 .ac-stat b {
   display: block;
