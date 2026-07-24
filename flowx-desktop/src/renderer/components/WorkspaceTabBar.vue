@@ -363,7 +363,7 @@ watch(
         />
       </div>
       <div class="win-dots" role="group" aria-label="窗口控制">
-        <i class="r" title="关闭" role="button" aria-label="关闭窗口" @click="winClose"></i><i class="y" title="最小化" role="button" aria-label="最小化窗口" @click="winMin"></i><i class="g" title="最大化" role="button" aria-label="最大化窗口" @click="winMax"></i>
+        <i class="y" title="最小化" role="button" aria-label="最小化窗口" @click="winMin"><svg viewBox="0 0 16 16" class="ic"><path d="M4 8 H12"/></svg></i><i class="g" title="最大化" role="button" aria-label="最大化窗口" @click="winMax"><svg viewBox="0 0 16 16" class="ic"><path d="M6 4 H4 V6 M10 4 H12 V6 M6 12 H4 V10 M10 12 H12 V10"/></svg></i><i class="r" title="关闭" role="button" aria-label="关闭窗口" @click="winClose"><svg viewBox="0 0 16 16" class="ic"><path d="M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5"/></svg></i>
       </div>
     </div>
 
@@ -614,34 +614,28 @@ watch(
 }
 .win-dots i {
   position: relative;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
-  display: inline-block;
+  display: grid;
+  place-items: center;
   cursor: pointer;
   transition: transform 0.16s var(--ease), filter 0.16s var(--ease), box-shadow 0.16s var(--ease);
 }
-/* 标记符号：默认隐藏；移入灯组时三个圆点同时淡入（macOS 红黄绿交通灯交互） */
-.win-dots i::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  font-family: 'Segoe UI Symbol', 'Apple Symbols', -apple-system, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-  color: inherit;
+/* 标记符号：内联 SVG 绘制，几何对称、不依赖字体字形，彻底避免 × 回退偏斜/基线偏移；默认隐藏，移入灯组时三个同时淡入（macOS 红黄绿交通灯交互） */
+.win-dots i svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  fill: none;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.16s var(--ease), filter 0.16s var(--ease);
 }
-.win-dots .r::before { content: '\00D7'; } /* × 关闭：改用 U+00D7 标准乘号，Segoe UI 原生支持，避免回退字形偏移 */
-.win-dots .y::before { content: '\2212'; } /* − 最小化 */
-.win-dots .g::before { content: '\2922'; } /* ⤢ 最大化 / 全屏 */
 /* 规则1：移入任意圆点 → 三个标记同时淡入 */
-.win-dots:hover i::before {
+.win-dots:hover i svg {
   opacity: 1;
 }
 /* 规则2：悬停单个圆点 → 轻微放大 + 符号加深 */
@@ -650,7 +644,7 @@ watch(
   filter: brightness(1.08);
   box-shadow: 0 0 0 4px rgba(15, 23, 42, 0.07);
 }
-.win-dots i:hover::before {
+.win-dots i:hover svg {
   filter: brightness(0.82);
 }
 .win-dots .r {
