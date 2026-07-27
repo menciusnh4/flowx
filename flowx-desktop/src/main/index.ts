@@ -6,6 +6,7 @@ import { setupLogger, logger } from './utils/logger';
 import { initStore } from './store/SecureStore';
 import { AccountService } from './services/AccountService';
 import { PublishEngine } from './services/PublishEngine';
+import { AnalyticsService } from './services/analytics/AnalyticsService';
 import { ApiServer } from './services/ApiServer';
 import { registerNewTabProtocol } from './services/NewTabPageService';
 
@@ -111,6 +112,7 @@ async function bootstrap() {
   // 初始化业务服务
   AccountService.init();
   PublishEngine.init();
+  AnalyticsService.init();
 
   // 启动对外 API 服务（如果配置了启用）
   ApiServer.getInstance().startIfEnabled();

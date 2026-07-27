@@ -19,6 +19,10 @@
           <el-icon><UserFilled /></el-icon>
           <span>账号管理</span>
         </el-menu-item>
+        <el-menu-item index="/analytics">
+          <el-icon><DataAnalysis /></el-icon>
+          <span>账号分析</span>
+        </el-menu-item>
         <el-menu-item index="/publish">
           <el-icon><Promotion /></el-icon>
           <span>一键发布</span>
