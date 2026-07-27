@@ -25,6 +25,12 @@
           <el-icon v-if="!analyticsStore.isCollecting"><Refresh /></el-icon>
           &nbsp;{{ analyticsStore.isCollecting ? '采集中...' : '开始采集' }}
         </el-button>
+        <el-button
+          :disabled="!selectedAccountId || analyticsStore.isCollecting"
+          @click="clearData"
+        >
+          清空数据
+        </el-button>
       </div>
 
       <el-progress
@@ -147,7 +153,7 @@
               type="primary"
               link
               :disabled="!row.detailUrl"
-              @click="openDetail(row.detailUrl)"
+              @click="openDetail(row)"
             >
               查看
             </el-button>
@@ -296,9 +302,28 @@ function onPageSizeChange(size: number) {
   loadWorks();
 }
 
-function openDetail(url?: string) {
-  if (url) {
-    electronApi.openExternal(url);
+async function clearData() {
+  if (!selectedAccountId.value) return;
+  try {
+    await analyticsStore.clearData(selectedAccountId.value);
+    await loadLastCollectInfo();
+    ElMessage.success('数据已清空');
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e));
+  }
+}
+
+async function openDetail(row: any) {
+  if (!row.detailUrl || !selectedAccountId.value) return;
+  try {
+    await electronApi.analytics.openWorkInWindow(
+      selectedAccountId.value,
+      row.detailUrl,
+      row.title || '作品详情'
+    );
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e));
+    electronApi.openExternal(row.detailUrl);
   }
 }
 

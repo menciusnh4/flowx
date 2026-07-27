@@ -425,7 +425,10 @@ export class XiaohongshuCollector extends BaseCollector {
       seenIds.add(noteId);
 
       const title = item.title || item.note_title || '';
-      const coverUrl = item.cover || item.cover_url || item.thumb_url || '';
+      let coverUrl = item.cover || item.cover_url || item.thumb_url || '';
+      if (coverUrl && coverUrl.startsWith('http://')) {
+        coverUrl = coverUrl.replace('http://', 'https://');
+      }
       const publishTime = item.post_time || item.publish_time || item.create_time || item.ctime || Date.now();
       const detailUrl = noteId ? `https://www.xiaohongshu.com/explore/${noteId}` : '';
       

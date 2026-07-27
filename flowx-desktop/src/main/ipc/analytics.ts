@@ -1,7 +1,10 @@
 import { safeInvoke } from './index';
 import { AnalyticsService } from '../services/analytics/AnalyticsService';
 import type { WorksQueryParams, BenchmarkAccount, CollectProgress } from '../../types';
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain, BrowserWindow, session } from 'electron';
+import { getAppIcon } from '../windows/MainWindow';
+import { AccountService, injectAccountCookies } from '../services/AccountService';
+import { getPlatform } from '../services/platforms';
 
 function notifyProgress(progress: CollectProgress) {
   const wins = BrowserWindow.getAllWindows();
@@ -68,5 +71,39 @@ export function registerAnalyticsIpc(): void {
 
   safeInvoke('analytics:getLastCollectInfo', (accountId: string) => {
     return AnalyticsService.getLastCollectInfo(accountId);
+  });
+
+  safeInvoke('analytics:clearData', (accountId: string) => {
+    return AnalyticsService.clearAccountData(accountId);
+  });
+
+  safeInvoke('analytics:openWorkInWindow', async (accountId: string, workUrl: string, title?: string) => {
+    const account = AccountService.getAccount(accountId);
+    if (!account) {
+      throw new Error('账号不存在');
+    }
+    const partition = `persist:account_${accountId}`;
+    const platform = getPlatform(account.platform);
+    const homeUrl = platform?.meta.homeUrl || '';
+    
+    await injectAccountCookies(accountId, homeUrl);
+    
+    const win = new BrowserWindow({
+      width: 1280,
+      height: 880,
+      title: title || '作品详情',
+      icon: getAppIcon(),
+      autoHideMenuBar: true,
+      webPreferences: {
+        partition,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+    win.setMenuBarVisibility(false);
+    win.loadURL(workUrl);
+    
+    return { success: true };
   });
 }

@@ -220,6 +220,16 @@ export class ApiServer {
         return;
       }
 
+      // GET /api/analytics/works/:accountId - 获取作品列表（调试用）
+      const worksMatch = pathname.match(/^\/api\/analytics\/works\/([^/]+)$/);
+      if (worksMatch && req.method === 'GET') {
+        const { AnalyticsService } = await import('./analytics/AnalyticsService');
+        const accountId = worksMatch[1];
+        const result = AnalyticsService.getWorks({ accountId, page: 1, pageSize: 3 });
+        this.sendJson(res, 200, { code: 0, data: result });
+        return;
+      }
+
       this.sendJson(res, 404, { error: 'Not Found', message: '接口不存在' });
     } catch (err) {
       logger.error(`[ApiServer] 处理请求异常: ${(err as Error).message}`);

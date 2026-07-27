@@ -282,6 +282,10 @@ class AnalyticsServiceImpl {
   getLastCollectInfo(accountId: string) {
     return AnalyticsStore.getLastCollectInfo(accountId);
   }
+
+  clearAccountData(accountId: string): void {
+    AnalyticsStore.clearAccountData(accountId);
+  }
 }
 
 export const AnalyticsService = new AnalyticsServiceImpl();

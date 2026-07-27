@@ -600,6 +600,12 @@ export const electronApi = {
     } | null> {
       return invokeElectron('analytics.getLastCollectInfo', 'analytics:getLastCollectInfo', accountId);
     },
+    async clearData(accountId: string): Promise<void> {
+      return invokeElectron('analytics.clearData', 'analytics:clearData', accountId);
+    },
+    async openWorkInWindow(accountId: string, workUrl: string, title?: string): Promise<{ success: boolean }> {
+      return invokeElectron('analytics.openWorkInWindow', 'analytics:openWorkInWindow', accountId, workUrl, title);
+    },
     onProgress(cb: (p: CollectProgress) => void): () => void {
       const e = getElectronOrThrow() as { analytics?: { onProgress: (cb: never) => () => void } };
       return e.analytics?.onProgress?.(cb as never) ?? (() => { /* noop */ });

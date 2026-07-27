@@ -238,6 +238,25 @@ export function getWorkMetrics(workId: string): WorkMetrics | undefined {
   return data.workMetrics[workId];
 }
 
+export function clearAccountData(accountId: string): void {
+  const data = ensureInit();
+  
+  if (data.works[accountId]) {
+    const workIds = data.works[accountId].map(w => w.id);
+    for (const wid of workIds) {
+      delete data.workMetrics[wid];
+    }
+    delete data.works[accountId];
+  }
+  
+  delete data.accountStats[accountId];
+  delete data.diagnoses[accountId];
+  delete data.lastCollectInfo[accountId];
+  
+  saveData(data);
+  logger.info('[AnalyticsStore] 清空账号数据:', accountId);
+}
+
 // ==================== 账号统计快照相关 ====================
 
 export function getAccountStats(accountId: string, days?: number): AccountStatsSnapshot[] {

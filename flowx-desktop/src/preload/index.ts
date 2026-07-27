@@ -486,6 +486,10 @@ contextBridge.exposeInMainWorld('electron', {
       lastWorkPublishTime?: number;
     } | null> => invoke('analytics:getLastCollectInfo', accountId),
 
+    clearData: (accountId: string): Promise<void> => invoke('analytics:clearData', accountId),
+    openWorkInWindow: (accountId: string, workUrl: string, title?: string): Promise<{ success: boolean }> =>
+      invoke('analytics:openWorkInWindow', accountId, workUrl, title),
+
     onProgress: (cb: (p: CollectProgress) => void): (() => void) => {
       const handler = (_event: unknown, payload: CollectProgress) => cb(payload);
       ipcRenderer.on('analytics:progress', handler);

@@ -151,5 +151,12 @@ export const useAnalyticsStore = defineStore('analytics', {
       this.worksPage = page;
       this.loadWorks();
     },
+
+    async clearData(accountId: string) {
+      await electronApi.analytics.clearData(accountId);
+      this.works = [];
+      this.worksTotal = 0;
+      this.worksPage = 1;
+    },
   },
 });
