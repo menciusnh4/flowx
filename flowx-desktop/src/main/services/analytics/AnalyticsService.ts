@@ -178,6 +178,11 @@ class AnalyticsServiceImpl {
               comments: w.comments || 0,
               favorites: w.favorites || 0,
               shares: w.shares || 0,
+              impressions: (w as any).impressions || 0,
+              clickRate: (w as any).clickRate || 0,
+              newFans: (w as any).newFans || 0,
+              avgPlayDuration: (w as any).avgPlayDuration || 0,
+              completionRate: (w as any).completionRate || 0,
             };
 
             return { work: workItem, metrics };

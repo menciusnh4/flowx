@@ -3,34 +3,11 @@ import { BaseCollector } from '../BaseCollector';
 import type { AccountCredential } from '../../../../types';
 import { sleep } from '../../platforms/shared';
 
-function generateWorkId(title: string): string {
-  let hash = 0;
-  for (let i = 0; i < title.length; i++) {
-    hash = ((hash << 5) - hash + title.charCodeAt(i)) | 0;
-  }
-  return `xhs_${Math.abs(hash).toString(36)}`;
-}
-
-function parseDurationToSeconds(durationStr: string): number | undefined {
-  if (!durationStr) return undefined;
-  const parts = durationStr.split(':');
-  if (parts.length === 2) {
-    const min = parseInt(parts[0], 10) || 0;
-    const sec = parseInt(parts[1], 10) || 0;
-    return min * 60 + sec;
-  }
-  if (parts.length === 3) {
-    const hour = parseInt(parts[0], 10) || 0;
-    const min = parseInt(parts[1], 10) || 0;
-    const sec = parseInt(parts[2], 10) || 0;
-    return hour * 3600 + min * 60 + sec;
-  }
-  return undefined;
-}
-
-function parseZhNumber(text: string): number {
-  if (!text) return 0;
-  const t = text.trim();
+function parseZhNumber(text: string | number | undefined | null): number {
+  if (text === undefined || text === null) return 0;
+  if (typeof text === 'number') return text;
+  const t = String(text).trim();
+  if (!t) return 0;
   if (t.includes('w') || t.includes('万')) {
     const num = parseFloat(t.replace(/[w万]/g, ''));
     return Math.round(num * 10000);
@@ -41,79 +18,6 @@ function parseZhNumber(text: string): number {
   }
   const n = parseInt(t.replace(/,/g, ''), 10);
   return isNaN(n) ? 0 : n;
-}
-
-function parsePublishTimeToTimestamp(text: string): number {
-  if (!text) return Date.now();
-  const t = text.trim();
-
-  const now = new Date();
-
-  let m = t.match(/(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})/);
-  if (m) {
-    const date = new Date(
-      parseInt(m[1], 10),
-      parseInt(m[2], 10) - 1,
-      parseInt(m[3], 10),
-    );
-    return date.getTime();
-  }
-
-  m = t.match(/(\d{1,2})[-/月](\d{1,2})/);
-  if (m) {
-    const date = new Date(
-      now.getFullYear(),
-      parseInt(m[1], 10) - 1,
-      parseInt(m[2], 10),
-    );
-    return date.getTime();
-  }
-
-  m = t.match(/(\d+)天前/);
-  if (m) {
-    return Date.now() - parseInt(m[1], 10) * 24 * 3600 * 1000;
-  }
-
-  m = t.match(/(\d+)小时前/);
-  if (m) {
-    return Date.now() - parseInt(m[1], 10) * 3600 * 1000;
-  }
-
-  m = t.match(/(\d+)分钟前/);
-  if (m) {
-    return Date.now() - parseInt(m[1], 10) * 60 * 1000;
-  }
-
-  if (t.includes('刚刚') || t.includes('今天')) {
-    return Date.now();
-  }
-  if (t.includes('昨天')) {
-    return Date.now() - 24 * 3600 * 1000;
-  }
-  if (t.includes('前天')) {
-    return Date.now() - 2 * 24 * 3600 * 1000;
-  }
-
-  return Date.now();
-}
-
-function dedupTitle(title: string): string {
-  if (!title) return title;
-  const len = title.length;
-  for (let i = 1; i <= Math.floor(len / 2); i++) {
-    if (len % i === 0) {
-      const seg = title.slice(0, i);
-      let repeat = true;
-      for (let j = i; j < len; j += i) {
-        if (title.slice(j, j + i) !== seg) {
-          repeat = false;
-          break;
-        }
-      }
-      if (repeat) return seg;
-    }
-  }
-  return title;
 }
 
 export class XiaohongshuCollector extends BaseCollector {
@@ -159,6 +63,48 @@ export class XiaohongshuCollector extends BaseCollector {
     await sleep(6000);
 
     try {
+      const overviewApi = 'https://creator.xiaohongshu.com/api/galaxy/creator/datacenter/overview';
+      log('info', 'api', '调用概览数据 API');
+      const resp: any = await this.fetchAPI(overviewApi, 'fetch-overview', {
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+          'Accept': 'application/json, text/plain, */*',
+        }
+      });
+      
+      if (resp && resp.success && resp.data) {
+        const data = resp.data;
+        const followers = parseZhNumber(data.fans_num || data.follower_count || 0);
+        const following = parseZhNumber(data.following_num || data.follow_count || 0);
+        const likes = parseZhNumber(data.liked_num || data.like_count || 0);
+        const collects = parseZhNumber(data.collected_num || data.collect_count || 0);
+        const worksCount = parseZhNumber(data.note_num || data.notes_count || data.works_count || 0);
+
+        log('info', 'result', '概览 API 数据提取完成', {
+          followers, following, likes, collects, worksCount
+        });
+
+        return {
+          followers,
+          following,
+          likes: likes + collects,
+          worksCount,
+          extra: {
+            collects,
+            likesOnly: likes,
+          },
+        };
+      }
+      log('warn', 'api-fallback', '概览 API 返回异常，回退到 DOM 解析');
+    } catch (e) {
+      log('warn', 'api-error', `概览 API 调用失败: ${(e as Error).message}，回退到 DOM 解析`);
+    }
+
+    return this.collectOverviewFallback(log);
+  }
+
+  private async collectOverviewFallback(log: ReturnType<typeof this.makeLog>) {
+    try {
       await this.waitForContent(10000);
     } catch {
       // ignore
@@ -186,55 +132,118 @@ export class XiaohongshuCollector extends BaseCollector {
         return isNaN(n) ? 0 : n;
       }
 
-      var followers = 0;
-      var following = 0;
-      var likes = 0;
-      var worksCount = 0;
-      var collects = 0;
-
-      var textAll = document.body.innerText || '';
-      var lines = textAll.split('\\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
-
-      for (var i = 0; i < lines.length; i++) {
-        var line = lines[i];
-        if (line === '粉丝数' && i > 0) {
-          followers = parseNum(lines[i - 1]);
-        }
-        if (line === '关注数' && i > 0) {
-          following = parseNum(lines[i - 1]);
-        }
-        if (line === '获赞与收藏' && i > 0) {
-          var val = parseNum(lines[i - 1]);
-          likes = val;
-          collects = val;
-        }
-        if (line.indexOf('笔记数') >= 0 && i > 0) {
-          worksCount = parseNum(lines[i - 1]);
-        }
+      function looksLikeNumber(text) {
+        if (!text) return false;
+        var t = text.trim();
+        if (t.length === 0 || t.length > 15) return false;
+        return /^[\\d,\\.]+[万千wkWK]?$/.test(t);
       }
 
-      if (worksCount === 0) {
-        for (var j = 0; j < lines.length; j++) {
-          if (lines[j].indexOf('笔记') >= 0 && lines[j].indexOf('管理') < 0) {
-            var m = lines[j].match(/([\\d,万]+)\\s*笔记/);
-            if (m) {
-              worksCount = parseNum(m[1]);
+      function findValueNearLabel(lines, labels) {
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          var matched = false;
+          for (var l = 0; l < labels.length; l++) {
+            if (line === labels[l] || line.indexOf(labels[l]) === 0 && line.length < labels[l].length + 8) {
+              matched = true;
               break;
+            }
+          }
+          if (!matched) continue;
+
+          for (var step = 1; step <= 4; step++) {
+            if (i - step >= 0 && looksLikeNumber(lines[i - step])) {
+              return parseNum(lines[i - step]);
+            }
+          }
+          for (var step2 = 1; step2 <= 4; step2++) {
+            if (i + step2 < lines.length && looksLikeNumber(lines[i + step2])) {
+              return parseNum(lines[i + step2]);
+            }
+          }
+        }
+        return 0;
+      }
+
+      function extractFromText(text) {
+        var lines = text.split('\\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
+
+        var followers = findValueNearLabel(lines, ['粉丝数', '粉丝']);
+        var following = findValueNearLabel(lines, ['关注数', '关注']);
+        var likes = 0;
+        var collects = 0;
+        var likeCollect = findValueNearLabel(lines, ['获赞与收藏', '获赞和收藏', '总获赞与收藏']);
+        if (likeCollect > 0) {
+          likes = likeCollect;
+          collects = likeCollect;
+        } else {
+          likes = findValueNearLabel(lines, ['获赞数', '获赞', '点赞数', '点赞']);
+          collects = findValueNearLabel(lines, ['收藏数', '收藏']);
+        }
+        var worksCount = findValueNearLabel(lines, ['笔记数', '笔记篇数', '作品数', '作品篇数']);
+
+        if (worksCount === 0) {
+          for (var j = 0; j < lines.length; j++) {
+            if (lines[j].indexOf('笔记') >= 0 && lines[j].indexOf('管理') < 0) {
+              var m = lines[j].match(/([\\d,万]+)\\s*笔记/);
+              if (m) {
+                worksCount = parseNum(m[1]);
+                break;
+              }
+            }
+          }
+        }
+
+        return {
+          followers: followers,
+          following: following,
+          likes: likes,
+          worksCount: worksCount,
+          collects: collects
+        };
+      }
+
+      var result = { followers: 0, following: 0, likes: 0, worksCount: 0, collects: 0 };
+
+      var selectors = [
+        '.user-info', '.account-info', '.profile-card', '.user-card',
+        '.header-info', '.top-info', '.data-card', '.stat-card',
+        '.creator-info', '.creator-data', '.account-data',
+        '[class*="user-info"]', '[class*="profile"]', '[class*="stat"]',
+        '[class*="data-card"]'
+      ];
+
+      for (var s = 0; s < selectors.length; s++) {
+        var els = document.querySelectorAll(selectors[s]);
+        for (var e = 0; e < els.length; e++) {
+          var txt = els[e].innerText || '';
+          if (txt.length < 10 || txt.length > 2000) continue;
+          var hasFan = txt.indexOf('粉丝') >= 0;
+          var hasFollow = txt.indexOf('关注') >= 0;
+          var hasLike = txt.indexOf('获赞') >= 0 || txt.indexOf('收藏') >= 0;
+          if (hasFan && (hasFollow || hasLike)) {
+            var extracted = extractFromText(txt);
+            if (extracted.followers > 0 || extracted.likes > 0) {
+              result.followers = extracted.followers || result.followers;
+              result.following = extracted.following || result.following;
+              result.likes = extracted.likes || result.likes;
+              result.worksCount = extracted.worksCount || result.worksCount;
+              result.collects = extracted.collects || result.collects;
             }
           }
         }
       }
 
-      return {
-        followers: followers,
-        following: following,
-        likes: likes,
-        worksCount: worksCount,
-        collects: collects
-      };
+      if (result.followers === 0 && result.likes === 0 && result.worksCount === 0) {
+        var bodyText = document.body.innerText || '';
+        var bodyResult = extractFromText(bodyText);
+        result = bodyResult;
+      }
+
+      return result;
     `, 'extract-xhs-overview');
 
-    log('info', 'result', '账号概览数据提取完成', {
+    log('info', 'result', '账号概览数据提取完成（DOM 回退）', {
       followers: data.followers,
       following: data.following,
       likes: data.likes,
@@ -253,7 +262,7 @@ export class XiaohongshuCollector extends BaseCollector {
     };
   }
 
-  async collectWorksList(limit: number = 20): Promise<Array<{
+  async collectWorksList(limit: number = 50): Promise<Array<{
     workId: string;
     title: string;
     coverUrl?: string;
@@ -266,62 +275,321 @@ export class XiaohongshuCollector extends BaseCollector {
     comments?: number;
     favorites?: number;
     shares?: number;
+    impressions?: number;
+    clickRate?: number;
+    newFans?: number;
+    avgPlayDuration?: number;
+    extra?: Record<string, number | string>;
   }>> {
     const log = this.makeLog('xhs-works');
 
-    log('info', 'goto', '从首页导航到笔记管理页');
-    await this.goto('https://creator.xiaohongshu.com/creator/home', 3000);
+    try {
+      const analysisUrl = 'https://creator.xiaohongshu.com/statistics/data-analysis?source=official';
+      
+      log('info', 'network-listen', '开始监听内容分析 API');
+      await this.startNetworkCollect(/\/api\/galaxy\/creator\/datacenter\/note\/analyze\/list/);
+
+      log('info', 'goto', '跳转到内容分析页');
+      await this.goto(analysisUrl, 3000);
+      
+      await sleep(2000);
+      const firstPageData = await this.getLatestResponse();
+      if (!firstPageData) {
+        throw new Error('未获取到第一页数据');
+      }
+      log('info', 'first-page', '第一页 API 响应已捕获');
+
+      const allWorks: Array<any> = [];
+      const seenIds = new Set<string>();
+
+      const firstPageCount = this.parseAndAddWorks(firstPageData, allWorks, seenIds, log);
+      log('info', 'page-works', `第 1 页提取到 ${firstPageCount} 条作品（CDP 监听方式）`);
+
+      let page = 1;
+      const maxPages = 50;
+      let lastFirstNoteId = '';
+      if (allWorks.length > 0 && allWorks[0].extra?.noteId) {
+        lastFirstNoteId = allWorks[0].extra.noteId as string;
+      }
+
+      while (allWorks.length < limit && page < maxPages) {
+        const nextPage = page + 1;
+        const beforeCount = this.getResponseCount();
+        
+        const clicked = await this.goToPage(nextPage);
+        if (!clicked) {
+          log('info', 'page-click-fail', `跳转到第 ${nextPage} 页失败，停止翻页`);
+          break;
+        }
+
+        try {
+          const nextPageData = await this.waitForNewResponse(beforeCount, 15000);
+          
+          const pageWorks: Array<any> = [];
+          const pageSeen = new Set<string>();
+          const added = this.parseAndAddWorks(nextPageData, pageWorks, pageSeen, log);
+          
+          let currentFirstNoteId = '';
+          if (pageWorks.length > 0 && pageWorks[0].extra?.noteId) {
+            currentFirstNoteId = pageWorks[0].extra.noteId as string;
+          }
+          
+          if (added > 0 && lastFirstNoteId && currentFirstNoteId === lastFirstNoteId) {
+            log('warn', 'page-same', `第 ${nextPage} 页数据与上一页相同，可能翻页未生效，停止翻页`);
+            break;
+          }
+          if (added > 0) {
+            lastFirstNoteId = currentFirstNoteId;
+          }
+
+          this.parseAndAddWorks(nextPageData, allWorks, seenIds, log);
+          page++;
+          log('info', 'page-works', `第 ${page} 页提取到 ${added} 条作品（CDP 监听方式）`);
+          
+          if (added === 0) break;
+        } catch (e) {
+          log('warn', 'page-timeout', `第 ${nextPage} 页等待超时，停止翻页`);
+          break;
+        }
+
+        if (allWorks.length >= limit) break;
+        await sleep(500);
+      }
+
+      this.stopNetworkCollect();
+
+      if (allWorks.length > 0) {
+        const result = allWorks.slice(0, limit);
+        log('info', 'done', `作品列表采集完成，共 ${result.length} 条（CDP 监听方式）`);
+        return result;
+      }
+    } catch (e) {
+      log('warn', 'cdp-error', `CDP 监听方式失败: ${(e as Error).message}`);
+      try { this.stopNetworkCollect(); } catch {}
+    }
+
+    log('info', 'fallback', '回退到 DOM 解析方式');
+    return this.collectWorksFallback(limit, log);
+  }
+
+  private getResponseCount(): number {
+    return this.networkCollector.responses.length;
+  }
+
+  private getLatestResponse(): any | null {
+    const responses = this.networkCollector.responses;
+    if (responses.length === 0) return null;
+    return responses[responses.length - 1].data;
+  }
+
+  private async waitForNewResponse(beforeCount: number, timeoutMs: number): Promise<any> {
+    const log = this.makeLog('network');
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeoutMs) {
+      if (this.networkCollector.responses.length > beforeCount) {
+        const latest = this.networkCollector.responses[this.networkCollector.responses.length - 1];
+        log('info', 'new-response', `获取到新响应（第 ${this.networkCollector.responses.length} 个）`);
+        return latest.data;
+      }
+      await sleep(200);
+    }
+    
+    throw new Error(`等待新响应超时（${timeoutMs}ms）`);
+  }
+
+  private parseAndAddWorks(resp: any, allWorks: Array<any>, seenIds: Set<string>, log: ReturnType<typeof this.makeLog>): number {
+    if (!resp) {
+      log('warn', 'parse-empty', '响应为空');
+      return 0;
+    }
+    if (!resp.success) {
+      log('warn', 'parse-not-success', `响应不成功: code=${resp.code}, msg=${resp.msg || resp.message}`);
+      return 0;
+    }
+    if (!resp.data) {
+      log('warn', 'parse-no-data', '响应中没有 data 字段');
+      return 0;
+    }
+
+    const items = resp.data.notes || resp.data.note_infos || resp.data.list || resp.data.items || [];
+    if (items.length === 0) {
+      log('warn', 'parse-empty-items', `data 中没有找到列表数据，data keys: ${Object.keys(resp.data).join(', ')}`);
+    }
+    let added = 0;
+
+    for (const item of items) {
+      const noteId = item.id || item.note_id || item.noteId || '';
+      if (!noteId) continue;
+      if (seenIds.has(noteId)) continue;
+      seenIds.add(noteId);
+
+      const title = item.title || item.note_title || '';
+      const coverUrl = item.cover || item.cover_url || item.thumb_url || '';
+      const publishTime = item.post_time || item.publish_time || item.create_time || item.ctime || Date.now();
+      const detailUrl = noteId ? `https://www.xiaohongshu.com/explore/${noteId}` : '';
+      
+      const views = parseZhNumber(item.read_count || item.play_count || item.view_count || item.views || item.view || 0);
+      const likes = parseZhNumber(item.like_count || item.likes || item.like || 0);
+      const comments = parseZhNumber(item.comment_count || item.comments || item.comment || 0);
+      const favorites = parseZhNumber(item.fav_count || item.collect_count || item.favorites || item.collect || 0);
+      const shares = parseZhNumber(item.share_count || item.shares || item.share || 0);
+      const impressions = parseZhNumber(item.imp_count || item.impression_count || item.exposure || item.impressions || 0);
+      const clickRate = item.coverClickRate || item.ctr || item.click_rate || 0;
+      const newFans = parseZhNumber(item.increase_fans_count || item.new_fans || item.new_follower || 0);
+      const avgPlayDuration = item.view_time_avg || item.avg_play_duration || item.avg_play_time || item.avg_duration || 0;
+
+      const isVideo = item.type === 2 || item.note_type === 'video' || item.media_type === 'video';
+      const contentType = isVideo ? 'video' : (item.type === 1 ? 'article' : 'image');
+      const duration = isVideo ? (item.duration || item.video_duration || 0) : 0;
+
+      allWorks.push({
+        workId: `xhs_${noteId}`,
+        title,
+        coverUrl,
+        publishTime: typeof publishTime === 'number' ? publishTime * (publishTime < 1e12 ? 1000 : 1) : Date.now(),
+        detailUrl,
+        duration,
+        contentType: contentType as any,
+        views,
+        likes,
+        comments,
+        favorites,
+        shares,
+        impressions,
+        clickRate: typeof clickRate === 'number' ? clickRate : parseFloat(clickRate) || 0,
+        newFans,
+        avgPlayDuration,
+        extra: {
+          noteId,
+        }
+      });
+      added++;
+    }
+
+    return added;
+  }
+
+  private async clickNextPage(): Promise<boolean> {
+    try {
+      return await this.safeEval<boolean>(`
+        var nextSelectors = [
+          '.next', '.next-page', '.pagination-next', '.ant-pagination-next',
+          '.d-pagination-next', '.page-next', '[class*="pagination-next"]',
+          '.d-pagination .d-pagination-item-next', '.d-pagination-item-next'
+        ];
+        for (var s = 0; s < nextSelectors.length; s++) {
+          var btn = document.querySelector(nextSelectors[s]);
+          if (btn) {
+            var isDisabled = btn.classList.contains('disabled') || btn.classList.contains('is-disabled') || btn.getAttribute('disabled') !== null;
+            if (isDisabled) return false;
+            btn.scrollIntoView({ behavior: 'auto', block: 'center' });
+            try {
+              btn.click();
+              return true;
+            } catch (e) {
+              try {
+                var evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                btn.dispatchEvent(evt);
+                return true;
+              } catch (e2) {
+                return false;
+              }
+            }
+          }
+        }
+
+        var allBtns = document.querySelectorAll('button, a, li, div[class*="page"], span[class*="page"]');
+        for (var i = 0; i < allBtns.length; i++) {
+          var txt = (allBtns[i].innerText || '').trim();
+          if (txt === '下一页' || txt === '>' || txt === '»' || txt === '→' || txt.indexOf('下一页') >= 0) {
+            var isDis = allBtns[i].classList.contains('disabled') || allBtns[i].classList.contains('is-disabled') || allBtns[i].getAttribute('disabled') !== null;
+            if (isDis) return false;
+            allBtns[i].scrollIntoView({ behavior: 'auto', block: 'center' });
+            try {
+              allBtns[i].click();
+              return true;
+            } catch (e) {
+              try {
+                var evt2 = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                allBtns[i].dispatchEvent(evt2);
+                return true;
+              } catch (e3) {
+                return false;
+              }
+            }
+          }
+        }
+        return false;
+      `, 'click-next-page');
+    } catch {
+      return false;
+    }
+  }
+
+  private async collectWorksFallback(limit: number, log: ReturnType<typeof this.makeLog>): Promise<Array<any>> {
+    const analysisUrl = 'https://creator.xiaohongshu.com/statistics/data-analysis?source=official';
+    log('info', 'goto-fallback', '跳转到内容分析页（DOM 回退）');
+    await this.goto(analysisUrl, 3000);
     await sleep(5000);
 
     try {
-      await this.safeEval(`
-        var allEls = document.querySelectorAll('div, span');
-        for (var i = 0; i < allEls.length; i++) {
-          var txt = (allEls[i].innerText || '').trim();
-          if (txt === '笔记管理') {
-            var el = allEls[i];
-            var depth = 0;
-            while (el && depth < 5) {
-              var style = window.getComputedStyle(el);
-              if (style.cursor === 'pointer' || el.tagName === 'BUTTON' || el.tagName === 'A' || el.onclick) {
-                el.click();
-                break;
-              }
-              el = el.parentElement;
-              depth++;
-            }
+      await this.waitForAnalysisData(15000);
+    } catch {
+      log('warn', 'wait-timeout', '等待内容分析数据加载超时，继续尝试提取');
+    }
+
+    const totalPages = await this.getTotalPages();
+    log('info', 'pages', `共 ${totalPages} 页数据`);
+
+    const allWorks: Array<any> = [];
+    const seenIds = new Set<string>();
+    let lastFirstTitle = '';
+
+    for (let page = 1; page <= totalPages && allWorks.length < limit; page++) {
+      if (page > 1) {
+        const nextClicked = await this.goToNextPage();
+        if (!nextClicked) {
+          const numClicked = await this.goToPage(page);
+          if (!numClicked) {
+            log('warn', 'page-fail', `跳转到第 ${page} 页失败`);
             break;
           }
         }
-        'ok';
-      `, 'click-notes-menu');
-      await sleep(5000);
-    } catch (e) {
-      log('warn', 'click-fail', `点击导航失败: ${(e as Error).message}`);
-    }
-
-    try {
-      await this.waitForWorks(10000);
-    } catch {
-      log('warn', 'wait-timeout', '等待作品卡片超时，继续尝试提取');
-    }
-
-    const works = await this.extractWorksPage();
-
-    if (works.length < limit) {
-      try {
-        await this.scrollDown(Math.ceil(limit / 10));
-        const moreWorks = await this.extractWorksPage();
-        if (moreWorks.length > works.length) {
-          works.splice(0, works.length, ...moreWorks);
+        await sleep(2000);
+        try {
+          await this.waitForAnalysisData(8000);
+        } catch {
+          // ignore
         }
-      } catch (e) {
-        log('warn', 'scroll-fail', `滚动加载失败: ${(e as Error).message}`);
       }
+
+      const pageWorks = await this.extractAnalysisPage(page);
+      if (pageWorks.length > 0 && lastFirstTitle && pageWorks[0].title === lastFirstTitle) {
+        log('warn', 'page-same', `第 ${page} 页数据与上一页相同，可能翻页未生效，停止翻页`);
+        break;
+      }
+      if (pageWorks.length > 0) {
+        lastFirstTitle = pageWorks[0].title;
+      }
+
+      let pageCount = 0;
+      for (const work of pageWorks) {
+        if (seenIds.has(work.workId)) continue;
+        seenIds.add(work.workId);
+        allWorks.push(work);
+        pageCount++;
+        if (allWorks.length >= limit) break;
+      }
+
+      log('info', 'page-works', `第 ${page} 页提取到 ${pageCount} 条作品（DOM）`);
+
+      if (allWorks.length >= limit) break;
+      if (pageWorks.length === 0) break;
     }
 
-    const result = works.slice(0, limit);
-    log('info', 'done', `作品列表采集完成，共 ${result.length} 条`);
+    const result = allWorks.slice(0, limit);
+    log('info', 'done', `作品列表采集完成（DOM 回退），共 ${result.length} 条`);
     return result;
   }
 
@@ -344,116 +612,203 @@ export class XiaohongshuCollector extends BaseCollector {
     return false;
   }
 
-  private async waitForWorks(timeoutMs: number = 10000): Promise<boolean> {
+  private async waitForAnalysisData(timeoutMs: number = 15000): Promise<boolean> {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       try {
         const count = await this.safeEval<number>(`
-          var cards = document.querySelectorAll('[class*="note-card"], [class*="video-card"], [class*="works-card"], [class*="note-item"], [class*="item-card"]');
-          return cards.length;
-        `, 'check-works');
+          var txt = document.body.innerText || '';
+          var lines = txt.split('\\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
+          var count = 0;
+          for (var i = 0; i < lines.length; i++) {
+            if (lines[i].indexOf('发布于') === 0) count++;
+          }
+          return count;
+        `, 'check-analysis-data');
         if (count > 0) return true;
       } catch {
         // ignore
       }
-      await sleep(500);
+      await sleep(1000);
     }
     return false;
   }
 
-  private async probePage(): Promise<Record<string, unknown>> {
+  private async getTotalPages(): Promise<number> {
     try {
-      return await this.safeEval<Record<string, unknown>>(`
-        var allDivs = document.querySelectorAll('div');
-        var sampleClasses = [];
-        var classSet = {};
-        for (var i = 0; i < allDivs.length && sampleClasses.length < 50; i++) {
-          var cls = allDivs[i].className;
-          if (typeof cls === 'string' && cls.length > 5 && cls.length < 60) {
-            if (!classSet[cls]) {
-              classSet[cls] = true;
-              sampleClasses.push(cls);
-            }
+      return await this.safeEval<number>(`
+        var selectors = ['.d-pagination-page', '.pagination .page-item', '.pagination li', '.ant-pagination-item', 'li.page-number'];
+        var pages = null;
+        for (var s = 0; s < selectors.length; s++) {
+          pages = document.querySelectorAll(selectors[s]);
+          if (pages.length > 0) break;
+        }
+        if (!pages || pages.length === 0) return 1;
+
+        var maxPage = 1;
+        for (var i = 0; i < pages.length; i++) {
+          var txt = (pages[i].innerText || '').trim();
+          var n = parseInt(txt, 10);
+          if (!isNaN(n) && n > maxPage) {
+            maxPage = n;
           }
         }
-        var imgs = document.querySelectorAll('img');
-        var coverUrls = [];
-        for (var j = 0; j < imgs.length && coverUrls.length < 5; j++) {
-          if (imgs[j].src && imgs[j].src.indexOf('http') === 0) {
-            coverUrls.push(imgs[j].src.slice(0, 100));
-          }
-        }
-        var links = document.querySelectorAll('a');
-        var linkUrls = [];
-        for (var k = 0; k < links.length && linkUrls.length < 5; k++) {
-          if (links[k].href && links[k].href.indexOf('http') === 0) {
-            linkUrls.push(links[k].href.slice(0, 120));
-          }
-        }
-        var bodyText = document.body.innerText || '';
-        var lines = bodyText.split('\\n').filter(function(l) { return l.trim().length > 0; }).slice(0, 30);
-        var noteCards = document.querySelectorAll('[class*="note-card"], [class*="video-card"], [class*="works-card"], [class*="note-item"], [class*="item-card"]').length;
-        return {
-          bodyTextLen: bodyText.length,
-          allImgs: imgs.length,
-          allLinks: links.length,
-          allDivs: allDivs.length,
-          noteCards: noteCards,
-          sampleClasses: sampleClasses.slice(0, 30),
-          sampleImgs: coverUrls,
-          sampleLinks: linkUrls,
-          firstLines: lines
-        };
-      `, 'probe-page');
-    } catch (e) {
-      return { error: (e as Error).message };
+        return maxPage;
+      `, 'get-total-pages');
+    } catch {
+      return 1;
     }
   }
 
-  private async extractWorksPage(): Promise<Array<{
-    workId: string;
-    title: string;
-    coverUrl?: string;
-    publishTime: number;
-    detailUrl?: string;
-    duration?: number;
-    contentType: 'video' | 'article' | 'image';
-    views?: number;
-    likes?: number;
-    comments?: number;
-    favorites?: number;
-    shares?: number;
-  }>> {
+  private async goToNextPage(): Promise<boolean> {
+    try {
+      return await this.safeEval<boolean>(`
+        var nextSelectors = [
+          '.next', '.next-page', '.pagination-next', '.ant-pagination-next',
+          '.d-pagination-next', '.page-next', '[class*="pagination-next"]',
+          '.d-pagination .d-pagination-item-next', '.d-pagination-item-next'
+        ];
+        for (var s = 0; s < nextSelectors.length; s++) {
+          var btn = document.querySelector(nextSelectors[s]);
+          if (btn) {
+            var isDisabled = btn.classList.contains('disabled') || btn.classList.contains('is-disabled') || btn.getAttribute('disabled') !== null;
+            if (isDisabled) return false;
+            btn.scrollIntoView({ behavior: 'auto', block: 'center' });
+            try {
+              btn.click();
+              return true;
+            } catch (e) {
+              try {
+                var evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                btn.dispatchEvent(evt);
+                return true;
+              } catch (e2) {
+                return false;
+              }
+            }
+          }
+        }
+
+        var allBtns = document.querySelectorAll('button, a, li, div[class*="page"], span[class*="page"]');
+        for (var i = 0; i < allBtns.length; i++) {
+          var txt = (allBtns[i].innerText || '').trim();
+          if (txt === '下一页' || txt === '下一页' || txt === '>' || txt === '»' || txt === '→' || txt.indexOf('下一页') >= 0) {
+            var isDis = allBtns[i].classList.contains('disabled') || allBtns[i].classList.contains('is-disabled') || allBtns[i].getAttribute('disabled') !== null;
+            if (isDis) return false;
+            allBtns[i].scrollIntoView({ behavior: 'auto', block: 'center' });
+            try {
+              allBtns[i].click();
+              return true;
+            } catch (e) {
+              try {
+                var evt2 = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                allBtns[i].dispatchEvent(evt2);
+                return true;
+              } catch (e3) {
+                return false;
+              }
+            }
+          }
+        }
+        return false;
+      `, 'go-to-next-page');
+    } catch {
+      return false;
+    }
+  }
+
+  private async goToPage(page: number): Promise<boolean> {
+    try {
+      const result = await this.safeEval<boolean>(`
+        var selectors = ['.d-pagination-page', '.pagination .page-item', '.pagination li', '.ant-pagination-item', 'li.page-number', '.page-item', '.pagination-item'];
+        var pages = null;
+        for (var s = 0; s < selectors.length; s++) {
+          pages = document.querySelectorAll(selectors[s]);
+          if (pages.length > 0) break;
+        }
+        if (!pages || pages.length === 0) return false;
+
+        var target = null;
+        for (var i = 0; i < pages.length; i++) {
+          var txt = (pages[i].innerText || '').trim();
+          var num = parseInt(txt, 10);
+          if (!isNaN(num) && num === ${page}) {
+            target = pages[i];
+            break;
+          }
+        }
+        if (!target) return false;
+
+        var isDisabled = target.classList.contains('disabled') || target.classList.contains('is-disabled') || target.classList.contains('active') || target.getAttribute('disabled') !== null;
+        if (isDisabled) return false;
+
+        target.scrollIntoView({ behavior: 'auto', block: 'center' });
+
+        var clicked = false;
+        try {
+          target.click();
+          clicked = true;
+        } catch (e) {
+          clicked = false;
+        }
+
+        if (!clicked) {
+          try {
+            var evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+            target.dispatchEvent(evt);
+            clicked = true;
+          } catch (e2) {
+            clicked = false;
+          }
+        }
+
+        return clicked;
+      `, 'go-to-page-' + page);
+      return result;
+    } catch {
+      return false;
+    }
+  }
+
+  private async extractAnalysisPage(page: number): Promise<Array<any>> {
     try {
       const data = await this.safeEval<any[]>(`
         function parseNum(text) {
           if (!text) return 0;
           var t = text.trim();
           if (t.indexOf('万') >= 0 || t.indexOf('w') >= 0) {
-            var num = parseFloat(t.replace(/[万w]/g, ''));
-            return Math.round(num * 10000);
+            return Math.round(parseFloat(t.replace(/[万w]/g, '')) * 10000);
           }
           if (t.indexOf('千') >= 0 || t.indexOf('k') >= 0) {
-            var num2 = parseFloat(t.replace(/[千k]/g, ''));
-            return Math.round(num2 * 1000);
+            return Math.round(parseFloat(t.replace(/[千k]/g, '')) * 1000);
           }
           var n = parseInt(t.replace(/,/g, ''), 10);
           return isNaN(n) ? 0 : n;
         }
 
+        function parsePercent(text) {
+          if (!text) return 0;
+          var t = text.trim().replace('%', '');
+          var n = parseFloat(t);
+          return isNaN(n) ? 0 : n;
+        }
+
+        function parseDuration(text) {
+          if (!text) return 0;
+          var t = text.trim();
+          var m = t.match(/(\\d+)s/);
+          if (m) return parseInt(m[1], 10) || 0;
+          return 0;
+        }
+
         function parseTime(text) {
           if (!text) return Date.now();
-          var t = text.trim();
-          var m = t.match(/(\\d{4})[-/](\\d{1,2})[-/](\\d{1,2})[\\sT]+(\\d{1,2}):(\\d{1,2})/);
+          var m = text.match(/发布于(\\d{4})-(\\d{2})-(\\d{2})\\s*(\\d{1,2}):(\\d{2})/);
           if (m) {
             return new Date(
               parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10),
               parseInt(m[4], 10), parseInt(m[5], 10)
             ).getTime();
-          }
-          m = t.match(/(\\d{4})[-/](\\d{1,2})[-/](\\d{1,2})/);
-          if (m) {
-            return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10)).getTime();
           }
           return Date.now();
         }
@@ -474,123 +829,191 @@ export class XiaohongshuCollector extends BaseCollector {
           return title;
         }
 
-        var cards = document.querySelectorAll('.note-card');
-        var results = [];
-        var seen = {};
+        function extractNoteIdFromElement(el) {
+          if (!el) return '';
+          var href = el.getAttribute('href') || '';
+          var m = href.match(/explore\\/([a-z0-9]+)/i);
+          if (m) return m[1];
+          var dataId = el.getAttribute('data-note-id') || el.getAttribute('data-id') || el.getAttribute('note-id') || '';
+          if (dataId) return dataId;
+          var allLinks = el.querySelectorAll('a[href*="explore"], a[href*="discovery/item"]');
+          for (var i = 0; i < allLinks.length; i++) {
+            var h = allLinks[i].getAttribute('href') || '';
+            var m2 = h.match(/explore\\/([a-z0-9]+)/i);
+            if (m2) return m2[1];
+            var m3 = h.match(/note_id=([a-z0-9]+)/i);
+            if (m3) return m3[1];
+          }
+          return '';
+        }
 
-        for (var i = 0; i < cards.length; i++) {
-          var card = cards[i];
-          var text = card.innerText || '';
-          if (!text || text.trim().length < 5) continue;
+        var noteElements = document.querySelectorAll('[class*="note-item"], [class*="list-item"], [class*="card"], tr, [class*="row"]');
+        var works = [];
+        var pageNum = ${page};
 
-          var lines = text.split('\\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
-          if (lines.length < 3) continue;
+        for (var idx = 0; idx < noteElements.length; idx++) {
+          var el = noteElements[idx];
+          var txt = el.innerText || '';
+          if (txt.indexOf('发布于') < 0) continue;
+          
+          var lines = txt.split('\\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
+          if (lines.length < 6) continue;
 
+          var noteId = extractNoteIdFromElement(el);
           var title = '';
-          var publishTime = Date.now();
-          var views = 0;
-          var likes = 0;
-          var favorites = 0;
-          var comments = 0;
-          var shares = 0;
+          var publishTime = 0;
+          var nums = [];
 
-          var numIdx = 0;
-          var numbers = [];
-
-          for (var li = 0; li < lines.length; li++) {
-            var line = lines[li];
-
-            var dateMatch = line.match(/^\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}/);
-            if (dateMatch) {
-              publishTime = parseTime(line);
-              continue;
-            }
-
-            var pureNum = line.match(/^[\\d,]+$/);
-            if (pureNum && line.length < 10) {
-              numbers.push(line);
-              continue;
-            }
-
-            if (!title && line.length > 2 && line.length < 100) {
-              title = line;
+          for (var i = 0; i < lines.length; i++) {
+            if (lines[i].indexOf('发布于') === 0) {
+              publishTime = parseTime(lines[i]);
+              if (i > 0) title = dedupTitle(lines[i - 1]);
+              for (var j = i + 1; j < lines.length && nums.length < 12; j++) {
+                var line = lines[j];
+                if (line.length > 30) break;
+                if (/^[\\d.%s万wk,\\-]+$/.test(line) || line.indexOf('%') >= 0 || line.indexOf('s') >= 0) {
+                  nums.push(line);
+                } else {
+                  break;
+                }
+              }
+              break;
             }
           }
 
-          if (numbers.length >= 4) {
-            views = parseNum(numbers[0]);
-            likes = parseNum(numbers[1]);
-            favorites = parseNum(numbers[2]);
-            comments = parseNum(numbers[3]);
-            if (numbers.length >= 5) shares = parseNum(numbers[4]);
+          if (!title || title.length < 5 || nums.length < 6) continue;
+
+          var workId;
+          if (noteId) {
+            workId = 'xhs_' + noteId;
+          } else {
+            workId = 'xhs_' + Math.abs(title.split('').reduce(function(a, c) {
+              return ((a << 5) - a + c.charCodeAt(0)) | 0;
+            }, 0)).toString(36) + '_p' + pageNum + '_' + works.length;
           }
 
-          if (!title) continue;
-          title = dedupTitle(title);
+          var exposure = parseNum(nums[0] || '0');
+          var views = parseNum(nums[1] || '0');
+          var coverClickRate = parsePercent(nums[2] || '0');
+          var likes = parseNum(nums[3] || '0');
+          var comments = parseNum(nums[4] || '0');
+          var favorites = parseNum(nums[5] || '0');
+          var newFans = nums.length > 6 ? parseNum(nums[6] || '0') : 0;
+          var shares = nums.length > 7 ? parseNum(nums[7] || '0') : 0;
+          var avgDuration = nums.length > 8 ? parseDuration(nums[8] || '0') : 0;
+          var danmaku = nums.length > 9 ? parseNum(nums[9] || '0') : 0;
 
-          var imgEl = card.querySelector('img');
-          var coverUrl = imgEl ? imgEl.src : '';
+          var isVideo = avgDuration > 0;
 
-          var linkEl = card.querySelector('a');
-          var detailUrl = linkEl ? linkEl.href : '';
-
-          var workId = 'xhs_' + Math.abs(title.split('').reduce(function(a, c) {
-            return ((a << 5) - a + c.charCodeAt(0)) | 0;
-          }, 0)).toString(36);
-
-          if (seen[workId]) continue;
-          seen[workId] = true;
-
-          results.push({
+          works.push({
             workId: workId,
             title: title,
-            coverUrl: coverUrl,
+            coverUrl: '',
             publishTime: publishTime,
-            detailUrl: detailUrl,
-            duration: null,
-            contentType: 'image',
+            detailUrl: noteId ? 'https://www.xiaohongshu.com/explore/' + noteId : '',
+            duration: isVideo ? avgDuration : 0,
+            contentType: isVideo ? 'video' : 'image',
             views: views,
             likes: likes,
             comments: comments,
             favorites: favorites,
-            shares: shares
+            shares: shares,
+            impressions: exposure,
+            clickRate: coverClickRate,
+            newFans: newFans,
+            avgPlayDuration: avgDuration,
+            extra: {
+              danmaku: danmaku,
+              noteId: noteId || ''
+            }
           });
         }
 
-        return results;
-      `, 'extract-xhs-works');
+        if (works.length > 0) return works;
 
-      return data.map(w => ({
-        workId: w.workId,
-        title: w.title,
-        coverUrl: w.coverUrl,
-        publishTime: w.publishTime,
-        detailUrl: w.detailUrl,
-        duration: w.duration || undefined,
-        contentType: w.contentType as 'video' | 'article' | 'image',
-        views: w.views,
-        likes: w.likes,
-        comments: w.comments,
-        favorites: w.favorites,
-        shares: w.shares,
-      }));
+        var bodyText = document.body.innerText || '';
+        var bodyLines = bodyText.split('\\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
+        var bodyWorks = [];
+        var inDataSection = false;
+
+        for (var i = 0; i < bodyLines.length; i++) {
+          if (bodyLines[i] === '笔记基础信息') { inDataSection = true; continue; }
+          if (!inDataSection) continue;
+
+          var t = bodyLines[i];
+          if (t.length < 5 || t.length > 100) continue;
+          if (t === '详情数据') continue;
+          if (t.indexOf('发布于') === 0) continue;
+          if (t.match(/^[\\d.%s万wk,\\-]+$/)) continue;
+
+          if (i + 1 < bodyLines.length && bodyLines[i + 1].indexOf('发布于') === 0) {
+            var pubTime = parseTime(bodyLines[i + 1]);
+            var bodyNums = [];
+            var j = i + 2;
+            while (j < bodyLines.length && bodyNums.length < 12) {
+              var line = bodyLines[j];
+              if (line === '详情数据') break;
+              if (line.indexOf('发布于') === 0) break;
+              if (line.length > 30) break;
+              if (/^[\\d.%s万wk,\\-]+$/.test(line) || line.indexOf('%') >= 0 || line.indexOf('s') >= 0) {
+                bodyNums.push(line);
+                j++;
+              } else {
+                break;
+              }
+            }
+
+            if (bodyNums.length >= 6) {
+              t = dedupTitle(t);
+              var bodyWorkId = 'xhs_' + Math.abs(t.split('').reduce(function(a, c) {
+                return ((a << 5) - a + c.charCodeAt(0)) | 0;
+              }, 0)).toString(36) + '_p' + pageNum + '_' + bodyWorks.length;
+
+              var expo = parseNum(bodyNums[0] || '0');
+              var vws = parseNum(bodyNums[1] || '0');
+              var ctr = parsePercent(bodyNums[2] || '0');
+              var lks = parseNum(bodyNums[3] || '0');
+              var cmts = parseNum(bodyNums[4] || '0');
+              var favs = parseNum(bodyNums[5] || '0');
+              var nf = bodyNums.length > 6 ? parseNum(bodyNums[6] || '0') : 0;
+              var shs = bodyNums.length > 7 ? parseNum(bodyNums[7] || '0') : 0;
+              var avgDur = bodyNums.length > 8 ? parseDuration(bodyNums[8] || '0') : 0;
+              var dmk = bodyNums.length > 9 ? parseNum(bodyNums[9] || '0') : 0;
+
+              var isVid = avgDur > 0;
+
+              bodyWorks.push({
+                workId: bodyWorkId,
+                title: t,
+                coverUrl: '',
+                publishTime: pubTime,
+                detailUrl: '',
+                duration: isVid ? avgDur : 0,
+                contentType: isVid ? 'video' : 'image',
+                views: vws,
+                likes: lks,
+                comments: cmts,
+                favorites: favs,
+                shares: shs,
+                impressions: expo,
+                clickRate: ctr,
+                newFans: nf,
+                avgPlayDuration: avgDur,
+                extra: {
+                  danmaku: dmk
+                }
+              });
+            }
+            i = j - 1;
+          }
+        }
+        return bodyWorks;
+      `, 'extract-analysis-page-' + page);
+
+      return data;
     } catch (e) {
-      logger.error('[XiaohongshuCollector] 提取作品列表失败', { error: (e as Error).message });
+      logger.error('[XiaohongshuCollector] 提取内容分析页失败', { page, error: (e as Error).message });
       return [];
-    }
-  }
-
-  private async scrollDown(times: number): Promise<void> {
-    for (let i = 0; i < times; i++) {
-      try {
-        await this.eval(`
-          window.scrollBy(0, window.innerHeight * 0.8);
-          'ok';
-        `, 'scroll-down');
-      } catch {
-        // ignore
-      }
-      await sleep(1500);
     }
   }
 }

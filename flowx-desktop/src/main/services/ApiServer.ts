@@ -9,6 +9,7 @@ import { AccountService } from './AccountService';
 import { PLATFORMS } from './PlatformRegistry';
 import { getStore } from '../store/SecureStore';
 import { logger } from '../utils/logger';
+import { AnalyticsService } from './analytics/AnalyticsService';
 import type { PublishRequest, ContentType } from '../../types';
 
 export interface ApiServerConfig {
@@ -203,6 +204,19 @@ export class ApiServer {
       // GET /api/health - 健康检查
       if (pathname === '/api/health' && req.method === 'GET') {
         this.sendJson(res, 200, { status: 'ok', timestamp: Date.now() });
+        return;
+      }
+
+      // POST /api/analytics/collect - 触发数据采集
+      if (pathname === '/api/analytics/collect' && req.method === 'POST') {
+        await this.handleAnalyticsCollect(req, res);
+        return;
+      }
+
+      // GET /api/analytics/:taskId - 查询采集任务状态
+      const analyticsMatch = pathname.match(/^\/api\/analytics\/([^/]+)$/);
+      if (analyticsMatch && req.method === 'GET') {
+        await this.handleGetAnalyticsStatus(req, res, analyticsMatch[1]);
         return;
       }
 
@@ -684,6 +698,71 @@ export class ApiServer {
         }
       });
       req.on('error', reject);
+    });
+  }
+
+  /**
+   * POST /api/analytics/collect - 触发数据采集
+   * 请求体（JSON）：
+   *   - accountId: string    账号 ID（必填）
+   *   - type: string         采集类型：overview/works/all（默认 all）
+   */
+  private async handleAnalyticsCollect(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const body = await this.parseJsonBody(req);
+
+    if (!body.accountId || typeof body.accountId !== 'string') {
+      this.sendJson(res, 400, { code: 400, message: 'accountId 不能为空' });
+      return;
+    }
+
+    const account = AccountService.getAccount(body.accountId);
+    if (!account) {
+      this.sendJson(res, 404, { code: 404, message: '账号不存在' });
+      return;
+    }
+
+    const type = (body.type as 'overview' | 'works' | 'all') || 'all';
+
+    try {
+      const taskId = AnalyticsService.startCollect(body.accountId, type);
+      logger.info(`[ApiServer] 采集任务已创建: ${taskId}，账号: ${body.accountId}`);
+
+      this.sendJson(res, 200, {
+        code: 0,
+        message: '采集任务创建成功',
+        data: { taskId, accountId: body.accountId, type },
+      });
+    } catch (err) {
+      this.sendJson(res, 500, {
+        code: 500,
+        message: '创建采集任务失败',
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  /**
+   * GET /api/analytics/:taskId - 查询采集任务状态
+   */
+  private async handleGetAnalyticsStatus(
+    _req: IncomingMessage,
+    res: ServerResponse,
+    taskId: string,
+  ): Promise<void> {
+    const status = AnalyticsService.getTaskProgress(taskId);
+
+    if (!status) {
+      this.sendJson(res, 404, { code: 404, message: '任务不存在' });
+      return;
+    }
+
+    this.sendJson(res, 200, {
+      code: 0,
+      message: 'success',
+      data: status,
     });
   }
 

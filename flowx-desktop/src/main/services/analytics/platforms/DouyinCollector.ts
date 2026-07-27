@@ -219,9 +219,214 @@ export class DouyinCollector extends BaseCollector {
     }
     if (!this.win) throw new Error('窗口初始化失败');
 
-    log('info', 'goto', '跳转到作品管理页');
-    await this.goto(DOUYIN_CONTENT_MANAGE, 3000);
+    try {
+      log('info', 'network-listen', '开始监听作品管理 API');
+      await this.startNetworkCollect(/\/janus\/douyin\/creator\/pc\/work_list/);
 
+      log('info', 'goto', '跳转到作品管理页');
+      await this.goto(DOUYIN_CONTENT_MANAGE, 3000);
+      await sleep(5000);
+      
+      const firstPageData = await this.getLatestResponse();
+      if (!firstPageData) {
+        throw new Error('未获取到第一页数据');
+      }
+      log('info', 'first-page', '第一页 API 响应已捕获');
+
+      const allWorks: Array<any> = [];
+      const seenIds = new Set<string>();
+
+      const firstPageCount = this.parseAndAddWorks(firstPageData, allWorks, seenIds, log);
+      log('info', 'page-works', `第 1 页提取到 ${firstPageCount} 条作品（CDP 监听方式）`);
+
+      let hasMore = firstPageData?.has_more ?? false;
+      let page = 1;
+      const maxPages = 50;
+      let lastFirstAwemeId = '';
+      if (allWorks.length > 0 && allWorks[0].extra?.awemeId) {
+        lastFirstAwemeId = allWorks[0].extra.awemeId as string;
+      }
+
+      while (hasMore && allWorks.length < limit && page < maxPages) {
+        const beforeCount = this.getResponseCount();
+        
+        const scrolled = await this.scrollToBottom();
+        if (!scrolled) {
+          log('info', 'scroll-fail', '滚动到底部失败，停止加载');
+          break;
+        }
+
+        try {
+          const nextPageData = await this.waitForNewResponse(beforeCount, 15000);
+          
+          const pageWorks: Array<any> = [];
+          const pageSeen = new Set<string>();
+          const added = this.parseAndAddWorks(nextPageData, pageWorks, pageSeen, log);
+          
+          let currentFirstAwemeId = '';
+          if (pageWorks.length > 0 && pageWorks[0].extra?.awemeId) {
+            currentFirstAwemeId = pageWorks[0].extra.awemeId as string;
+          }
+          
+          if (added > 0 && lastFirstAwemeId && currentFirstAwemeId === lastFirstAwemeId) {
+            log('warn', 'page-same', '新数据与上一页相同，可能加载未生效，停止加载');
+            break;
+          }
+          if (added > 0) {
+            lastFirstAwemeId = currentFirstAwemeId;
+          }
+
+          this.parseAndAddWorks(nextPageData, allWorks, seenIds, log);
+          page++;
+          log('info', 'page-works', `第 ${page} 页提取到 ${added} 条作品（CDP 监听方式），累计 ${allWorks.length} 条`);
+          
+          hasMore = nextPageData?.has_more ?? false;
+          
+          if (added === 0) break;
+        } catch (e) {
+          log('warn', 'page-timeout', '等待新数据超时，停止加载');
+          break;
+        }
+
+        if (allWorks.length >= limit) break;
+        await sleep(500);
+      }
+
+      this.stopNetworkCollect();
+
+      if (allWorks.length > 0) {
+        const result = allWorks.slice(0, limit);
+        log('info', 'done', `作品列表采集完成，共 ${result.length} 条（CDP 监听方式）`);
+        return result;
+      }
+    } catch (e) {
+      log('warn', 'cdp-error', `CDP 监听方式失败: ${(e as Error).message}`);
+      try { this.stopNetworkCollect(); } catch {}
+    }
+
+    log('info', 'fallback', '回退到 DOM 解析方式');
+    return this.collectWorksFallback(limit, log);
+  }
+
+  private getResponseCount(): number {
+    return (this as any).networkCollector.responses.length;
+  }
+
+  private getLatestResponse(): any | null {
+    const responses = (this as any).networkCollector.responses;
+    if (responses.length === 0) return null;
+    return responses[responses.length - 1].data;
+  }
+
+  private async waitForNewResponse(beforeCount: number, timeoutMs: number): Promise<any> {
+    const log = this.makeLog('network');
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeoutMs) {
+      if ((this as any).networkCollector.responses.length > beforeCount) {
+        const responses = (this as any).networkCollector.responses;
+        const latest = responses[responses.length - 1];
+        log('info', 'new-response', `获取到新响应（第 ${responses.length} 个）`);
+        return latest.data;
+      }
+      await sleep(200);
+    }
+    
+    throw new Error(`等待新响应超时（${timeoutMs}ms）`);
+  }
+
+  private async scrollToBottom(): Promise<boolean> {
+    try {
+      await this.safeEval(`
+        window.scrollTo(0, document.body.scrollHeight);
+        return true;
+      `, 'scroll-to-bottom');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private parseAndAddWorks(resp: any, allWorks: Array<any>, seenIds: Set<string>, log: ReturnType<typeof this.makeLog>): number {
+    if (!resp) {
+      log('warn', 'parse-empty', '响应为空');
+      return 0;
+    }
+    if (resp.status_code !== 0) {
+      log('warn', 'parse-not-success', `响应不成功: status_code=${resp.status_code}`);
+      return 0;
+    }
+    
+    let items: any[] = [];
+    const possibleLists = ['items', 'aweme_list', 'list', 'works', 'photos', 'records'];
+    for (const key of possibleLists) {
+      if (Array.isArray(resp[key])) {
+        items = resp[key];
+        break;
+      }
+    }
+    if (items.length === 0 && resp.data) {
+      for (const key of possibleLists) {
+        if (Array.isArray(resp.data[key])) {
+          items = resp.data[key];
+          break;
+        }
+      }
+    }
+    
+    if (!Array.isArray(items) || items.length === 0) {
+      log('info', 'parse-empty-list', '列表为空');
+      return 0;
+    }
+
+    let count = 0;
+    for (const item of items) {
+      const awemeId = item.aweme_id || item.id || item.work_id || item.awemeId || '';
+      if (!awemeId) continue;
+      if (seenIds.has(awemeId)) continue;
+      seenIds.add(awemeId);
+
+      const title = item.desc || item.title || item.caption || '';
+      const coverUrl = item.cover || item.cover_url || item.thumb_url || (item.video && item.video.cover) || '';
+      const publishTime = item.create_time || item.publish_time || item.ctime || Date.now();
+      const detailUrl = awemeId ? `https://www.douyin.com/video/${awemeId}` : '';
+      const duration = item.duration || (item.video && item.video.duration) || 0;
+      
+      const statistics = item.statistics || item.stats || item.metrics || {};
+      const views = parseNumber(String(statistics.play_count || statistics.view_count || statistics.views || 0));
+      const likes = parseNumber(String(statistics.digg_count || statistics.like_count || statistics.likes || 0));
+      const comments = parseNumber(String(statistics.comment_count || statistics.comments || 0));
+      const favorites = parseNumber(String(statistics.collect_count || statistics.favorites || 0));
+      const shares = parseNumber(String(statistics.share_count || statistics.shares || 0));
+
+      let contentType: 'video' | 'article' | 'image' = 'video';
+      if (item.images && item.images.length > 0) contentType = 'image';
+      if (item.article_url || item.is_article) contentType = 'article';
+
+      allWorks.push({
+        workId: `dy_${awemeId}`,
+        title,
+        coverUrl,
+        publishTime: typeof publishTime === 'number' ? publishTime * (publishTime < 1e12 ? 1000 : 1) : Date.now(),
+        detailUrl,
+        duration: typeof duration === 'number' ? Math.floor(duration / 1000) : 0,
+        contentType,
+        views,
+        likes,
+        comments,
+        favorites,
+        shares,
+        extra: {
+          awemeId,
+        }
+      });
+      count++;
+    }
+
+    return count;
+  }
+
+  private async collectWorksFallback(limit: number, log: ReturnType<typeof this.makeLog>): Promise<Array<any>> {
     const cardsReady = await this.waitForWorksCards(30000);
     if (!cardsReady) {
       log('warn', 'cards-not-ready', '未检测到作品卡片，继续尝试采集');
@@ -308,6 +513,21 @@ export class DouyinCollector extends BaseCollector {
             return 0;
           }
 
+          function _extractWorkId(card) {
+            if (!card) return '';
+            var links = card.querySelectorAll('a[href*="/video/"], a[href*="/note/"], a[href*="/article/"]');
+            for (var i = 0; i < links.length; i++) {
+              var href = links[i].getAttribute('href') || '';
+              var m = href.match(/\\/video\\/([a-zA-Z0-9_-]+)/);
+              if (m) return m[1];
+              var m2 = href.match(/\\/note\\/([a-zA-Z0-9_-]+)/);
+              if (m2) return m2[1];
+            }
+            var dataId = card.getAttribute('data-aweme-id') || card.getAttribute('data-id') || card.getAttribute('aweme-id') || '';
+            if (dataId) return dataId;
+            return '';
+          }
+
           var results = [];
           var seen = {};
 
@@ -357,7 +577,7 @@ export class DouyinCollector extends BaseCollector {
               var views = 0, likes = 0, comments = 0, shares = 0;
               var coverUrl = '';
               var detailUrl = '';
-              var workId = '';
+              var workId = _extractWorkId(card);
               var isValidCard = false;
 
               var imgEl = card.querySelector('img');
@@ -454,6 +674,10 @@ export class DouyinCollector extends BaseCollector {
               if (/图文|图片|image|photo/i.test(cardText)) contentType = 'image';
               if (/文章|article/i.test(cardText)) contentType = 'article';
 
+              if (workId && !detailUrl) {
+                detailUrl = 'https://www.douyin.com/video/' + workId;
+              }
+
               results.push({
                 workId: workId,
                 title: title,
@@ -502,7 +726,7 @@ export class DouyinCollector extends BaseCollector {
     }
 
     const limited = works.slice(0, limit);
-    log('info', 'done', `作品列表采集完成，共 ${limited.length} 条`);
+    log('info', 'done', `作品列表采集完成（DOM 回退），共 ${limited.length} 条`);
     return limited;
   }
 }
