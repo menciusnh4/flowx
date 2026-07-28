@@ -150,6 +150,7 @@ flowx/
 | **小红书图文发布技术文档** | [`flowx-desktop/docs/小红书图文发布技术文档.md`](./flowx-desktop/docs/小红书图文发布技术文档.md) | 图文发布专用：标题/正文/封面上传，发布按钮 shadow DOM 穿透 |
 | **快手自动发布技术文档** | [`flowx-desktop/docs/快手自动发布技术文档.md`](./flowx-desktop/docs/快手自动发布技术文档.md) | Element UI / contenteditable / user-cnt__item 粉丝数解析 |
 | **快手图文发布技术文档** | [`flowx-desktop/docs/快手图文发布技术文档.md`](./flowx-desktop/docs/快手图文发布技术文档.md) | 图文发布专用：URL 切换 / 标签限制（最多4个） / 标题字数 |
+| **账号分析功能设计方案** | [`flowx-desktop/docs/账号分析功能设计方案.md`](./flowx-desktop/docs/账号分析功能设计方案.md) | 多平台作品数据采集 / 多条件筛选 / 真分页 / 平台账号ID筛选 / 微信视频号图文采集 |
 | **抖音发布稳定性修复方案** | [`flowx-desktop/docs/抖音发布稳定性修复方案.md`](./flowx-desktop/docs/抖音发布稳定性修复方案.md) | Electron 28→31 升级完整记录，含问题分析、测试用例、经验总结 |
 | **抖音图文发布技术文档** | [`flowx-desktop/docs/抖音图文发布技术文档.md`](./flowx-desktop/docs/抖音图文发布技术文档.md) | 图文发布专用：`default-tab=3` URL / `button-dhlUZE primary-button` 发布按钮 / ProseMirror 富文本 |
 | **抖音文章发布技术文档** | [`flowx-desktop/docs/抖音文章发布技术文档.md`](./flowx-desktop/docs/抖音文章发布技术文档.md) | 文章发布专用：`default-tab=5` URL / 标题 30 字 / 正文 8000 字 / React 受控组件 |

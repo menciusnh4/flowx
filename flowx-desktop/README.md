@@ -283,6 +283,7 @@ Vue 响应式更新 → 进度面板刷新
 
 - **项目总览 README**：[上层目录 README](../README.md)
 - **完整设计文档**：[../设计文档.md](../设计文档.md)（包含 PlatformDispatcher 工厂方法模式）
+- **账号分析功能设计方案**：[`docs/账号分析功能设计方案.md`](./docs/账号分析功能设计方案.md)（多平台作品采集 / 多条件筛选 / 真分页 / 平台账号ID筛选）
 - **用户自定义站点规则设计方案**：[`docs/用户自定义站点规则设计方案.md`](./docs/用户自定义站点规则设计方案.md)（可视化拾取 / 规则匹配 / 浏览器规则面板 / 顶部导航栏层级优化）
 - **第四阶段-高级特性设计方案**：[`docs/第四阶段-高级特性设计方案.html`](./docs/第四阶段-高级特性设计方案.html)
 - **浏览器与内容提取设计文档**：[`../content-extraction-optimization/content-extraction-optimization.html`](../content-extraction-optimization/content-extraction-optimization.html)
