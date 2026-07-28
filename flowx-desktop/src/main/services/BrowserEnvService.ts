@@ -3,11 +3,77 @@ import { logger } from '../utils/logger';
 import { session, net } from 'electron';
 import type { ProxyConfig, BrowserEnvironment, ProxyTestResult } from '../../types';
 
+const IMAGE_ANTI_HOTLINK_CONFIG: Record<string, { referer: string; origins: string[] }> = {
+  xiaohongshu: {
+    referer: 'https://www.xiaohongshu.com/',
+    origins: [
+      'xiaohongshu.com',
+      'xhscdn.com',
+      'sns-img-bd.xhscdn.com',
+      'sns-img-qc.xhscdn.com',
+      'sns-img-qx.xhscdn.com',
+      'sns-img.xhscdn.com',
+      'sns-video-bd.xhscdn.com',
+      'sns-video-qc.xhscdn.com',
+      'sns-video-qx.xhscdn.com',
+    ],
+  },
+  wechat_channels: {
+    referer: 'https://channels.weixin.qq.com/',
+    origins: [
+      'weixin.qq.com',
+      'wechat.qq.com',
+      'channels.weixin.qq.com',
+      'qq.com',
+    ],
+  },
+};
+
 const PROXIES_KEY = 'proxies';
 const ENVIRONMENTS_KEY = 'environments';
 const ACCOUNTS_KEY = 'accounts';
 
 export class BrowserEnvService {
+  private static antiHotlinkSetup = false;
+
+  static setupImageAntiHotlink(): void {
+    if (this.antiHotlinkSetup) return;
+    this.antiHotlinkSetup = true;
+
+    const defaultSession = session.defaultSession;
+
+    defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+      const { url, requestHeaders } = details;
+
+      try {
+        const urlObj = new URL(url);
+        const hostname = urlObj.hostname;
+
+        for (const platform of Object.keys(IMAGE_ANTI_HOTLINK_CONFIG)) {
+          const config = IMAGE_ANTI_HOTLINK_CONFIG[platform];
+          const matched = config.origins.some(origin =>
+            hostname === origin || hostname.endsWith('.' + origin)
+          );
+
+          if (matched) {
+            const headers = { ...requestHeaders };
+            headers['Referer'] = config.referer;
+            headers['Origin'] = config.referer.replace(/\/$/, '');
+
+            callback({ requestHeaders: headers });
+            return;
+          }
+        }
+      } catch {
+        // URL 解析失败，跳过
+      }
+
+      callback({ requestHeaders });
+    });
+
+    logger.info('[BrowserEnv] 图片防盗链配置已启用，支持平台:', Object.keys(IMAGE_ANTI_HOTLINK_CONFIG).join(', '));
+  }
+
   // ==================== 代理 IP 配置 CRUD ====================
 
   /**

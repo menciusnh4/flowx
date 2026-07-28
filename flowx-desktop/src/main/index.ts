@@ -6,8 +6,10 @@ import { setupLogger, logger } from './utils/logger';
 import { initStore } from './store/SecureStore';
 import { AccountService } from './services/AccountService';
 import { PublishEngine } from './services/PublishEngine';
+import { AnalyticsService } from './services/analytics/AnalyticsService';
 import { ApiServer } from './services/ApiServer';
 import { registerNewTabProtocol } from './services/NewTabPageService';
+import { BrowserEnvService } from './services/BrowserEnvService';
 
 // 注册自定义协议为标准方案（必须在 app ready 之前调用）
 protocol.registerSchemesAsPrivileged([
@@ -91,6 +93,9 @@ async function bootstrap() {
   await app.whenReady();
   isReady = true;
 
+  // 设置图片防盗链（必须在窗口创建前配置）
+  BrowserEnvService.setupImageAntiHotlink();
+
   // 设置应用名称和图标
   app.setName('FlowX');
   
@@ -111,6 +116,7 @@ async function bootstrap() {
   // 初始化业务服务
   AccountService.init();
   PublishEngine.init();
+  AnalyticsService.init();
 
   // 启动对外 API 服务（如果配置了启用）
   ApiServer.getInstance().startIfEnabled();

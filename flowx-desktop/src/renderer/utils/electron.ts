@@ -28,6 +28,13 @@ import type {
   CustomSiteRule,
   PickerFieldType,
   PickerResult,
+  WorkItem,
+  WorkMetrics,
+  AccountStatsSnapshot,
+  BenchmarkAccount,
+  AnalyticsConfig,
+  WorksQueryParams,
+  CollectProgress,
 } from '../../types';
 
 type StatusCb = (evt: unknown) => void;
@@ -542,6 +549,66 @@ export const electronApi = {
     },
     async getHistoryStats(): Promise<{ total: number; today: number; thisWeek: number }> {
       return invokeElectron('browserHistory.getHistoryStats', 'browserHistory:getHistoryStats');
+    },
+  },
+
+  // 账号分析
+  analytics: {
+    async getConfig(): Promise<AnalyticsConfig> {
+      return invokeElectron('analytics.getConfig', 'analytics:getConfig');
+    },
+    async updateConfig(updates: Partial<AnalyticsConfig>): Promise<AnalyticsConfig> {
+      return invokeElectron('analytics.updateConfig', 'analytics:updateConfig', updates);
+    },
+    async startCollect(accountId: string, type: 'overview' | 'works' | 'all'): Promise<{ taskId: string }> {
+      return invokeElectron('analytics.startCollect', 'analytics:startCollect', accountId, type);
+    },
+    async cancelCollect(taskId: string): Promise<boolean> {
+      return invokeElectron('analytics.cancelCollect', 'analytics:cancelCollect', taskId);
+    },
+    async getTaskProgress(taskId: string): Promise<CollectProgress | null> {
+      return invokeElectron('analytics.getTaskProgress', 'analytics:getTaskProgress', taskId);
+    },
+    async getQueueStatus(): Promise<{ queued: number; running: number; completed: number }> {
+      return invokeElectron('analytics.getQueueStatus', 'analytics:getQueueStatus');
+    },
+    async getWorks(params: WorksQueryParams): Promise<PagedResult<WorkItem & { metrics?: WorkMetrics }>> {
+      return invokeElectron('analytics.getWorks', 'analytics:getWorks', params);
+    },
+    async getWorkMetrics(workId: string): Promise<WorkMetrics | undefined> {
+      return invokeElectron('analytics.getWorkMetrics', 'analytics:getWorkMetrics', workId);
+    },
+    async getAccountStats(accountId: string, days?: number): Promise<AccountStatsSnapshot[]> {
+      return invokeElectron('analytics.getAccountStats', 'analytics:getAccountStats', accountId, days);
+    },
+    async getBenchmarks(ownerAccountId?: string): Promise<BenchmarkAccount[]> {
+      return invokeElectron('analytics.getBenchmarks', 'analytics:getBenchmarks', ownerAccountId);
+    },
+    async addBenchmark(benchmark: Omit<BenchmarkAccount, 'id' | 'createdAt'>): Promise<BenchmarkAccount> {
+      return invokeElectron('analytics.addBenchmark', 'analytics:addBenchmark', benchmark);
+    },
+    async updateBenchmark(id: string, updates: Partial<BenchmarkAccount>): Promise<BenchmarkAccount | null> {
+      return invokeElectron('analytics.updateBenchmark', 'analytics:updateBenchmark', id, updates);
+    },
+    async deleteBenchmark(id: string): Promise<boolean> {
+      return invokeElectron('analytics.deleteBenchmark', 'analytics:deleteBenchmark', id);
+    },
+    async getLastCollectInfo(accountId: string): Promise<{
+      lastCollectTime: number;
+      lastWorkId?: string;
+      lastWorkPublishTime?: number;
+    } | null> {
+      return invokeElectron('analytics.getLastCollectInfo', 'analytics:getLastCollectInfo', accountId);
+    },
+    async clearData(accountId: string): Promise<void> {
+      return invokeElectron('analytics.clearData', 'analytics:clearData', accountId);
+    },
+    async openWorkInWindow(accountId: string, workUrl: string, title?: string): Promise<{ success: boolean }> {
+      return invokeElectron('analytics.openWorkInWindow', 'analytics:openWorkInWindow', accountId, workUrl, title);
+    },
+    onProgress(cb: (p: CollectProgress) => void): () => void {
+      const e = getElectronOrThrow() as { analytics?: { onProgress: (cb: never) => () => void } };
+      return e.analytics?.onProgress?.(cb as never) ?? (() => { /* noop */ });
     },
   },
 };

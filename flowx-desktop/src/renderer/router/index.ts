@@ -7,6 +7,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/dashboard' },
   { path: '/dashboard', name: 'dashboard', component: () => import('@/pages/Dashboard.vue'), meta: { title: '仪表盘' } },
   { path: '/accounts', name: 'accounts', component: () => import('@/pages/AccountPanel.vue'), meta: { title: '账号管理' } },
+  { path: '/analytics', name: 'analytics', component: () => import('@/pages/AnalyticsPanel.vue'), meta: { title: '账号分析' } },
   { path: '/publish', name: 'publish', component: () => import('@/pages/Publish.vue'), meta: { title: '一键发布' } },
   { path: '/drafts', name: 'drafts', component: () => import('@/pages/DraftBox.vue'), meta: { title: '草稿箱' } },
   { path: '/browser', name: 'browser', component: () => import('@/pages/Browser.vue'), meta: { title: '浏览器' } },
