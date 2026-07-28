@@ -18,15 +18,18 @@
         </header>
 
         <article class="data-list__row" v-for="env in pagedResult.items" :key="env.id">
-          <div class="cell-name">{{ env.name }}</div>
-          <div class="cell-mono" :title="env.userAgent">{{ env.userAgent }}</div>
+          <div class="cell-name" :title="env.name">{{ env.name }}</div>
+          <div class="cell-ua" :title="env.userAgent">
+            <span class="cell-ua__summary">{{ uaSummary(env.userAgent) }}</span>
+            <span class="cell-ua__raw">{{ env.userAgent }}</span>
+          </div>
           <div>
             <el-tag v-if="env.proxyId" type="success" size="small">
               {{ getProxyLabel(env.proxyId) }}
             </el-tag>
             <span v-else style="color:#c0c4cc; font-size:12px">未绑定代理（使用本机直连）</span>
           </div>
-          <div>{{ formatTime(env.createdAt) }}</div>
+          <div class="cell-time">{{ formatTime(env.createdAt) }}</div>
           <div class="data-list__actions">
             <button class="icon-btn primary" type="button" title="编辑" @click="openEditDialog(asEnv(env))">
               <el-icon><Edit /></el-icon>
@@ -240,6 +243,37 @@ async function handleDelete(id: string) {
 
 function asEnv(row: any): BrowserEnvironment {
   return row as BrowserEnvironment;
+}
+
+/** 解析 User-Agent 为「浏览器·系统」可读摘要，列表展示更直观 */
+function uaSummary(ua: string): string {
+  if (!ua) return '未知浏览器';
+  // 系统
+  let os = '未知系统';
+  const osM = ua.match(/(Windows NT ([\d.]+))|Mac OS X ([\d_]+)|Android ([\d.]+)|iPhone OS ([\d_]+)|(?:^|\s)Linux/i);
+  if (osM) {
+    if (osM[2]) {
+      os = osM[2] === '10.0' ? 'Windows 10/11' : `Windows ${osM[2]}`;
+    } else if (osM[3]) {
+      const p = osM[3].split('_');
+      os = p[0] === '10' ? `macOS 10.${p[1] || ''}`.replace(/\.$/, '') : `macOS ${p[0]}`;
+    } else if (osM[4]) {
+      os = `Android ${osM[4]}`;
+    } else if (osM[5]) {
+      os = `iOS ${osM[5].replace(/_/g, '.')}`;
+    } else if (/linux/i.test(osM[0])) {
+      os = 'Linux';
+    }
+  }
+  // 浏览器（注意顺序：Edg 出现在 Chrome 之后，需先于 Chrome 判定）
+  let browser = '未知浏览器';
+  let m: RegExpMatchArray | null;
+  if ((m = ua.match(/Edg\/([\d.]+)/i))) browser = `Edge ${m[1]}`;
+  else if ((m = ua.match(/(?:OPR|Opera)\/([\d.]+)/i))) browser = `Opera ${m[1]}`;
+  else if ((m = ua.match(/Firefox\/([\d.]+)/i))) browser = `Firefox ${m[1]}`;
+  else if ((m = ua.match(/Chrome\/([\d.]+)/i))) browser = `Chrome ${m[1]}`;
+  else if ((m = ua.match(/Version\/([\d.]+)/i)) && /Safari/i.test(ua)) browser = `Safari ${m[1]}`;
+  return `${browser} · ${os}`;
 }
 
 function formatTime(ts: number): string {

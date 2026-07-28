@@ -148,7 +148,7 @@ function onPagerChange(page: number, size: number) {
           <div class="rule-name">
             <el-icon v-if="rule.enabled" color="#67c23a"><CircleCheck /></el-icon>
             <el-icon v-else color="#c0c4cc"><Close /></el-icon>
-            <span>{{ rule.name }}</span>
+            <span class="cell-name" :title="rule.name">{{ rule.name }}</span>
           </div>
           <div>
             <el-tag size="small" :type="rule.matchType === 'domain' ? 'info' : 'warning'">
@@ -160,7 +160,7 @@ function onPagerChange(page: number, size: number) {
             <el-tag size="small" effect="plain">{{ getTypeTags(rule.contentTypes) }}</el-tag>
           </div>
           <div>{{ rule.useCount || 0 }}</div>
-          <div>{{ formatTime(rule.lastUsedAt) }}</div>
+          <div class="cell-time">{{ formatTime(rule.lastUsedAt) }}</div>
           <div class="data-list__actions">
             <button class="icon-btn primary" type="button" title="编辑" @click="openEdit(rule)">
               <el-icon><Edit /></el-icon>

@@ -823,6 +823,9 @@ async function refresh() {
 // 用已保存的登录态打开平台创作中心（M3：内嵌主窗口，替代弹窗）
 async function openCreator(row: AccountInfo) {
   openingId.value = row.id;
+  // 进入创作中心前清空头像失败兜底，让列表头像自动重试加载（抖音等 CDN 偶发防盗链，
+  // 配合 index.html 的 no-referrer 可稳定加载，无需回到列表再手动刷新）
+  Object.keys(avatarFail).forEach((k) => { delete avatarFail[k]; });
   try {
     // 1) 在全局任务选项卡内打开/激活该账号的创作中心 tab（渲染端）
     workspaceStore.openAccountTab(row.id, {

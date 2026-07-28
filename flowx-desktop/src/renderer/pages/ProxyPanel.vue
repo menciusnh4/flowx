@@ -28,7 +28,7 @@
             </el-tag>
           </div>
           <div class="cell-mono">{{ p.host }}</div>
-          <div>{{ p.port }}</div>
+          <div class="cell-port">{{ p.port }}</div>
           <div>{{ p.username || '—' }}</div>
           <div class="status-cell">
             <template v-if="testingIds.has(p.id)">
@@ -61,7 +61,7 @@
               <el-tag type="info" size="small" effect="plain">未测试</el-tag>
             </template>
           </div>
-          <div>{{ formatTime(p.createdAt) }}</div>
+          <div class="cell-time">{{ formatTime(p.createdAt) }}</div>
           <div class="data-list__actions">
             <button class="icon-btn success" type="button" title="测试" :disabled="testingIds.has(p.id)" @click="handleTest(p.id)">
               <el-icon :class="{ spin: testingIds.has(p.id) }"><Loading /></el-icon>
