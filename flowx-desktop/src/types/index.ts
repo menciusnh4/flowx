@@ -690,6 +690,8 @@ export interface AccountStatsSnapshot {
   totalInteractions?: number;
   /** 当日发布作品数 */
   worksPublished?: number;
+  /** 账号作品总数 */
+  worksCount?: number;
   /** 当日平均完播率 */
   avgCompletionRate?: number;
   /** 当日平均互动率 */

@@ -130,7 +130,7 @@ class AnalyticsServiceImpl {
             fansCount: overview.followers,
             followCount: overview.following,
             totalLikeCount: overview.likes,
-            worksPublished: overview.worksCount,
+            worksCount: overview.worksCount,
             collectedAt: Date.now(),
           };
           AnalyticsStore.saveAccountStats(snapshot);
@@ -144,7 +144,16 @@ class AnalyticsServiceImpl {
           });
 
           const config = AnalyticsStore.getConfig();
-          const works = await collector.collectWorksList(config.workCollectLimit);
+          const lastInfo = AnalyticsStore.getLastCollectInfo(accountId);
+          const incremental = lastInfo && (lastInfo.lastWorkId || lastInfo.lastWorkPublishTime)
+            ? { lastWorkId: lastInfo.lastWorkId, lastWorkPublishTime: lastInfo.lastWorkPublishTime }
+            : undefined;
+          
+          if (incremental) {
+            log('增量采集模式', { lastWorkId: incremental.lastWorkId, lastWorkPublishTime: incremental.lastWorkPublishTime });
+          }
+
+          const works = await collector.collectWorksList(config.workCollectLimit, incremental);
 
           const workItems = works.map((w, idx) => {
             const progress = 40 + Math.round((idx + 1) / works.length * 50);
@@ -199,7 +208,24 @@ class AnalyticsServiceImpl {
             });
           }
 
-          log('作品列表采集完成', { count: worksCollected });
+          const totalWorksCount = AnalyticsStore.getWorksCount(accountId);
+          const today = new Date().toISOString().slice(0, 10);
+          const latestStats = AnalyticsStore.getLatestAccountStats(accountId);
+          if (latestStats) {
+            latestStats.worksCount = totalWorksCount;
+            AnalyticsStore.saveAccountStats(latestStats);
+          } else {
+            AnalyticsStore.saveAccountStats({
+              id: `stats_${Date.now()}`,
+              accountId,
+              date: today,
+              fansCount: 0,
+              worksCount: totalWorksCount,
+              collectedAt: Date.now(),
+            });
+          }
+
+          log('作品列表采集完成', { count: worksCollected, totalWorksCount });
         }
 
         updateProgress({

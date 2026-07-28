@@ -262,7 +262,10 @@ export class XiaohongshuCollector extends BaseCollector {
     };
   }
 
-  async collectWorksList(limit: number = 50): Promise<Array<{
+  async collectWorksList(limit: number = 50, incremental?: {
+    lastWorkId?: string;
+    lastWorkPublishTime?: number;
+  }): Promise<Array<{
     workId: string;
     title: string;
     coverUrl?: string;
@@ -301,9 +304,12 @@ export class XiaohongshuCollector extends BaseCollector {
 
       const allWorks: Array<any> = [];
       const seenIds = new Set<string>();
+      let hitIncrementalStop = false;
 
-      const firstPageCount = this.parseAndAddWorks(firstPageData, allWorks, seenIds, log);
-      log('info', 'page-works', `第 1 页提取到 ${firstPageCount} 条作品（CDP 监听方式）`);
+      const firstPageResult = this.parseAndAddWorks(firstPageData, allWorks, seenIds, log, incremental);
+      const firstPageCount = firstPageResult.added;
+      hitIncrementalStop = firstPageResult.hitStop;
+      log('info', 'page-works', `第 1 页提取到 ${firstPageCount} 条作品（CDP 监听方式）${hitIncrementalStop ? '，增量停止' : ''}`);
 
       let page = 1;
       const maxPages = 50;
@@ -312,7 +318,7 @@ export class XiaohongshuCollector extends BaseCollector {
         lastFirstNoteId = allWorks[0].extra.noteId as string;
       }
 
-      while (allWorks.length < limit && page < maxPages) {
+      while (allWorks.length < limit && page < maxPages && !hitIncrementalStop) {
         const nextPage = page + 1;
         const beforeCount = this.getResponseCount();
         
@@ -327,7 +333,8 @@ export class XiaohongshuCollector extends BaseCollector {
           
           const pageWorks: Array<any> = [];
           const pageSeen = new Set<string>();
-          const added = this.parseAndAddWorks(nextPageData, pageWorks, pageSeen, log);
+          const pageResult = this.parseAndAddWorks(nextPageData, pageWorks, pageSeen, log);
+          const added = pageResult.added;
           
           let currentFirstNoteId = '';
           if (pageWorks.length > 0 && pageWorks[0].extra?.noteId) {
@@ -342,11 +349,13 @@ export class XiaohongshuCollector extends BaseCollector {
             lastFirstNoteId = currentFirstNoteId;
           }
 
-          this.parseAndAddWorks(nextPageData, allWorks, seenIds, log);
+          const mainResult = this.parseAndAddWorks(nextPageData, allWorks, seenIds, log, incremental);
+          hitIncrementalStop = mainResult.hitStop;
           page++;
-          log('info', 'page-works', `第 ${page} 页提取到 ${added} 条作品（CDP 监听方式）`);
+          log('info', 'page-works', `第 ${page} 页提取到 ${mainResult.added} 条作品（CDP 监听方式），累计 ${allWorks.length} 条${hitIncrementalStop ? '，增量停止' : ''}`);
           
-          if (added === 0) break;
+          if (mainResult.added === 0 && !hitIncrementalStop) break;
+          if (hitIncrementalStop) break;
         } catch (e) {
           log('warn', 'page-timeout', `第 ${nextPage} 页等待超时，停止翻页`);
           break;
@@ -369,7 +378,7 @@ export class XiaohongshuCollector extends BaseCollector {
     }
 
     log('info', 'fallback', '回退到 DOM 解析方式');
-    return this.collectWorksFallback(limit, log);
+    return this.collectWorksFallback(limit, log, incremental);
   }
 
   private getResponseCount(): number {
@@ -398,18 +407,24 @@ export class XiaohongshuCollector extends BaseCollector {
     throw new Error(`等待新响应超时（${timeoutMs}ms）`);
   }
 
-  private parseAndAddWorks(resp: any, allWorks: Array<any>, seenIds: Set<string>, log: ReturnType<typeof this.makeLog>): number {
+  private parseAndAddWorks(
+    resp: any,
+    allWorks: Array<any>,
+    seenIds: Set<string>,
+    log: ReturnType<typeof this.makeLog>,
+    incremental?: { lastWorkId?: string; lastWorkPublishTime?: number },
+  ): { added: number; hitStop: boolean } {
     if (!resp) {
       log('warn', 'parse-empty', '响应为空');
-      return 0;
+      return { added: 0, hitStop: false };
     }
     if (!resp.success) {
       log('warn', 'parse-not-success', `响应不成功: code=${resp.code}, msg=${resp.msg || resp.message}`);
-      return 0;
+      return { added: 0, hitStop: false };
     }
     if (!resp.data) {
       log('warn', 'parse-no-data', '响应中没有 data 字段');
-      return 0;
+      return { added: 0, hitStop: false };
     }
 
     const items = resp.data.notes || resp.data.note_infos || resp.data.list || resp.data.items || [];
@@ -417,19 +432,37 @@ export class XiaohongshuCollector extends BaseCollector {
       log('warn', 'parse-empty-items', `data 中没有找到列表数据，data keys: ${Object.keys(resp.data).join(', ')}`);
     }
     let added = 0;
+    let hitStop = false;
 
     for (const item of items) {
       const noteId = item.id || item.note_id || item.noteId || '';
       if (!noteId) continue;
-      if (seenIds.has(noteId)) continue;
-      seenIds.add(noteId);
+
+      const workId = `xhs_${noteId}`;
+
+      if (incremental?.lastWorkId && workId === incremental.lastWorkId) {
+        log('info', 'incremental-stop', `遇到已采集的最后作品ID: ${workId}，增量停止`);
+        hitStop = true;
+        break;
+      }
+
+      const publishTimeRaw = item.post_time || item.publish_time || item.create_time || item.ctime || Date.now();
+      const publishTime = typeof publishTimeRaw === 'number' ? publishTimeRaw * (publishTimeRaw < 1e12 ? 1000 : 1) : Date.now();
+
+      if (incremental?.lastWorkPublishTime && publishTime <= incremental.lastWorkPublishTime) {
+        log('info', 'incremental-stop', `遇到已采集的发布时间: ${new Date(publishTime).toISOString()}，增量停止`);
+        hitStop = true;
+        break;
+      }
+
+      if (seenIds.has(workId)) continue;
+      seenIds.add(workId);
 
       const title = item.title || item.note_title || '';
       let coverUrl = item.cover || item.cover_url || item.thumb_url || '';
       if (coverUrl && coverUrl.startsWith('http://')) {
         coverUrl = coverUrl.replace('http://', 'https://');
       }
-      const publishTime = item.post_time || item.publish_time || item.create_time || item.ctime || Date.now();
       const detailUrl = noteId ? `https://www.xiaohongshu.com/explore/${noteId}` : '';
       
       const views = parseZhNumber(item.read_count || item.play_count || item.view_count || item.views || item.view || 0);
@@ -447,10 +480,10 @@ export class XiaohongshuCollector extends BaseCollector {
       const duration = isVideo ? (item.duration || item.video_duration || 0) : 0;
 
       allWorks.push({
-        workId: `xhs_${noteId}`,
+        workId,
         title,
         coverUrl,
-        publishTime: typeof publishTime === 'number' ? publishTime * (publishTime < 1e12 ? 1000 : 1) : Date.now(),
+        publishTime,
         detailUrl,
         duration,
         contentType: contentType as any,
@@ -470,7 +503,7 @@ export class XiaohongshuCollector extends BaseCollector {
       added++;
     }
 
-    return added;
+    return { added, hitStop };
   }
 
   private async clickNextPage(): Promise<boolean> {
@@ -530,7 +563,11 @@ export class XiaohongshuCollector extends BaseCollector {
     }
   }
 
-  private async collectWorksFallback(limit: number, log: ReturnType<typeof this.makeLog>): Promise<Array<any>> {
+  private async collectWorksFallback(
+    limit: number,
+    log: ReturnType<typeof this.makeLog>,
+    incremental?: { lastWorkId?: string; lastWorkPublishTime?: number },
+  ): Promise<Array<any>> {
     const analysisUrl = 'https://creator.xiaohongshu.com/statistics/data-analysis?source=official';
     log('info', 'goto-fallback', '跳转到内容分析页（DOM 回退）');
     await this.goto(analysisUrl, 3000);
@@ -577,7 +614,18 @@ export class XiaohongshuCollector extends BaseCollector {
       }
 
       let pageCount = 0;
+      let hitIncrementalStop = false;
       for (const work of pageWorks) {
+        if (incremental?.lastWorkId && work.workId === incremental.lastWorkId) {
+          log('info', 'incremental-stop', `[DOM回退] 遇到已采集的最后作品ID: ${work.workId}，增量停止`);
+          hitIncrementalStop = true;
+          break;
+        }
+        if (incremental?.lastWorkPublishTime && work.publishTime && work.publishTime <= incremental.lastWorkPublishTime) {
+          log('info', 'incremental-stop', `[DOM回退] 遇到已采集的发布时间: ${new Date(work.publishTime).toISOString()}，增量停止`);
+          hitIncrementalStop = true;
+          break;
+        }
         if (seenIds.has(work.workId)) continue;
         seenIds.add(work.workId);
         allWorks.push(work);
@@ -585,8 +633,9 @@ export class XiaohongshuCollector extends BaseCollector {
         if (allWorks.length >= limit) break;
       }
 
-      log('info', 'page-works', `第 ${page} 页提取到 ${pageCount} 条作品（DOM）`);
+      log('info', 'page-works', `第 ${page} 页提取到 ${pageCount} 条作品（DOM）${hitIncrementalStop ? '，增量停止' : ''}`);
 
+      if (hitIncrementalStop) break;
       if (allWorks.length >= limit) break;
       if (pageWorks.length === 0) break;
     }

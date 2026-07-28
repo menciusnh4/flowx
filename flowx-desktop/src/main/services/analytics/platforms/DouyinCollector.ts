@@ -198,7 +198,10 @@ export class DouyinCollector extends BaseCollector {
     return data;
   }
 
-  async collectWorksList(limit: number = 50): Promise<Array<{
+  async collectWorksList(limit: number = 50, incremental?: {
+    lastWorkId?: string;
+    lastWorkPublishTime?: number;
+  }): Promise<Array<{
     workId: string;
     title: string;
     coverUrl?: string;
@@ -235,9 +238,12 @@ export class DouyinCollector extends BaseCollector {
 
       const allWorks: Array<any> = [];
       const seenIds = new Set<string>();
+      let hitIncrementalStop = false;
 
-      const firstPageCount = this.parseAndAddWorks(firstPageData, allWorks, seenIds, log);
-      log('info', 'page-works', `第 1 页提取到 ${firstPageCount} 条作品（CDP 监听方式）`);
+      const firstPageResult = this.parseAndAddWorks(firstPageData, allWorks, seenIds, log, incremental);
+      const firstPageCount = firstPageResult.added;
+      hitIncrementalStop = firstPageResult.hitStop;
+      log('info', 'page-works', `第 1 页提取到 ${firstPageCount} 条作品（CDP 监听方式）${hitIncrementalStop ? '，增量停止' : ''}`);
 
       let hasMore = firstPageData?.has_more ?? false;
       let page = 1;
@@ -247,7 +253,7 @@ export class DouyinCollector extends BaseCollector {
         lastFirstAwemeId = allWorks[0].extra.awemeId as string;
       }
 
-      while (hasMore && allWorks.length < limit && page < maxPages) {
+      while (hasMore && allWorks.length < limit && page < maxPages && !hitIncrementalStop) {
         const beforeCount = this.getResponseCount();
         
         const scrolled = await this.scrollToBottom();
@@ -261,7 +267,8 @@ export class DouyinCollector extends BaseCollector {
           
           const pageWorks: Array<any> = [];
           const pageSeen = new Set<string>();
-          const added = this.parseAndAddWorks(nextPageData, pageWorks, pageSeen, log);
+          const pageResult = this.parseAndAddWorks(nextPageData, pageWorks, pageSeen, log);
+          const added = pageResult.added;
           
           let currentFirstAwemeId = '';
           if (pageWorks.length > 0 && pageWorks[0].extra?.awemeId) {
@@ -276,13 +283,15 @@ export class DouyinCollector extends BaseCollector {
             lastFirstAwemeId = currentFirstAwemeId;
           }
 
-          this.parseAndAddWorks(nextPageData, allWorks, seenIds, log);
+          const mainResult = this.parseAndAddWorks(nextPageData, allWorks, seenIds, log, incremental);
+          hitIncrementalStop = mainResult.hitStop;
           page++;
-          log('info', 'page-works', `第 ${page} 页提取到 ${added} 条作品（CDP 监听方式），累计 ${allWorks.length} 条`);
+          log('info', 'page-works', `第 ${page} 页提取到 ${mainResult.added} 条作品（CDP 监听方式），累计 ${allWorks.length} 条${hitIncrementalStop ? '，增量停止' : ''}`);
           
           hasMore = nextPageData?.has_more ?? false;
           
-          if (added === 0) break;
+          if (mainResult.added === 0 && !hitIncrementalStop) break;
+          if (hitIncrementalStop) break;
         } catch (e) {
           log('warn', 'page-timeout', '等待新数据超时，停止加载');
           break;
@@ -305,7 +314,7 @@ export class DouyinCollector extends BaseCollector {
     }
 
     log('info', 'fallback', '回退到 DOM 解析方式');
-    return this.collectWorksFallback(limit, log);
+    return this.collectWorksFallback(limit, log, incremental);
   }
 
   private getResponseCount(): number {
@@ -347,14 +356,20 @@ export class DouyinCollector extends BaseCollector {
     }
   }
 
-  private parseAndAddWorks(resp: any, allWorks: Array<any>, seenIds: Set<string>, log: ReturnType<typeof this.makeLog>): number {
+  private parseAndAddWorks(
+    resp: any,
+    allWorks: Array<any>,
+    seenIds: Set<string>,
+    log: ReturnType<typeof this.makeLog>,
+    incremental?: { lastWorkId?: string; lastWorkPublishTime?: number },
+  ): { added: number; hitStop: boolean } {
     if (!resp) {
       log('warn', 'parse-empty', '响应为空');
-      return 0;
+      return { added: 0, hitStop: false };
     }
     if (resp.status_code !== 0) {
       log('warn', 'parse-not-success', `响应不成功: status_code=${resp.status_code}`);
-      return 0;
+      return { added: 0, hitStop: false };
     }
     
     let items: any[] = [];
@@ -376,19 +391,37 @@ export class DouyinCollector extends BaseCollector {
     
     if (!Array.isArray(items) || items.length === 0) {
       log('info', 'parse-empty-list', '列表为空');
-      return 0;
+      return { added: 0, hitStop: false };
     }
 
     let count = 0;
+    let hitStop = false;
     for (const item of items) {
       const awemeId = item.aweme_id || item.id || item.work_id || item.awemeId || '';
       if (!awemeId) continue;
-      if (seenIds.has(awemeId)) continue;
-      seenIds.add(awemeId);
+
+      const workId = `dy_${awemeId}`;
+
+      if (incremental?.lastWorkId && workId === incremental.lastWorkId) {
+        log('info', 'incremental-stop', `遇到已采集的最后作品ID: ${workId}，增量停止`);
+        hitStop = true;
+        break;
+      }
+
+      const publishTimeRaw = item.create_time || item.publish_time || item.ctime || Date.now();
+      const publishTime = typeof publishTimeRaw === 'number' ? publishTimeRaw * (publishTimeRaw < 1e12 ? 1000 : 1) : Date.now();
+
+      if (incremental?.lastWorkPublishTime && publishTime <= incremental.lastWorkPublishTime) {
+        log('info', 'incremental-stop', `遇到已采集的发布时间: ${new Date(publishTime).toISOString()}，增量停止`);
+        hitStop = true;
+        break;
+      }
+
+      if (seenIds.has(workId)) continue;
+      seenIds.add(workId);
 
       const title = item.desc || item.title || item.caption || '';
       const coverUrl = item.cover || item.cover_url || item.thumb_url || (item.video && item.video.cover) || '';
-      const publishTime = item.create_time || item.publish_time || item.ctime || Date.now();
       const detailUrl = awemeId ? `https://www.douyin.com/video/${awemeId}` : '';
       const duration = item.duration || (item.video && item.video.duration) || 0;
       
@@ -404,10 +437,10 @@ export class DouyinCollector extends BaseCollector {
       if (item.article_url || item.is_article) contentType = 'article';
 
       allWorks.push({
-        workId: `dy_${awemeId}`,
+        workId,
         title,
         coverUrl,
-        publishTime: typeof publishTime === 'number' ? publishTime * (publishTime < 1e12 ? 1000 : 1) : Date.now(),
+        publishTime,
         detailUrl,
         duration: typeof duration === 'number' ? Math.floor(duration / 1000) : 0,
         contentType,
@@ -423,10 +456,14 @@ export class DouyinCollector extends BaseCollector {
       count++;
     }
 
-    return count;
+    return { added: count, hitStop };
   }
 
-  private async collectWorksFallback(limit: number, log: ReturnType<typeof this.makeLog>): Promise<Array<any>> {
+  private async collectWorksFallback(
+    limit: number,
+    log: ReturnType<typeof this.makeLog>,
+    incremental?: { lastWorkId?: string; lastWorkPublishTime?: number },
+  ): Promise<Array<any>> {
     const cardsReady = await this.waitForWorksCards(30000);
     if (!cardsReady) {
       log('warn', 'cards-not-ready', '未检测到作品卡片，继续尝试采集');
@@ -701,12 +738,25 @@ export class DouyinCollector extends BaseCollector {
         break;
       }
 
+      let hitIncrementalStop = false;
       for (const w of pageWorks) {
+        if (incremental?.lastWorkId && w.workId === incremental.lastWorkId) {
+          log('info', 'incremental-stop', `[DOM回退] 遇到已采集的最后作品ID: ${w.workId}，增量停止`);
+          hitIncrementalStop = true;
+          break;
+        }
+        if (incremental?.lastWorkPublishTime && w.publishTime && w.publishTime <= incremental.lastWorkPublishTime) {
+          log('info', 'incremental-stop', `[DOM回退] 遇到已采集的发布时间: ${new Date(w.publishTime).toISOString()}，增量停止`);
+          hitIncrementalStop = true;
+          break;
+        }
         if (!seenIds.has(w.workId)) {
           seenIds.add(w.workId);
           works.push(w);
         }
       }
+
+      if (hitIncrementalStop) break;
 
       if (works.length === lastCount) {
         stableScrolls++;

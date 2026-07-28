@@ -220,7 +220,10 @@ export class KuaishouCollector extends BaseCollector {
     return data;
   }
 
-  async collectWorksList(limit: number = 20): Promise<Array<{
+  async collectWorksList(limit: number = 20, incremental?: {
+    lastWorkId?: string;
+    lastWorkPublishTime?: number;
+  }): Promise<Array<{
     workId: string;
     title: string;
     coverUrl?: string;
@@ -257,9 +260,12 @@ export class KuaishouCollector extends BaseCollector {
 
       const allWorks: Array<any> = [];
       const seenIds = new Set<string>();
+      let hitIncrementalStop = false;
 
-      const firstPageCount = this.parseAndAddWorks(firstPageData, allWorks, seenIds, log);
-      log('info', 'page-works', `第 1 页提取到 ${firstPageCount} 条作品（CDP 监听方式）`);
+      const firstPageResult = this.parseAndAddWorks(firstPageData, allWorks, seenIds, log, incremental);
+      const firstPageCount = firstPageResult.added;
+      hitIncrementalStop = firstPageResult.hitStop;
+      log('info', 'page-works', `第 1 页提取到 ${firstPageCount} 条作品（CDP 监听方式）${hitIncrementalStop ? '，增量停止' : ''}`);
 
       let page = 1;
       const maxPages = 50;
@@ -268,7 +274,7 @@ export class KuaishouCollector extends BaseCollector {
         lastFirstPhotoId = allWorks[0].extra.photoId as string;
       }
 
-      while (allWorks.length < limit && page < maxPages) {
+      while (allWorks.length < limit && page < maxPages && !hitIncrementalStop) {
         const nextPage = page + 1;
         const beforeCount = this.getResponseCount();
         
@@ -283,7 +289,8 @@ export class KuaishouCollector extends BaseCollector {
           
           const pageWorks: Array<any> = [];
           const pageSeen = new Set<string>();
-          const added = this.parseAndAddWorks(nextPageData, pageWorks, pageSeen, log);
+          const pageResult = this.parseAndAddWorks(nextPageData, pageWorks, pageSeen, log);
+          const added = pageResult.added;
           
           let currentFirstPhotoId = '';
           if (pageWorks.length > 0 && pageWorks[0].extra?.photoId) {
@@ -298,11 +305,13 @@ export class KuaishouCollector extends BaseCollector {
             lastFirstPhotoId = currentFirstPhotoId;
           }
 
-          this.parseAndAddWorks(nextPageData, allWorks, seenIds, log);
+          const mainResult = this.parseAndAddWorks(nextPageData, allWorks, seenIds, log, incremental);
+          hitIncrementalStop = mainResult.hitStop;
           page++;
-          log('info', 'page-works', `第 ${page} 页提取到 ${added} 条作品（CDP 监听方式）`);
+          log('info', 'page-works', `第 ${page} 页提取到 ${mainResult.added} 条作品（CDP 监听方式），累计 ${allWorks.length} 条${hitIncrementalStop ? '，增量停止' : ''}`);
           
-          if (added === 0) break;
+          if (mainResult.added === 0 && !hitIncrementalStop) break;
+          if (hitIncrementalStop) break;
         } catch (e) {
           log('warn', 'page-timeout', `第 ${nextPage} 页等待超时，停止翻页`);
           break;
@@ -325,7 +334,7 @@ export class KuaishouCollector extends BaseCollector {
     }
 
     log('info', 'fallback', '回退到 DOM 解析方式');
-    return this.collectWorksFallback(limit, log);
+    return this.collectWorksFallback(limit, log, incremental);
   }
 
   private getResponseCount(): number {
@@ -355,10 +364,16 @@ export class KuaishouCollector extends BaseCollector {
     throw new Error(`等待新响应超时（${timeoutMs}ms）`);
   }
 
-  private parseAndAddWorks(resp: any, allWorks: Array<any>, seenIds: Set<string>, log: ReturnType<typeof this.makeLog>): number {
+  private parseAndAddWorks(
+    resp: any,
+    allWorks: Array<any>,
+    seenIds: Set<string>,
+    log: ReturnType<typeof this.makeLog>,
+    incremental?: { lastWorkId?: string; lastWorkPublishTime?: number },
+  ): { added: number; hitStop: boolean } {
     if (!resp) {
       log('warn', 'parse-empty', '响应为空');
-      return 0;
+      return { added: 0, hitStop: false };
     }
     log('info', 'parse-debug', `响应结构: keys=${JSON.stringify(Object.keys(resp))}`);
     if (resp.data) {
@@ -366,7 +381,7 @@ export class KuaishouCollector extends BaseCollector {
     }
     if (resp.result !== 1) {
       log('warn', 'parse-not-success', `响应不成功: result=${resp.result}`);
-      return 0;
+      return { added: 0, hitStop: false };
     }
     const data = resp.data || {};
     const photoList = data.photoList || {};
@@ -387,19 +402,37 @@ export class KuaishouCollector extends BaseCollector {
     if (items.length === 0 && Array.isArray(data.items)) items = data.items;
     if (items.length === 0) {
       log('info', 'parse-empty-list', '列表为空');
-      return 0;
+      return { added: 0, hitStop: false };
     }
 
     let count = 0;
+    let hitStop = false;
     for (const item of items) {
       const photoId = item.photoId || item.photo_id || item.id || '';
       if (!photoId) continue;
-      if (seenIds.has(photoId)) continue;
-      seenIds.add(photoId);
+
+      const workId = `ks_${photoId}`;
+
+      if (incremental?.lastWorkId && workId === incremental.lastWorkId) {
+        log('info', 'incremental-stop', `遇到已采集的最后作品ID: ${workId}，增量停止`);
+        hitStop = true;
+        break;
+      }
+
+      const publishTimeRaw = item.publishTime || item.publish_time || item.create_time || item.ctime || Date.now();
+      const publishTime = typeof publishTimeRaw === 'number' ? publishTimeRaw * (publishTimeRaw < 1e12 ? 1000 : 1) : Date.now();
+
+      if (incremental?.lastWorkPublishTime && publishTime <= incremental.lastWorkPublishTime) {
+        log('info', 'incremental-stop', `遇到已采集的发布时间: ${new Date(publishTime).toISOString()}，增量停止`);
+        hitStop = true;
+        break;
+      }
+
+      if (seenIds.has(workId)) continue;
+      seenIds.add(workId);
 
       const title = item.title || item.caption || item.name || '';
       const coverUrl = item.cover || item.cover_url || item.thumb_url || '';
-      const publishTime = item.publishTime || item.publish_time || item.create_time || item.ctime || Date.now();
       const detailUrl = photoId ? `https://www.kuaishou.com/short-video/${photoId}` : '';
       const duration = item.duration || 0;
       
@@ -412,10 +445,10 @@ export class KuaishouCollector extends BaseCollector {
       const shares = parseZhNumber(String(item.shareCount || item.share_count || item.shares || 0));
 
       allWorks.push({
-        workId: `ks_${photoId}`,
+        workId,
         title,
         coverUrl,
-        publishTime: typeof publishTime === 'number' ? publishTime * (publishTime < 1e12 ? 1000 : 1) : Date.now(),
+        publishTime,
         detailUrl,
         duration,
         contentType: 'video' as const,
@@ -433,10 +466,14 @@ export class KuaishouCollector extends BaseCollector {
       count++;
     }
 
-    return count;
+    return { added: count, hitStop };
   }
 
-  private async collectWorksFallback(limit: number, log: ReturnType<typeof this.makeLog>): Promise<Array<any>> {
+  private async collectWorksFallback(
+    limit: number,
+    log: ReturnType<typeof this.makeLog>,
+    incremental?: { lastWorkId?: string; lastWorkPublishTime?: number },
+  ): Promise<Array<any>> {
     try {
       await this.waitForAnalysisData(15000);
     } catch {
@@ -475,7 +512,18 @@ export class KuaishouCollector extends BaseCollector {
       }
 
       let pageCount = 0;
+      let hitIncrementalStop = false;
       for (const work of pageWorks) {
+        if (incremental?.lastWorkId && work.workId === incremental.lastWorkId) {
+          log('info', 'incremental-stop', `[DOM回退] 遇到已采集的最后作品ID: ${work.workId}，增量停止`);
+          hitIncrementalStop = true;
+          break;
+        }
+        if (incremental?.lastWorkPublishTime && work.publishTime && work.publishTime <= incremental.lastWorkPublishTime) {
+          log('info', 'incremental-stop', `[DOM回退] 遇到已采集的发布时间: ${new Date(work.publishTime).toISOString()}，增量停止`);
+          hitIncrementalStop = true;
+          break;
+        }
         if (seenIds.has(work.workId)) continue;
         seenIds.add(work.workId);
         allWorks.push(work);
@@ -483,8 +531,9 @@ export class KuaishouCollector extends BaseCollector {
         if (allWorks.length >= limit) break;
       }
 
-      log('info', 'page-works', `第 ${page} 页提取到 ${pageCount} 条作品（DOM）`);
+      log('info', 'page-works', `第 ${page} 页提取到 ${pageCount} 条作品（DOM）${hitIncrementalStop ? '，增量停止' : ''}`);
 
+      if (hitIncrementalStop) break;
       if (allWorks.length >= limit) break;
       if (pageWorks.length === 0) break;
     }

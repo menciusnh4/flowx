@@ -1,36 +1,39 @@
 <template>
   <div class="analytics-panel">
-    <div class="panel">
-      <div class="panel-header">
-        <h2 class="section-title">账号分析</h2>
-        <el-select
-          v-model="selectedAccountId"
-          placeholder="选择账号采集"
-          style="width: 240px"
-          @change="onAccountChange"
-        >
-          <el-option
-            v-for="acc in accountStore.accounts"
-            :key="acc.id"
-            :label="`${acc.nickname || acc.id} (${getPlatformName(acc.platform)})`"
-            :value="acc.id"
-          />
-        </el-select>
-        <el-button
-          type="primary"
-          :loading="analyticsStore.isCollecting"
-          :disabled="!selectedAccountId"
-          @click="startCollect"
-        >
-          <el-icon v-if="!analyticsStore.isCollecting"><Refresh /></el-icon>
-          &nbsp;{{ analyticsStore.isCollecting ? '采集中...' : '开始采集' }}
-        </el-button>
-        <el-button
-          :disabled="!selectedAccountId || analyticsStore.isCollecting"
-          @click="clearData"
-        >
-          清空数据
-        </el-button>
+    <!-- 账号概览区 -->
+    <div class="panel profile-section">
+      <div class="section-header">
+        <h2 class="section-title">账号概览</h2>
+        <div class="header-actions">
+          <el-select
+            v-model="selectedAccountId"
+            placeholder="选择账号"
+            style="width: 240px"
+            @change="onAccountChange"
+          >
+            <el-option
+              v-for="acc in accountStore.accounts"
+              :key="acc.id"
+              :label="`${acc.nickname || acc.id} (${getPlatformName(acc.platform)})`"
+              :value="acc.id"
+            />
+          </el-select>
+          <el-button
+            type="primary"
+            :loading="analyticsStore.isCollecting"
+            :disabled="!selectedAccountId"
+            @click="startCollect"
+          >
+            <el-icon v-if="!analyticsStore.isCollecting"><Refresh /></el-icon>
+            &nbsp;{{ analyticsStore.isCollecting ? '采集中...' : '开始采集' }}
+          </el-button>
+          <el-button
+            :disabled="!selectedAccountId || analyticsStore.isCollecting"
+            @click="clearData"
+          >
+            清空数据
+          </el-button>
+        </div>
       </div>
 
       <el-progress
@@ -46,20 +49,78 @@
         </template>
       </el-progress>
 
-      <el-row :gutter="16" style="margin-bottom: 16px">
-        <el-col :span="6">
-          <div class="stat-card">
-            <div class="stat-label">作品总数</div>
-            <div class="stat-value">{{ analyticsStore.worksTotal }}</div>
+      <div v-if="currentAccount" class="profile-content">
+        <div class="profile-left">
+          <div class="profile-avatar">
+            <img
+              v-if="currentAccount.avatar"
+              :src="currentAccount.avatar"
+              class="avatar-lg"
+              @error="onAvatarError"
+            />
+            <span v-else class="avatar-placeholder-lg">
+              {{ (currentAccount.nickname || '?').charAt(0) }}
+            </span>
           </div>
-        </el-col>
-        <el-col :span="6">
-          <div class="stat-card">
-            <div class="stat-label">账号数量</div>
-            <div class="stat-value">{{ accountStore.accounts.length }}</div>
+          <div class="profile-info">
+            <div class="profile-name">
+              <img
+                v-if="getPlatformIcon(currentAccount.platform)"
+                :src="getPlatformIcon(currentAccount.platform)"
+                class="inline-platform-icon"
+              />
+              {{ currentAccount.nickname || currentAccount.id }}
+            </div>
+            <div class="profile-meta">
+              <span class="platform-badge">{{ getPlatformName(currentAccount.platform) }}</span>
+              <span class="meta-text">
+                {{ getPlatformAccountLabel(currentAccount.platform) }}: {{ currentAccount.platformAccountId || '—' }}
+              </span>
+            </div>
           </div>
-        </el-col>
-      </el-row>
+        </div>
+        <div class="profile-stats">
+          <div class="stat-card profile-stat">
+            <div class="stat-label">粉丝数</div>
+            <div class="stat-value">{{ formatNumber(analyticsStore.latestAccountStats?.fansCount || 0) }}</div>
+          </div>
+          <div class="stat-card profile-stat">
+            <div class="stat-label">关注数</div>
+            <div class="stat-value">{{ formatNumber(analyticsStore.latestAccountStats?.followCount || 0) }}</div>
+          </div>
+          <div class="stat-card profile-stat">
+            <div class="stat-label">总获赞</div>
+            <div class="stat-value">{{ formatNumber(analyticsStore.latestAccountStats?.totalLikeCount || 0) }}</div>
+          </div>
+          <div class="stat-card profile-stat">
+            <div class="stat-label">账号作品数</div>
+            <div class="stat-value">{{ formatNumber(accountWorksCount) }}</div>
+          </div>
+          <div class="stat-card profile-stat">
+            <div class="stat-label">最近采集</div>
+            <div class="stat-value small">
+              {{ analyticsStore.latestAccountStats?.collectedAt ? formatDateTime(analyticsStore.latestAccountStats.collectedAt) : '—' }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-else class="empty-profile">
+        <el-empty description="请选择一个账号查看概览数据" :image-size="100" />
+      </div>
+    </div>
+
+    <!-- 作品分析区 -->
+    <div class="panel">
+      <div class="section-header">
+        <h2 class="section-title">作品分析</h2>
+        <div class="section-summary">
+          共 <span class="summary-num">{{ analyticsStore.worksTotal }}</span> 条作品
+          <span v-if="analyticsStore.filterPlatform || localFilterPlatformAccountIds.length > 0">
+            · 已筛选
+          </span>
+        </div>
+      </div>
 
       <div class="filter-bar">
         <el-select
@@ -300,6 +361,16 @@ const analyticsStore = useAnalyticsStore();
 
 const selectedAccountId = ref('');
 const localFilterPlatformAccountIds = ref<string[]>([]);
+
+const currentAccount = computed(() => {
+  if (!selectedAccountId.value) return null;
+  return accountStore.accounts.find(acc => acc.id === selectedAccountId.value) || null;
+});
+
+const accountWorksCount = computed(() => {
+  if (!selectedAccountId.value) return 0;
+  return analyticsStore.latestAccountStats?.worksCount || 0;
+});
 const sortBy = computed({
   get: () => analyticsStore.sortBy,
   set: (val: string) => { analyticsStore.sortBy = val as typeof analyticsStore.sortBy; },
@@ -373,6 +444,12 @@ function formatDate(ts: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+function formatDateTime(ts: number): string {
+  if (!ts) return '-';
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
@@ -402,6 +479,9 @@ function calcInteractionRate(row: any): string {
 function onAccountChange(accountId: string) {
   analyticsStore.setSelectedAccount(accountId);
   selectedAccountId.value = accountId;
+  if (accountId) {
+    analyticsStore.loadAccountStats(accountId);
+  }
 }
 
 async function loadWorks() {
@@ -503,6 +583,7 @@ onMounted(async () => {
   if (accountStore.accounts.length > 0) {
     selectedAccountId.value = accountStore.accounts[0].id;
     analyticsStore.setSelectedAccount(accountStore.accounts[0].id);
+    await analyticsStore.loadAccountStats(accountStore.accounts[0].id);
   }
   await analyticsStore.loadConfig();
   await loadWorks();
@@ -523,6 +604,127 @@ onMounted(async () => {
   align-items: center;
   gap: 16px;
   margin-bottom: 16px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.section-summary {
+  font-size: 14px;
+  color: #909399;
+}
+
+.summary-num {
+  color: #409eff;
+  font-weight: 600;
+  margin: 0 4px;
+}
+
+.profile-section {
+  margin-bottom: 16px;
+}
+
+.profile-content {
+  display: flex;
+  align-items: center;
+  gap: 40px;
+  padding: 8px 0;
+}
+
+.profile-left {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-shrink: 0;
+}
+
+.profile-avatar {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.avatar-lg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-placeholder-lg {
+  color: #fff;
+  font-size: 28px;
+  font-weight: 600;
+}
+
+.profile-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.profile-name {
+  font-size: 20px;
+  font-weight: 600;
+  color: #303133;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.profile-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: #909399;
+}
+
+.platform-badge {
+  padding: 2px 8px;
+  background: #ecf5ff;
+  color: #409eff;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.meta-text {
+  color: #606266;
+}
+
+.profile-stats {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.profile-stat {
+  min-width: 120px;
+  text-align: center;
+}
+
+.empty-profile {
+  padding: 32px 0;
 }
 
 .section-title {
@@ -546,6 +748,11 @@ onMounted(async () => {
   font-size: 22px;
   font-weight: 600;
   color: #303133;
+}
+
+.stat-value.small {
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .filter-bar {

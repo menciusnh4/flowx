@@ -20,7 +20,7 @@ export const useAnalyticsStore = defineStore('analytics', {
     works: [] as (WorkItem & { metrics?: WorkMetrics })[],
     worksTotal: 0,
     worksPage: 1,
-    worksPageSize: 20,
+    worksPageSize: 10,
     filterAccountIds: [] as string[],
     filterPlatformAccountIds: [] as string[],
     filterPlatform: '' as string,
@@ -38,6 +38,10 @@ export const useAnalyticsStore = defineStore('analytics', {
   getters: {
     totalPages: (s) => Math.ceil(s.worksTotal / s.worksPageSize) || 1,
     isCollecting: (s) => !!s.currentProgress && s.currentProgress.status === 'running',
+    latestAccountStats: (s) => {
+      if (!s.accountStats || s.accountStats.length === 0) return null;
+      return s.accountStats[s.accountStats.length - 1];
+    },
   },
   actions: {
     async loadConfig() {
@@ -135,6 +139,9 @@ export const useAnalyticsStore = defineStore('analytics', {
             } else {
               if (progress.status === 'completed') {
                 this.loadWorks();
+                if (this.selectedAccountId) {
+                  this.loadAccountStats(this.selectedAccountId);
+                }
               }
             }
           }

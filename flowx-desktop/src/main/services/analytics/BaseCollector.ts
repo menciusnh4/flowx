@@ -440,7 +440,10 @@ export abstract class BaseCollector {
     extra?: Record<string, number>;
   }>;
 
-  abstract collectWorksList(limit?: number): Promise<Array<{
+  abstract collectWorksList(limit?: number, incremental?: {
+    lastWorkId?: string;
+    lastWorkPublishTime?: number;
+  }): Promise<Array<{
     workId: string;
     title: string;
     coverUrl?: string;

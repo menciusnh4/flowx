@@ -294,6 +294,18 @@ export function getAccountStats(accountId: string, days?: number): AccountStatsS
   return [...stats];
 }
 
+export function getLatestAccountStats(accountId: string): AccountStatsSnapshot | null {
+  const data = ensureInit();
+  const stats = data.accountStats[accountId] || [];
+  if (stats.length === 0) return null;
+  return stats[stats.length - 1];
+}
+
+export function getWorksCount(accountId: string): number {
+  const data = ensureInit();
+  return data.works[accountId]?.length || 0;
+}
+
 export function saveAccountStats(snapshot: AccountStatsSnapshot): void {
   const data = ensureInit();
   const accountId = snapshot.accountId;
