@@ -11,6 +11,8 @@ import type {
   CollectProgress,
 } from '../../types';
 
+type SortByField = 'publishTime' | 'views' | 'likes' | 'comments' | 'favorites' | 'completionRate' | 'interactionRate';
+
 export const useAnalyticsStore = defineStore('analytics', {
   state: () => ({
     loading: false,
@@ -19,6 +21,12 @@ export const useAnalyticsStore = defineStore('analytics', {
     worksTotal: 0,
     worksPage: 1,
     worksPageSize: 20,
+    filterAccountIds: [] as string[],
+    filterPlatformAccountIds: [] as string[],
+    filterPlatform: '' as string,
+    filterKeyword: '' as string,
+    sortBy: 'publishTime' as SortByField,
+    sortOrder: 'desc' as 'asc' | 'desc',
     accountStats: [] as AccountStatsSnapshot[],
     benchmarks: [] as BenchmarkAccount[],
     activeTaskId: '' as string,
@@ -46,23 +54,50 @@ export const useAnalyticsStore = defineStore('analytics', {
     },
 
     async loadWorks(params: Partial<WorksQueryParams> = {}) {
-      if (!params.accountId && !this.selectedAccountId) {
-        return;
-      }
       this.loading = true;
       this.error = '';
       try {
-        const result: PagedResult<WorkItem & { metrics?: WorkMetrics }> = await electronApi.analytics.getWorks({
-          accountId: params.accountId || this.selectedAccountId,
+        const queryParams: Partial<WorksQueryParams> = {
           page: params.page || this.worksPage,
           pageSize: params.pageSize || this.worksPageSize,
-          sortBy: params.sortBy,
-          sortOrder: params.sortOrder,
-          contentType: params.contentType,
-          startTime: params.startTime,
-          endTime: params.endTime,
-          keyword: params.keyword,
-        });
+          sortBy: (params.sortBy as SortByField | undefined) || this.sortBy,
+          sortOrder: params.sortOrder || this.sortOrder,
+        };
+
+        if (params.accountId !== undefined) {
+          queryParams.accountId = params.accountId;
+        }
+        if (params.accountIds !== undefined && params.accountIds.length > 0) {
+          queryParams.accountIds = params.accountIds;
+        } else if (this.filterAccountIds.length > 0) {
+          queryParams.accountIds = this.filterAccountIds;
+        }
+        if (params.platformAccountIds !== undefined && params.platformAccountIds.length > 0) {
+          queryParams.platformAccountIds = params.platformAccountIds;
+        } else if (this.filterPlatformAccountIds.length > 0) {
+          queryParams.platformAccountIds = this.filterPlatformAccountIds;
+        }
+        if (params.platform !== undefined && params.platform) {
+          queryParams.platform = params.platform;
+        } else if (this.filterPlatform) {
+          queryParams.platform = this.filterPlatform;
+        }
+        if (params.keyword !== undefined && params.keyword) {
+          queryParams.keyword = params.keyword;
+        } else if (this.filterKeyword) {
+          queryParams.keyword = this.filterKeyword;
+        }
+        if (params.contentType !== undefined) {
+          queryParams.contentType = params.contentType;
+        }
+        if (params.startTime !== undefined) {
+          queryParams.startTime = params.startTime;
+        }
+        if (params.endTime !== undefined) {
+          queryParams.endTime = params.endTime;
+        }
+
+        const result: PagedResult<WorkItem & { metrics?: WorkMetrics }> = await electronApi.analytics.getWorks(queryParams as WorksQueryParams);
         this.works = result.items;
         this.worksTotal = result.total;
         this.worksPage = result.page;
@@ -99,7 +134,7 @@ export const useAnalyticsStore = defineStore('analytics', {
               setTimeout(poll, 1000);
             } else {
               if (progress.status === 'completed') {
-                this.loadWorks({ accountId: this.selectedAccountId });
+                this.loadWorks();
               }
             }
           }

@@ -606,8 +606,10 @@ export interface WorkItem {
   id: string;
   /** 所属平台 */
   platform: PlatformType;
-  /** 所属账号 ID */
+  /** 所属账号 ID（系统内部 ID） */
   accountId: string;
+  /** 平台账号 ID（抖音号、小红书号、公众号ID等，各平台的唯一标识） */
+  platformAccountId?: string;
   /** 作品标题 */
   title: string;
   /** 封面图 URL（可选） */
@@ -632,8 +634,10 @@ export interface WorkMetrics {
   id: string;
   /** 关联作品 ID */
   workId: string;
-  /** 所属账号 ID */
+  /** 所属账号 ID（系统内部 ID） */
   accountId: string;
+  /** 平台账号 ID（抖音号、小红书号等） */
+  platformAccountId?: string;
   /** 所属平台 */
   platform: PlatformType;
   /** 播放量/阅读量/浏览量 */
@@ -954,7 +958,14 @@ export interface CompareResult {
 
 /** 作品列表查询参数 */
 export interface WorksQueryParams {
-  accountId: string;
+  /** 账号 ID（可选，不填则查询所有账号） */
+  accountId?: string;
+  /** 账号 ID 列表（可选，用于多选账号筛选，系统内部 ID） */
+  accountIds?: string[];
+  /** 平台账号 ID 列表（可选，用于多选账号筛选，抖音号、小红书号等平台内标识） */
+  platformAccountIds?: string[];
+  /** 平台类型筛选（可选） */
+  platform?: PlatformType;
   page?: number;
   pageSize?: number;
   /** 排序字段 */

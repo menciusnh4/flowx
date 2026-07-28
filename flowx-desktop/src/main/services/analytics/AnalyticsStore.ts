@@ -110,6 +110,9 @@ export function getWorks(accountId: string): WorkItem[] {
 export function getPagedWorks(params: WorksQueryParams): PagedResult<WorkItem & { metrics?: WorkMetrics }> {
   const {
     accountId,
+    accountIds,
+    platformAccountIds,
+    platform,
     page = 1,
     pageSize = 20,
     sortBy = 'publishTime',
@@ -121,8 +124,31 @@ export function getPagedWorks(params: WorksQueryParams): PagedResult<WorkItem & 
   } = params;
 
   const data = ensureInit();
-  let works = [...(data.works[accountId] || [])];
 
+  let allWorks: WorkItem[] = [];
+
+  if (accountId) {
+    allWorks = [...(data.works[accountId] || [])];
+  } else if (accountIds && accountIds.length > 0) {
+    for (const aid of accountIds) {
+      allWorks = allWorks.concat(data.works[aid] || []);
+    }
+  } else {
+    for (const aid of Object.keys(data.works)) {
+      allWorks = allWorks.concat(data.works[aid] || []);
+    }
+  }
+
+  let works = allWorks;
+
+  if (platformAccountIds && platformAccountIds.length > 0) {
+    const idSet = new Set(platformAccountIds.map(String));
+    works = works.filter(w => w.platformAccountId && idSet.has(String(w.platformAccountId)));
+  }
+
+  if (platform) {
+    works = works.filter(w => w.platform === platform);
+  }
   if (contentType) {
     works = works.filter(w => w.contentType === contentType);
   }

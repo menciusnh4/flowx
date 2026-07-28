@@ -159,6 +159,7 @@ class AnalyticsServiceImpl {
               id: w.workId,
               platform: account.platform,
               accountId,
+              platformAccountId: account.platformAccountId,
               title: w.title,
               coverUrl: w.coverUrl,
               contentType: w.contentType,
@@ -172,6 +173,7 @@ class AnalyticsServiceImpl {
             const metrics: Omit<WorkMetrics, 'id' | 'collectedAt'> = {
               workId: w.workId,
               accountId,
+              platformAccountId: account.platformAccountId,
               platform: account.platform,
               views: w.views || 0,
               likes: w.likes || 0,

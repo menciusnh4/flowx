@@ -18,6 +18,15 @@ const IMAGE_ANTI_HOTLINK_CONFIG: Record<string, { referer: string; origins: stri
       'sns-video-qx.xhscdn.com',
     ],
   },
+  wechat_channels: {
+    referer: 'https://channels.weixin.qq.com/',
+    origins: [
+      'weixin.qq.com',
+      'wechat.qq.com',
+      'channels.weixin.qq.com',
+      'qq.com',
+    ],
+  },
 };
 
 const PROXIES_KEY = 'proxies';
