@@ -38,6 +38,14 @@ import type {
   EnvQueryFilter,
   RuleQueryFilter,
   PublishQueryFilter,
+  WorkItem,
+  WorkMetrics,
+  AccountStatsSnapshot,
+  BenchmarkAccount,
+  AnalyticsConfig,
+  WorksQueryParams,
+  CollectProgress,
+  CollectTaskResult,
 } from '../types';
 
 // Preload 脚本：通过 contextBridge 暴露安全 API
@@ -502,6 +510,51 @@ contextBridge.exposeInMainWorld('electron', {
   workspaceState: {
     save: (state: unknown): Promise<void> => invoke('workspace:saveState', state),
     load: (): Promise<unknown> => invoke('workspace:loadState'),
+  },
+  // ========== 账号分析 ==========
+  analytics: {
+    getConfig: (): Promise<AnalyticsConfig> => invoke('analytics:getConfig'),
+    updateConfig: (updates: Partial<AnalyticsConfig>): Promise<AnalyticsConfig> =>
+      invoke('analytics:updateConfig', updates),
+
+    startCollect: (accountId: string, type: 'overview' | 'works' | 'all'): Promise<{ taskId: string }> =>
+      invoke('analytics:startCollect', accountId, type),
+    cancelCollect: (taskId: string): Promise<boolean> => invoke('analytics:cancelCollect', taskId),
+    getTaskProgress: (taskId: string): Promise<CollectProgress | null> =>
+      invoke('analytics:getTaskProgress', taskId),
+    getQueueStatus: (): Promise<{ queued: number; running: number; completed: number }> =>
+      invoke('analytics:getQueueStatus'),
+
+    getWorks: (params: WorksQueryParams): Promise<PagedResult<WorkItem & { metrics?: WorkMetrics }>> =>
+      invoke('analytics:getWorks', params),
+    getWorkMetrics: (workId: string): Promise<WorkMetrics | undefined> =>
+      invoke('analytics:getWorkMetrics', workId),
+    getAccountStats: (accountId: string, days?: number): Promise<AccountStatsSnapshot[]> =>
+      invoke('analytics:getAccountStats', accountId, days),
+
+    getBenchmarks: (ownerAccountId?: string): Promise<BenchmarkAccount[]> =>
+      invoke('analytics:getBenchmarks', ownerAccountId),
+    addBenchmark: (benchmark: Omit<BenchmarkAccount, 'id' | 'createdAt'>): Promise<BenchmarkAccount> =>
+      invoke('analytics:addBenchmark', benchmark),
+    updateBenchmark: (id: string, updates: Partial<BenchmarkAccount>): Promise<BenchmarkAccount | null> =>
+      invoke('analytics:updateBenchmark', id, updates),
+    deleteBenchmark: (id: string): Promise<boolean> => invoke('analytics:deleteBenchmark', id),
+
+    getLastCollectInfo: (accountId: string): Promise<{
+      lastCollectTime: number;
+      lastWorkId?: string;
+      lastWorkPublishTime?: number;
+    } | null> => invoke('analytics:getLastCollectInfo', accountId),
+
+    clearData: (accountId: string): Promise<void> => invoke('analytics:clearData', accountId),
+    openWorkInWindow: (accountId: string, workUrl: string, title?: string): Promise<{ success: boolean }> =>
+      invoke('analytics:openWorkInWindow', accountId, workUrl, title),
+
+    onProgress: (cb: (p: CollectProgress) => void): (() => void) => {
+      const handler = (_event: unknown, payload: CollectProgress) => cb(payload);
+      ipcRenderer.on('analytics:progress', handler);
+      return () => ipcRenderer.removeListener('analytics:progress', handler);
+    },
   },
 });
 

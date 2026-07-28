@@ -7,9 +7,11 @@ import { initStore } from './store/SecureStore';
 import { AccountService } from './services/AccountService';
 import { BrowserEnvService } from './services/BrowserEnvService';
 import { PublishEngine } from './services/PublishEngine';
+import { AnalyticsService } from './services/analytics/AnalyticsService';
 import { ApiServer } from './services/ApiServer';
 import { registerMediaProtocol } from './protocols/mediaProtocol';
 import { registerNewTabProtocol } from './services/NewTabPageService';
+import { BrowserEnvService } from './services/BrowserEnvService';
 
 // 注册自定义协议为标准方案（必须在 app ready 之前调用）
 protocol.registerSchemesAsPrivileged([
@@ -96,6 +98,8 @@ async function bootstrap() {
   // 注册自定义媒体协议（flowx-media://），供发布页 <video>/<img> 预览本地媒体，
   // 须在渲染进程发起请求前注册，故置于 createMainWindow 之前。
   registerMediaProtocol();
+  // 设置图片防盗链（必须在窗口创建前配置）
+  BrowserEnvService.setupImageAntiHotlink();
 
   // 设置应用名称和图标
   app.setName('FlowX');
@@ -137,6 +141,7 @@ async function bootstrap() {
   // 初始化业务服务
   AccountService.init();
   PublishEngine.init();
+  AnalyticsService.init();
 
   // 启动对外 API 服务（如果配置了启用）
   ApiServer.getInstance().startIfEnabled();

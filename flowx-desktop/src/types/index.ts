@@ -650,3 +650,386 @@ export interface WorkspaceWebviewRect {
   width: number;
   height: number;
 }
+// ==================== 账号分析模块类型 ====================
+
+/** 作品基础信息 */
+export interface WorkItem {
+  /** 作品唯一 ID（平台内部 ID） */
+  id: string;
+  /** 所属平台 */
+  platform: PlatformType;
+  /** 所属账号 ID（系统内部 ID） */
+  accountId: string;
+  /** 平台账号 ID（抖音号、小红书号、公众号ID等，各平台的唯一标识） */
+  platformAccountId?: string;
+  /** 作品标题 */
+  title: string;
+  /** 封面图 URL（可选） */
+  coverUrl?: string;
+  /** 内容类型 */
+  contentType: ContentType;
+  /** 发布时间戳（毫秒） */
+  publishTime: number;
+  /** 作品详情页 URL（用于跳转） */
+  detailUrl?: string;
+  /** 作品时长（秒，视频类） */
+  duration?: number;
+  /** 首次采集时间 */
+  firstCollectedAt: number;
+  /** 最后更新时间 */
+  lastUpdatedAt: number;
+}
+
+/** 作品数据指标 */
+export interface WorkMetrics {
+  /** 快照唯一 ID */
+  id: string;
+  /** 关联作品 ID */
+  workId: string;
+  /** 所属账号 ID（系统内部 ID） */
+  accountId: string;
+  /** 平台账号 ID（抖音号、小红书号等） */
+  platformAccountId?: string;
+  /** 所属平台 */
+  platform: PlatformType;
+  /** 播放量/阅读量/浏览量 */
+  views: number;
+  /** 点赞数 */
+  likes: number;
+  /** 评论数 */
+  comments: number;
+  /** 收藏数 */
+  favorites: number;
+  /** 转发/分享数 */
+  shares: number;
+  /** 完播率（百分比，0-100，视频平台特有） */
+  completionRate?: number;
+  /** 平均播放时长（秒） */
+  avgPlayDuration?: number;
+  /** 新增粉丝数（该作品带来的） */
+  newFans?: number;
+  /** 曝光量/展现量 */
+  impressions?: number;
+  /** 点击率 = 播放/曝光（百分比） */
+  clickRate?: number;
+  /** 互动率 = (赞+评+藏+转)/播放（百分比） */
+  interactionRate?: number;
+  /** 转粉率 = 新增粉丝/播放（百分比） */
+  fanConversionRate?: number;
+  /** 采集时间戳 */
+  collectedAt: number;
+}
+
+/** 账号时间序列统计快照（按天聚合） */
+export interface AccountStatsSnapshot {
+  /** 快照唯一 ID */
+  id: string;
+  /** 账号 ID */
+  accountId: string;
+  /** 统计日期（YYYY-MM-DD） */
+  date: string;
+  /** 粉丝总数（当日末） */
+  fansCount: number;
+  /** 关注数 */
+  followCount?: number;
+  /** 总获赞数 */
+  totalLikeCount?: number;
+  /** 当日新增粉丝 */
+  newFans?: number;
+  /** 当日总播放/阅读量 */
+  totalViews?: number;
+  /** 当日总互动数（赞+评+藏+转） */
+  totalInteractions?: number;
+  /** 当日发布作品数 */
+  worksPublished?: number;
+  /** 当日平均完播率 */
+  avgCompletionRate?: number;
+  /** 当日平均互动率 */
+  avgInteractionRate?: number;
+  /** 采集时间戳 */
+  collectedAt: number;
+}
+
+/** 单作品诊断结果 */
+export interface WorkDiagnosis {
+  /** 关联作品 ID */
+  workId: string;
+  /** 综合评分（0-100） */
+  overallScore: number;
+  /** 各维度评分 */
+  dimensionScores: {
+    hook: number;
+    content: number;
+    engagement: number;
+    conversion: number;
+    clickThrough: number;
+  };
+  /** 问题列表 */
+  issues: Array<{
+    type: 'hook' | 'content' | 'engagement' | 'conversion' | 'clickThrough';
+    severity: 'low' | 'medium' | 'high';
+    title: string;
+    description: string;
+    metric?: {
+      name: string;
+      value: number;
+      benchmark: number;
+      unit?: string;
+    };
+  }>;
+  /** 优化建议列表 */
+  suggestions: Array<{
+    priority: 'high' | 'medium' | 'low';
+    title: string;
+    detail: string;
+    actionableStep?: string;
+  }>;
+  /** 生成时间 */
+  generatedAt: number;
+  /** 诊断引擎版本 */
+  engineVersion: string;
+}
+
+/** 对标账号配置 */
+export interface BenchmarkAccount {
+  /** 本地唯一 ID */
+  id: string;
+  /** 所属主账号 ID（谁的对标） */
+  ownerAccountId: string;
+  /** 对标账号平台 */
+  platform: PlatformType;
+  /** 对标账号的平台主页 URL */
+  profileUrl: string;
+  /** 对标账号名称 */
+  name: string;
+  /** 对标账号头像 URL */
+  avatar?: string;
+  /** 对标账号的平台用户 ID */
+  platformUserId?: string;
+  /** 对标类型：直接竞品/潜在竞品/行业标杆 */
+  type: 'direct' | 'potential' | 'benchmark';
+  /** 自定义备注 */
+  remark?: string;
+  /** 最近一次采集时间 */
+  lastCollectedAt?: number;
+  /** 创建时间 */
+  createdAt: number;
+  /** 启用状态 */
+  enabled: boolean;
+}
+
+/** 对标账号数据快照（公开数据） */
+export interface BenchmarkSnapshot {
+  id: string;
+  benchmarkId: string;
+  fansCount: number;
+  worksCount: number;
+  totalLikes?: number;
+  recentWorks: Array<{
+    workId: string;
+    title: string;
+    coverUrl?: string;
+    publishTime: number;
+    likes: number;
+    comments: number;
+    favorites?: number;
+    views?: number;
+  }>;
+  collectedAt: number;
+}
+
+/** 行业基准数据 */
+export interface IndustryBenchmark {
+  platform: PlatformType;
+  fanRange: '0-1k' | '1k-10k' | '10k-100k' | '100k-1M' | '1M+';
+  contentType: ContentType;
+  completionRate: {
+    excellent: number;
+    good: number;
+    warning: number;
+  };
+  interactionRate: {
+    excellent: number;
+    good: number;
+    warning: number;
+  };
+  clickRate: {
+    excellent: number;
+    good: number;
+    warning: number;
+  };
+  fanConversionRate: {
+    excellent: number;
+    good: number;
+    warning: number;
+  };
+}
+
+/** 账号分析配置 */
+export interface AnalyticsConfig {
+  /** 是否启用自动采集 */
+  autoCollectEnabled: boolean;
+  /** 自动采集间隔（小时） */
+  autoCollectIntervalHours: number;
+  /** 同时最大采集任务数 */
+  maxConcurrentCollects: number;
+  /** 采集窗口空闲关闭时间（分钟） */
+  collectWindowIdleCloseMinutes: number;
+  /** 作品采集上限（每次采集的作品数） */
+  workCollectLimit: number;
+  /** LLM API 配置 */
+  llmConfig?: {
+    provider: string;
+    apiKey?: string;
+    apiBase?: string;
+    model?: string;
+    enabled: boolean;
+  };
+}
+
+/** 全量采集参数 */
+export interface CollectAllParams {
+  accountId: string;
+  /** 是否强制全量采集（false = 增量模式） */
+  forceFull?: boolean;
+  /** 作品数量上限 */
+  workLimit?: number;
+}
+
+/** 全量采集结果 */
+export interface CollectAllResult {
+  taskId: string;
+  status: 'running' | 'success' | 'failed';
+  /** 已采集作品数 */
+  collectedCount: number;
+  /** 总作品数（预估） */
+  totalCount?: number;
+  /** 错误信息（失败时） */
+  error?: string;
+}
+
+/** 采集进度事件 */
+export interface CollectProgressEvent {
+  taskId: string;
+  phase: 'overview' | 'works' | 'detail';
+  current: number;
+  total: number;
+  message?: string;
+}
+
+/** 采集任务 */
+export interface CollectTask {
+  id: string;
+  accountId: string;
+  platform: PlatformType;
+  type: 'overview' | 'works' | 'all';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+}
+
+/** 采集进度（详细） */
+export interface CollectProgress {
+  taskId: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  progress: number;
+  message: string;
+  currentStage: string;
+  collectedCount: number;
+  totalCount: number;
+  error?: string;
+}
+
+/** 采集任务结果 */
+export interface CollectTaskResult {
+  taskId: string;
+  success: boolean;
+  collectedCount: number;
+  overview?: {
+    followers: number;
+    following: number;
+    likes: number;
+    worksCount: number;
+    extra?: Record<string, number>;
+  };
+  collectedAt: number;
+  error?: string;
+}
+
+/** 分页结果 */
+export interface PagedResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+/** 作品诊断参数 */
+export interface DiagnoseWorkParams {
+  accountId: string;
+  workId: string;
+  /** 是否使用 LLM 增强 */
+  useLLM?: boolean;
+}
+
+/** 对标对比参数 */
+export interface CompareParams {
+  ownerAccountId: string;
+  benchmarkIds: string[];
+  /** 对比维度 */
+  dimensions?: string[];
+  /** 时间范围 */
+  timeRange?: '7d' | '30d' | '90d' | 'all';
+}
+
+/** 对标对比结果 */
+export interface CompareResult {
+  accounts: Array<{
+    id: string;
+    name: string;
+    avatar?: string;
+    isOwner: boolean;
+  }>;
+  metrics: Array<{
+    key: string;
+    name: string;
+    values: Record<string, number | string>;
+    unit?: string;
+  }>;
+  trendData: Array<{
+    date: string;
+    values: Record<string, number>;
+  }>;
+  topWorks: Array<{
+    rank: number;
+    works: Record<string, { title: string; value: number; metric: string }>;
+  }>;
+}
+
+/** 作品列表查询参数 */
+export interface WorksQueryParams {
+  /** 账号 ID（可选，不填则查询所有账号） */
+  accountId?: string;
+  /** 账号 ID 列表（可选，用于多选账号筛选，系统内部 ID） */
+  accountIds?: string[];
+  /** 平台账号 ID 列表（可选，用于多选账号筛选，抖音号、小红书号等平台内标识） */
+  platformAccountIds?: string[];
+  /** 平台类型筛选（可选） */
+  platform?: PlatformType;
+  page?: number;
+  pageSize?: number;
+  /** 排序字段 */
+  sortBy?: 'publishTime' | 'views' | 'likes' | 'comments' | 'favorites' | 'completionRate' | 'interactionRate';
+  /** 排序方向 */
+  sortOrder?: 'asc' | 'desc';
+  /** 内容类型筛选 */
+  contentType?: ContentType;
+  /** 时间范围（开始时间戳） */
+  startTime?: number;
+  /** 时间范围（结束时间戳） */
+  endTime?: number;
+  /** 关键词搜索（标题） */
+  keyword?: string;
+}

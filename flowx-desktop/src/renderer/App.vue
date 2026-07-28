@@ -271,6 +271,7 @@ function toggleCollapsed() {
 const primaryNav = [
   { index: '/dashboard', label: '仪表盘', icon: '🏠' },
   { index: '/accounts', label: '账号管理', icon: '👤' },
+  { index: '/analytics', label: '账号分析', icon: '📊' },
 ];
 
 // 二级菜单项（icon 可选：一键发布对齐原型带 emoji 图标，系统配置留空用圆点）

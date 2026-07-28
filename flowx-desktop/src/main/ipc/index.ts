@@ -9,6 +9,7 @@ import { registerDraftIpc } from './draft';
 import { registerBrowserHistoryIpc } from './browserHistory';
 import { registerComplianceIpc } from './compliance';
 import { registerWorkspaceIpc } from './workspace';
+import { registerAnalyticsIpc } from './analytics';
 import { logger } from '../utils/logger';
 
 // 注册所有 IPC 监听
@@ -23,6 +24,7 @@ export function registerAllIpc(): void {
   registerBrowserHistoryIpc();
   registerComplianceIpc();
   registerWorkspaceIpc();
+  registerAnalyticsIpc();
   logger.info('[IPC] 所有通道已注册');
 }
 

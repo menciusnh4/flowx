@@ -1,0 +1,293 @@
+import { logger } from '../../utils/logger';
+import { BaseCollector } from './BaseCollector';
+import { DouyinCollector } from './platforms/DouyinCollector';
+import { XiaohongshuCollector } from './platforms/XiaohongshuCollector';
+import { KuaishouCollector } from './platforms/KuaishouCollector';
+import { WechatChannelsCollector } from './platforms/WechatChannelsCollector';
+import { CollectTaskQueue } from './CollectTaskQueue';
+import * as AnalyticsStore from './AnalyticsStore';
+import { AccountService } from '../AccountService';
+import type {
+  CollectTask,
+  CollectTaskResult,
+  CollectProgress,
+  WorksQueryParams,
+  PagedResult,
+  WorkItem,
+  WorkMetrics,
+  AccountStatsSnapshot,
+  BenchmarkAccount,
+  AnalyticsConfig,
+  PlatformType,
+  AccountCredential,
+} from '../../../types';
+
+type ProgressCallback = (p: CollectProgress) => void;
+
+class AnalyticsServiceImpl {
+  private taskQueue: CollectTaskQueue | null = null;
+  private initialized = false;
+
+  init(): void {
+    if (this.initialized) return;
+    this.initialized = true;
+    const config = AnalyticsStore.getConfig();
+    this.taskQueue = new CollectTaskQueue(config.maxConcurrentCollects);
+    logger.info('[AnalyticsService] 初始化完成');
+  }
+
+  private ensureInit(): void {
+    if (!this.initialized) {
+      this.init();
+    }
+  }
+
+  getConfig(): AnalyticsConfig {
+    return AnalyticsStore.getConfig();
+  }
+
+  updateConfig(updates: Partial<AnalyticsConfig>): AnalyticsConfig {
+    this.ensureInit();
+    const config = AnalyticsStore.updateConfig(updates);
+    if (updates.maxConcurrentCollects !== undefined && this.taskQueue) {
+      this.taskQueue.setMaxConcurrency(updates.maxConcurrentCollects);
+    }
+    return config;
+  }
+
+  private createCollector(platform: PlatformType, account: AccountCredential): BaseCollector {
+    switch (platform) {
+      case 'douyin':
+        return new DouyinCollector(account);
+      case 'xiaohongshu':
+        return new XiaohongshuCollector(account);
+      case 'kuaishou':
+        return new KuaishouCollector(account);
+      case 'wechat_channels':
+        return new WechatChannelsCollector(account);
+      default:
+        throw new Error(`暂不支持平台: ${platform}`);
+    }
+  }
+
+  startCollect(
+    accountId: string,
+    type: 'overview' | 'works' | 'all' = 'all',
+    onProgress?: (p: CollectProgress) => void,
+  ): string {
+    this.ensureInit();
+    const account = AccountService.getCredential(accountId);
+    if (!account) {
+      throw new Error(`账号不存在: ${accountId}`);
+    }
+
+    const taskId = `collect_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    const task: CollectTask = {
+      id: taskId,
+      accountId,
+      platform: account.platform,
+      type,
+      status: 'queued',
+      createdAt: Date.now(),
+    };
+
+    const handler = async (t: CollectTask, updateProgress: (p: Partial<CollectProgress>) => void): Promise<CollectTaskResult> => {
+      const log = (msg: string, data?: Record<string, unknown>) => {
+        logger.info(`[AnalyticsService][${account.platform}/${accountId}] ${msg}`, data || '');
+      };
+
+      updateProgress({
+        status: 'running',
+        currentStage: 'initializing',
+        message: '初始化采集窗口...',
+        progress: 5,
+      });
+
+      let collector: BaseCollector | null = null;
+      try {
+        collector = this.createCollector(account.platform, account);
+        await collector.initWindow({ headless: true });
+
+        let worksCollected = 0;
+        let overview: any = null;
+
+        if (type === 'overview' || type === 'all') {
+          updateProgress({
+            currentStage: 'collecting-overview',
+            message: '采集账号概览数据...',
+            progress: 20,
+          });
+
+          overview = await collector.collectAccountOverview();
+          log('概览数据采集完成', overview);
+
+          const today = new Date().toISOString().slice(0, 10);
+          const snapshot: AccountStatsSnapshot = {
+            id: `stats_${Date.now()}`,
+            accountId,
+            date: today,
+            fansCount: overview.followers,
+            followCount: overview.following,
+            totalLikeCount: overview.likes,
+            worksPublished: overview.worksCount,
+            collectedAt: Date.now(),
+          };
+          AnalyticsStore.saveAccountStats(snapshot);
+        }
+
+        if (type === 'works' || type === 'all') {
+          updateProgress({
+            currentStage: 'collecting-works',
+            message: '采集作品列表...',
+            progress: 40,
+          });
+
+          const config = AnalyticsStore.getConfig();
+          const works = await collector.collectWorksList(config.workCollectLimit);
+
+          const workItems = works.map((w, idx) => {
+            const progress = 40 + Math.round((idx + 1) / works.length * 50);
+            updateProgress({
+              message: `已采集 ${idx + 1}/${works.length} 条作品`,
+              collectedCount: idx + 1,
+              totalCount: works.length,
+              progress,
+            });
+
+            const workItem: WorkItem = {
+              id: w.workId,
+              platform: account.platform,
+              accountId,
+              platformAccountId: account.platformAccountId,
+              title: w.title,
+              coverUrl: w.coverUrl,
+              contentType: w.contentType,
+              publishTime: w.publishTime || Date.now(),
+              detailUrl: w.detailUrl,
+              duration: w.duration,
+              firstCollectedAt: Date.now(),
+              lastUpdatedAt: Date.now(),
+            };
+
+            const metrics: Omit<WorkMetrics, 'id' | 'collectedAt'> = {
+              workId: w.workId,
+              accountId,
+              platformAccountId: account.platformAccountId,
+              platform: account.platform,
+              views: w.views || 0,
+              likes: w.likes || 0,
+              comments: w.comments || 0,
+              favorites: w.favorites || 0,
+              shares: w.shares || 0,
+              impressions: (w as any).impressions || 0,
+              clickRate: (w as any).clickRate || 0,
+              newFans: (w as any).newFans || 0,
+              avgPlayDuration: (w as any).avgPlayDuration || 0,
+              completionRate: (w as any).completionRate || 0,
+            };
+
+            return { work: workItem, metrics };
+          });
+
+          worksCollected = AnalyticsStore.saveWorksBatch(accountId, workItems);
+
+          if (works.length > 0) {
+            AnalyticsStore.updateLastCollectInfo(accountId, {
+              lastWorkId: works[0].workId,
+              lastWorkPublishTime: works[0].publishTime,
+            });
+          }
+
+          log('作品列表采集完成', { count: worksCollected });
+        }
+
+        updateProgress({
+          status: 'completed',
+          currentStage: 'done',
+          message: '采集完成',
+          progress: 100,
+        });
+
+        return {
+          taskId,
+          success: true,
+          collectedCount: worksCollected,
+          overview,
+          collectedAt: Date.now(),
+        };
+      } catch (err) {
+        log('采集失败', { error: err instanceof Error ? err.message : String(err) });
+        updateProgress({
+          status: 'failed',
+          currentStage: 'error',
+          message: err instanceof Error ? err.message : String(err),
+          progress: 100,
+        });
+        throw err;
+      } finally {
+        if (collector) {
+          collector.destroy();
+        }
+      }
+    };
+
+    this.taskQueue!.addTask(task, handler, onProgress);
+
+    logger.info(`[AnalyticsService] 启动采集任务: ${taskId} (${accountId}/${type})`);
+    return taskId;
+  }
+
+  cancelCollect(taskId: string): boolean {
+    this.ensureInit();
+    return this.taskQueue!.cancelTask(taskId);
+  }
+
+  getTaskProgress(taskId: string): CollectProgress | null {
+    this.ensureInit();
+    return this.taskQueue!.getTaskProgress(taskId);
+  }
+
+  getQueueStatus() {
+    this.ensureInit();
+    return this.taskQueue!.getStatus();
+  }
+
+  getWorks(params: WorksQueryParams): PagedResult<WorkItem & { metrics?: WorkMetrics }> {
+    return AnalyticsStore.getPagedWorks(params);
+  }
+
+  getWorkMetrics(workId: string): WorkMetrics | undefined {
+    return AnalyticsStore.getWorkMetrics(workId);
+  }
+
+  getAccountStats(accountId: string, days?: number): AccountStatsSnapshot[] {
+    return AnalyticsStore.getAccountStats(accountId, days);
+  }
+
+  getBenchmarks(ownerAccountId?: string): BenchmarkAccount[] {
+    return AnalyticsStore.getBenchmarks(ownerAccountId);
+  }
+
+  addBenchmark(benchmark: Omit<BenchmarkAccount, 'id' | 'createdAt'>): BenchmarkAccount {
+    return AnalyticsStore.addBenchmark(benchmark);
+  }
+
+  updateBenchmark(id: string, updates: Partial<BenchmarkAccount>): BenchmarkAccount | null {
+    return AnalyticsStore.updateBenchmark(id, updates);
+  }
+
+  deleteBenchmark(id: string): boolean {
+    return AnalyticsStore.deleteBenchmark(id);
+  }
+
+  getLastCollectInfo(accountId: string) {
+    return AnalyticsStore.getLastCollectInfo(accountId);
+  }
+
+  clearAccountData(accountId: string): void {
+    AnalyticsStore.clearAccountData(accountId);
+  }
+}
+
+export const AnalyticsService = new AnalyticsServiceImpl();

@@ -37,6 +37,7 @@ export interface RouteMetaItem {
 export const ROUTE_META: Record<string, RouteMetaItem> = {
   '/dashboard': { title: '仪表盘', icon: '🏠', closable: false },
   '/accounts': { title: '账号管理', icon: '👤' },
+  '/analytics': { title: '账号分析', icon: '📊' },
   '/publish/video': { title: '发布视频', icon: '🎬', props: { contentType: 'video' } },
   '/publish/image': { title: '发布图文', icon: '🖼️', props: { contentType: 'image' } },
   '/publish/article': { title: '发布文章', icon: '📄', props: { contentType: 'article' } },
