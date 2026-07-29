@@ -4,6 +4,7 @@ import { DouyinCollector } from './platforms/DouyinCollector';
 import { XiaohongshuCollector } from './platforms/XiaohongshuCollector';
 import { KuaishouCollector } from './platforms/KuaishouCollector';
 import { WechatChannelsCollector } from './platforms/WechatChannelsCollector';
+import { ZhihuCollector } from './platforms/ZhihuCollector';
 import { CollectTaskQueue } from './CollectTaskQueue';
 import * as AnalyticsStore from './AnalyticsStore';
 import { AccountService } from '../AccountService';
@@ -20,6 +21,7 @@ import type {
   AnalyticsConfig,
   PlatformType,
   AccountCredential,
+  AccountAnalyticsPeriodData,
 } from '../../../types';
 
 type ProgressCallback = (p: CollectProgress) => void;
@@ -65,6 +67,8 @@ class AnalyticsServiceImpl {
         return new KuaishouCollector(account);
       case 'wechat_channels':
         return new WechatChannelsCollector(account);
+      case 'zhihu':
+        return new ZhihuCollector(account);
       default:
         throw new Error(`暂不支持平台: ${platform}`);
     }
@@ -156,7 +160,7 @@ class AnalyticsServiceImpl {
           const works = await collector.collectWorksList(config.workCollectLimit, incremental);
 
           const workItems = works.map((w, idx) => {
-            const progress = 40 + Math.round((idx + 1) / works.length * 50);
+            const progress = 40 + Math.round((idx + 1) / works.length * 40);
             updateProgress({
               message: `已采集 ${idx + 1}/${works.length} 条作品`,
               collectedCount: idx + 1,
@@ -228,6 +232,31 @@ class AnalyticsServiceImpl {
           log('作品列表采集完成', { count: worksCollected, totalWorksCount });
         }
 
+        if (type === 'all') {
+          updateProgress({
+            currentStage: 'collecting-period-analytics',
+            message: '采集账号周期数据概况（近7天/30天）...',
+            progress: 85,
+          });
+          try {
+            const periodDataList = await collector.collectAccountAnalytics();
+            if (periodDataList && periodDataList.length > 0) {
+              const normalized: AccountAnalyticsPeriodData[] = periodDataList.map(p => ({
+                ...p,
+                id: p.id || `${accountId}_${p.period || '7d'}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                accountId: p.accountId || accountId,
+                platform: p.platform || account.platform,
+              }));
+              const saved = AnalyticsStore.saveAccountAnalytics(normalized);
+              log(`周期数据概况采集完成，保存 ${saved} 条`);
+            } else {
+              log('周期数据概况：该平台暂未实现或无数据');
+            }
+          } catch (e) {
+            log('周期数据概况采集失败', { error: e instanceof Error ? e.message : String(e) });
+          }
+        }
+
         updateProgress({
           status: 'completed',
           currentStage: 'done',
@@ -289,6 +318,21 @@ class AnalyticsServiceImpl {
 
   getAccountStats(accountId: string, days?: number): AccountStatsSnapshot[] {
     return AnalyticsStore.getAccountStats(accountId, days);
+  }
+
+  saveAccountAnalytics(list: AccountAnalyticsPeriodData[]): number {
+    return AnalyticsStore.saveAccountAnalytics(list);
+  }
+
+  getAccountAnalytics(accountId: string, limit?: number): AccountAnalyticsPeriodData[] {
+    return AnalyticsStore.getAccountAnalytics(accountId, limit);
+  }
+
+  getLatestAccountAnalytics(
+    accountId: string,
+    period?: 'yesterday' | '7d' | '30d'
+  ): AccountAnalyticsPeriodData | null {
+    return AnalyticsStore.getLatestAccountAnalytics(accountId, period);
   }
 
   getBenchmarks(ownerAccountId?: string): BenchmarkAccount[] {
