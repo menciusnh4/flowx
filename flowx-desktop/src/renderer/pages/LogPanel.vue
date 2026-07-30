@@ -80,6 +80,20 @@
               <el-option label="最近 1000 行" :value="1000" />
               <el-option label="最近 2000 行" :value="2000" />
             </el-select>
+
+            <!-- 级别：多选下拉（与原生 el-select 风格一致，参考行数/日期下拉） -->
+            <el-select
+              v-model="selectedLevels"
+              multiple
+              collapse-tags
+              clearable
+              size="small"
+              style="width: 160px; margin-right: 8px;"
+              placeholder="全部级别"
+            >
+              <el-option v-for="opt in levelOptions" :key="opt.key" :label="opt.name" :value="opt.key" />
+            </el-select>
+
             <el-input
               v-model="searchKeyword"
               size="small"
@@ -141,6 +155,12 @@ import { electronApi } from '../utils/electron';
 const activeTab = ref<'publish' | 'main'>('publish');
 const lineLimit = ref(500);
 const searchKeyword = ref('');
+const selectedLevels = ref<LogLevel[]>([]); // 级别多选筛选，空数组 = 显示全部（零破坏）
+const levelOptions: { key: LogLevel; name: string }[] = [
+  { key: 'info', name: 'Info' },
+  { key: 'warn', name: 'Warning' },
+  { key: 'error', name: 'Error' },
+];
 const loading = ref(true);
 const rawContent = ref('');
 const logTextRef = ref<HTMLElement | null>(null);
@@ -165,13 +185,19 @@ function detectLevel(line: string): LogLevel {
   return 'info';
 }
 
-/** 逐行解析 + 搜索过滤，每行带级别用于着色 */
+/** 逐行解析 + 关键词/级别双重过滤，每行带级别用于着色。
+ *  级别筛选与关键词搜索为 AND 关系；selectedLevels 为空表示不过滤级别（显示全部）。 */
 const logLines = computed<{ text: string; level: LogLevel }[]>(() => {
   const kw = searchKeyword.value.trim().toLowerCase();
+  const levels = selectedLevels.value;
   return rawContent.value
     .split('\n')
-    .filter(line => !kw || line.toLowerCase().includes(kw))
-    .map(line => ({ text: line, level: detectLevel(line) }));
+    .map(line => ({ text: line, level: detectLevel(line) }))
+    .filter(({ text, level }) => {
+      if (levels.length && !levels.includes(level)) return false;
+      if (kw && !text.toLowerCase().includes(kw)) return false;
+      return true;
+    });
 });
 
 function formatSize(bytes: number): string {
