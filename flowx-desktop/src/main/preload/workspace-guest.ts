@@ -139,12 +139,49 @@ function scrapeStats(): { followers?: string; likes?: string } {
   }
 }
 
-/** 自动化体检：关键布局节点是否缺失 + 节点总数 */
+/**
+ * 自动化体检：平台无关的 DOM 渲染健康诊断。
+ *
+ * 旧实现写死 ['header','main','nav','#root','#app'] 五类脚手架约定，但抖音/小红书/快手/知乎等
+ * 创作后台几乎不用语义标签 <header>/<nav>、根节点 id 也不是 #root（小红书是 #app、抖音是其它），
+ * 导致这三项「永远」查不到、每次都误报缺失，掩盖了真正的渲染异常。
+ *
+ * 新实现改为平台无关的四维判断，任何正常渲染的第三方页都应判为「完整」：
+ *  1) 文档骨架：html / body 是否存在（任何页面都必有，缺失即真崩）
+ *  2) 内容充分性：节点总数与可见正文是否达到「真渲染」阈值（白屏/崩溃页节点极少且无正文）
+ *  3) 布局壳：语义标签（header/main/nav）或常见 class 容器（header/nav/layout/container/content）任一存在
+ *  4) 异常页特征：短正文 + 命中 404/502/连接失败/ERR_ 等已知错误签名，明确提示而非误判为「正常」
+ */
+const ERR_SIGNATURES = ['页面不存在', '页面走丢了', '连接失败', '网络异常', '无法访问', '404', '502', '503', 'err_', 'not found'];
+
 function diagnoseDom(): { ok: boolean; missing: string[]; nodeCount: number } {
   try {
-    const critical = ['header', 'main', 'nav', '#root', '#app'];
-    const missing = critical.filter((sel) => !document.querySelector(sel));
-    return { ok: missing.length === 0, missing, nodeCount: document.getElementsByTagName('*').length };
+    const missing: string[] = [];
+    const root = document.documentElement;
+    const body = document.body;
+    const nodeCount = document.getElementsByTagName('*').length;
+
+    // 1) 文档骨架
+    if (!root) missing.push('html');
+    if (!body) missing.push('body');
+
+    // 2) 内容充分性：正常渲染页节点众多且有可见正文；白屏/崩溃页节点极少且无正文
+    const bodyText = body ? (body.innerText || body.textContent || '').trim() : '';
+    const hasContent = nodeCount > 80 && bodyText.length > 0;
+    if (!hasContent) missing.push('content');
+
+    // 3) 布局壳：语义标签或常见 class 容器任一存在即认为骨架在（兼容各平台不同实现）
+    const hasShell = !!document.querySelector(
+      'header, main, nav, [class*="header" i], [class*="nav" i], [class*="layout" i], [class*="container" i], [class*="content" i]',
+    );
+    if (!hasShell) missing.push('layout-shell');
+
+    // 4) 异常页特征：仅在「短正文」页命中错误签名才标记，避免正常内容里的偶发关键字误判
+    const lowerText = bodyText.toLowerCase();
+    const hitErr = ERR_SIGNATURES.some((s) => lowerText.indexOf(s.toLowerCase()) !== -1) && bodyText.length < 300;
+    if (hitErr) missing.push('error-page');
+
+    return { ok: missing.length === 0, missing, nodeCount };
   } catch {
     return { ok: false, missing: ['<error>'], nodeCount: 0 };
   }
