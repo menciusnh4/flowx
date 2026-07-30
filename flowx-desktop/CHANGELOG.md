@@ -4,6 +4,60 @@ All notable changes to the FlowX Desktop project will be documented in this file
 
 ---
 
+## [v0.1.7] - 2026-07-30
+
+> X（Twitter）平台账号管理接入 · 多源账号信息精准提取 · 前端平台图标集成
+
+### ✨ 亮点速览
+
+- 🐦 **X（Twitter）账号管理接入** — 全新平台适配器 `x.ts`，支持扫码授权、登录态检测、昵称/头像/handle/粉丝数/关注数提取、刷新账号信息、打开创作中心
+- 🧠 **多源账号信息提取策略** — 优先从 `window.__INITIAL_STATE__`（`state.entities.users.entities` / `state.user` / `state.session.user` / `state.currentUser`）提取昵称、头像、handle；同时支持 `SideNav_AccountSwitcher_Button` DOM、`UserAvatar-Container-<handle>` data-testid、meta/title 等 8 级兜底策略
+- 🎨 **前端 X 平台图标集成** — 新增 `assets/x.svg`（黑底白 X 风格），并在账号管理页、仪表盘、数据分析页三个页面的 `PLATFORM_ICONS` 中完成映射
+- 🔧 **发布功能占位实现** — `publishVideo / publishImage / publishArticle` 默认返回"发布功能开发中"提示，避免平台选择时出现空实现异常
+
+### 🚀 新功能
+
+#### 1. X（Twitter）平台适配器（`src/main/services/platforms/x.ts`）
+
+| 能力 | 实现方式 |
+|---|---|
+| **登录态检测** | 优先 `auth_token` + `ct0` cookie → URL 保护页命中 → DOM 辅助（Home 导航/Compose 按钮/Profile 链接/退出文本）综合判断 |
+| **昵称提取** | ① `window.__INITIAL_STATE__` 多路径 → ② `SideNav_AccountSwitcher_Button` 内 span 过滤 @ → ③ 按钮内 `[aria-label]` → ④ `User-Name` → ⑤ `UserAvatar-Container-*` 子 `[aria-label]` → ⑥ `og:title` → ⑦ `document.title` |
+| **头像提取** | ① `__INITIAL_STATE__` 中 `profile_image_url_https` / `profile_image_url` → ② 账号切换按钮 `img` → ③ `UserAvatar-Container-*` 容器 `img` → ④ `AppTabBar_Profile_Link img` → ⑤ meta `og:image` → ⑥ 兜底 `pbs.twimg.com/profile_images` |
+| **Handle 提取** | ① `__INITIAL_STATE__` 中 `screen_name`（正则校验 `^[a-zA-Z0-9_]{1,15}$`）→ ② `UserAvatar-Container-<handle>` data-testid 正则提取 → ③ 按钮 `@xxx` 文本 → ④ 按钮内 `a[href]` → ⑤ 个人资料链接 → ⑥ title/meta → ⑦ body 全文 |
+| **创作中心 URL** | `https://x.com/home` |
+| **发布入口 URL** | `https://x.com/compose/post`（占位，发布功能待开发） |
+
+#### 2. 平台注册表与类型扩展
+
+- `src/types/index.ts`：`KNOWN_PLATFORMS` 数组新增 `'x'`
+- `src/main/services/platforms/index.ts`：新增 `import './x'` 隐式注册入口
+- `PlatformMeta.contentLimits`：推文正文字数限制 280 字符；长推文（article）限制 25000 字符
+- `PlatformMeta.nicknameSelectors / avatarSelectors`：列出 DOM 兜底选择器，供外部诊断工具使用
+- `capabilities`：`publishVideo / publishImage / publishArticle` 均设为 `false`，明确当前仅账号管理
+
+#### 3. 前端三页图标映射
+
+| 页面 | 文件 | 变更 |
+|---|---|---|
+| 账号管理 | `AccountPanel.vue` | `import iconX from '../assets/x.svg'` + `PLATFORM_ICONS.x = iconX` |
+| 仪表盘 | `Dashboard.vue` | 同上 |
+| 数据分析 | `AnalyticsPanel.vue` | 同上 |
+
+### 📐 设计要点
+
+- **分层兜底**：每个字段（昵称/头像/handle）均采用 `window.__INITIAL_STATE__` 第一层 + DOM 精确匹配第二层 + meta/title 第三层 + body 全文第四层的四级架构；任何一层失败都不会影响其他字段
+- **用户偏好对齐**：handle 提取使用 `platformAccountId` 字段（符合「用平台原生账号 ID 筛选」的偏好），并对从 `data-testid` 提取的 handle 做严格 `^[a-zA-Z0-9_]{1,15}$` 校验，避免脏数据
+- **失败安全**：所有注入脚本使用独立 try-catch，单个脚本失败仅记录 warn 日志，整个 `extractPageInfo` 一定会返回至少 `{ nickname: '' }`，不会向上层抛异常
+- **向后兼容**：`meta.icon = 'X'` 字符串占位保留，`PLATFORM_ICONS.x` 前端映射优先于 meta.icon；两者并存不冲突
+
+### 🧪 验证结果
+
+- 对 `x.ts` 中 **4 个 `executeJavaScript` 注入脚本**（登录检测 / 昵称提取 / 头像提取 / handle 提取）做独立语法校验，全部通过
+- TypeScript 平台适配器接口方法签名校验通过（`detectLoggedIn` / `extractPageInfo` / `publish`）
+
+---
+
 ## [v0.1.6] - 2026-07-29
 
 > 知乎平台数据分析接入 · CDP API 监听精准采集 · 账号周期数据 · 增量采集稳定化
