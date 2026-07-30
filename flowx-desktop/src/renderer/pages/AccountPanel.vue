@@ -56,10 +56,22 @@
             <div style="display:flex; align-items:center; gap:10px">
               <el-avatar
                 :size="40"
-                :src="row.avatar"
-                :style="{ background: row.avatar ? 'transparent' : '#ec4899', color: '#fff', fontWeight: 600 }"
+                :style="avatarSlotStyle(asAccount(row))"
               >
-                {{ (row.nickname || 'U').slice(0, 1) }}
+                <template v-if="avatarSlotRenderImg(asAccount(row))">
+                  <img
+                    :src="avatarSlotImgSrc(asAccount(row))"
+                    :alt="(row.nickname || 'U').slice(0, 1)"
+                    referrerpolicy="no-referrer"
+                    crossorigin="anonymous"
+                    style="width: 100%; height: 100%; object-fit: cover; display: block; border-radius: 50%; background: transparent;"
+                    @load="onAvatarSlotImgLoaded(asAccount(row))"
+                    @error="onAvatarSlotImgFailed(asAccount(row))"
+                  />
+                </template>
+                <template v-else>
+                  {{ (row.nickname || 'U').slice(0, 1) }}
+                </template>
               </el-avatar>
               <div style="line-height:1.4; flex:1">
                 <div style="font-size:14px; color:#303133; font-weight:500">{{ row.nickname }}</div>
@@ -393,6 +405,212 @@ function formatCount(n: number | undefined): string {
 /** 类型辅助：将 el-table 默认的 DefaultRow 断言为 AccountInfo */
 function asAccount(row: unknown): AccountInfo {
   return row as AccountInfo;
+}
+
+/** 类引号字符黑名单（与平台层 bilibili.ts QUOTE_LIKE_CHARCODES 保持一致，两层逻辑必须同步）。
+ *  逐字符 charCode 查表去掉引号族字符（ASCII 反引号 U+0060 只是 28 种之一；之前用 /[`"'\\]/g 只覆盖其中 4 种，所以一直洗不掉）。*/
+const QUOTE_LIKE_CHARCODES_FRONTEND = new Set<number>([
+  0x0027, 0x0022, 0x0060, 0x00b4, 0x005c, 0x2018, 0x2019, 0x201c, 0x201d,
+  0x2039, 0x203a, 0x00ab, 0x00bb, 0x02cb, 0x02ca, 0x0300, 0x0301, 0xff07,
+  0xff02, 0xff40, 0x300c, 0x300d, 0x300e, 0x300f, 0x201a, 0x201e, 0x201b, 0x201f,
+]);
+
+/** 前端层的 _cleanStr（和平台层同算法，避免两处逻辑漂移） */
+function cleanAvatarStr(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (QUOTE_LIKE_CHARCODES_FRONTEND.has(c)) continue;
+    if (c === 0x09 || c === 0x0a || c === 0x0d || c === 0x0b || c === 0x0c) {
+      out += ' ';
+      continue;
+    }
+    out += s.charAt(i);
+  }
+  return out.replace(/\s{2,}/g, ' ').trim();
+}
+
+/** 前端层的头像 URL 提取 + 规范化（与平台层 _normalizeUrl 对齐）：
+ *  1. cleanAvatarStr 逐字符去引号
+ *  2. 协议相对路径补 https
+ *  3. 正则从噪音中提取首个 http(s) URL
+ *  4. B 站自有域名 http→https
+ *  5. 最后按 RFC3986 合法 URL 字符截一次（去除末尾粘的中文标点/括号等） */
+function normalizeAvatarSrc(rawInput: string): string {
+  const cleaned = cleanAvatarStr(rawInput);
+  if (!cleaned) return '';
+  if (cleaned.indexOf('data:') === 0) return cleaned; // dataURI 原样返回（前端的默认图偶尔是 dataURL）
+  if (cleaned.indexOf('1x1') !== -1 && cleaned.indexOf('base64') !== -1) return '';
+  if (cleaned.indexOf('transparent') !== -1 && cleaned.indexOf('base64') !== -1) return '';
+  let url = cleaned;
+  if (url.indexOf('//') === 0) url = 'https:' + url;
+  if (url.indexOf('http:') !== 0 && url.indexOf('https:') !== 0) {
+    const m = url.match(/https?:\/\/[^\s"'`<>【】《》（）()[\]{}，,。;；:：]+/i);
+    if (m && m[0]) url = m[0];
+  }
+  url = cleanAvatarStr(url);
+  if (url.indexOf('/') === 0 && url.indexOf('//') !== 0) return '';
+  if (url.indexOf('http:') === 0 || url.indexOf('https:') === 0) {
+    try {
+      const protoEnd = url.indexOf('//');
+      if (protoEnd !== -1) {
+        const afterProto = url.substring(protoEnd + 2);
+        const hostEndIdx = afterProto.search(/[\/?#:]/);
+        const host = (hostEndIdx === -1 ? afterProto : afterProto.substring(0, hostEndIdx)).toLowerCase();
+        const biliDomains = [
+          'hdslb.com',
+          'bilibili.com',
+          'bilibili.cn',
+          'bilibili.co.id',
+          'bilibili.tv',
+          'biligame.com',
+          'bilibiliw.com',
+        ];
+        const isBili = biliDomains.some((d) => host === d || host.endsWith('.' + d));
+        if (isBili && url.indexOf('http:') === 0) {
+          url = 'https:' + url.substring(5);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    // 最后一道：合法 URL 字符边界截齐
+    const m2 = url.match(/https?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/i);
+    if (m2 && m2[0]) url = m2[0];
+    return url;
+  }
+  return '';
+}
+
+/** 【B 站反引号专项："三重保险"硬清反引号字符（U+0060 半角 / U+FF40 全角）】
+ *  之前用逐字符 charCodeAt 查表 + 正则替换两层都没把字符串里的反引号去掉（见你最新 DOM 快照里 <img src="`https://...jpg`"> 两端真的包着反引号）。
+ *  现在在最脏的入口 raw 字符串上再加 3 道独立的硬处理：
+ *   1) while + indexOf 循环替换 —— 对连续嵌套反引号绝对有效（有些场景字符串被多层反引号包裹，单次 replaceAll 会漏下一层）
+ *   2) 两端再分别"如果首字符是反引号就 slice(1)" + "如果尾字符是反引号就 slice(0,-1)" —— 即使正则和查表全漏，末端一定干净
+ *   3) 对于 B 站头像路径（包含 "/bfs/face/"），从字符串里抽取最后一次出现的 "/bfs/face/" 到第一次 ".jpg"/".png"/".webp" 之后那一段 —— 即使两端都有噪音字符，路径本体也能被完整截出来
+ */
+function hardStripBackticks(raw: string, platform?: string): string {
+  if (!raw) return '';
+  let s = String(raw);
+  // ------ 第 1 层：循环替换（U+0060 + U+FF40）------
+  while (s.indexOf('`') !== -1) s = s.replace(/`/g, '');
+  while (s.indexOf('｀') !== -1) s = s.replace(/｀/g, '');
+  // 顺便把所有"看起来像反引号/弯引号"的字符也再剥一次（和平台层的 SET 表对齐，用 replaceAll 双保险）
+  s = s.replace(/[\u2018\u2019\u201c\u201d\u2039\u203a\u00ab\u00bb\u02cb\u02ca\u0300\u0301\uff07\uff02\u300c\u300d\u300e\u300f\u201a\u201e\u201b\u201f]/g, '');
+  // ------ 第 2 层：两端字符检查，再剥一次（即使前面全漏了也能把首尾各一个反引号吃掉）------
+  if (s.length >= 2 && (s.charAt(0) === '`' || s.charAt(0) === '｀')) s = s.substring(1);
+  if (s.length >= 2 && (s.charAt(s.length - 1) === '`' || s.charAt(s.length - 1) === '｀')) s = s.substring(0, s.length - 1);
+  // ------ 第 3 层（只针对 B 站）：按 "/bfs/face/" 边界抽取真正的路径本体 ------
+  if ((platform || '').toLowerCase() === 'bilibili') {
+    const idxBfsFace = s.lastIndexOf('/bfs/face/');
+    if (idxBfsFace >= 0) {
+      // 找图片扩展名的结束位置
+      const tail = s.substring(idxBfsFace); // "/bfs/face/abc.jpg@56w_56h_1c.jpg 其它噪音..."
+      const extMatch = tail.match(/^(\/bfs\/face\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%@]+?\.(jpg|jpeg|png|webp|gif))([?#].*)?$/i);
+      if (extMatch && extMatch[1]) {
+        // 最终绝对路径拼接：host 取原字符串里 idxBfsFace 之前的 https?://[host] 部分
+        const before = s.substring(0, idxBfsFace);
+        const hostMatch = before.match(/https?:\/\/[A-Za-z0-9\-.]+/i);
+        const host = hostMatch && hostMatch[0] ? hostMatch[0] : 'https://i0.hdslb.com';
+        return host + extMatch[1];
+      }
+    }
+  }
+  // 空白再 trim 一次收尾
+  return s.trim();
+}
+
+// ============================= [头像渲染新链路：我们完全掌控 <img>] =============================
+/** 记录每张头像的"加载结果"：true=成功加载图片，false=确认加载失败（显示首字母），undefined=尚未加载完 */
+const _avatarSlotResult = new Map<string, boolean>();
+/** 同一个账号 ID 只打印一次 slot 链路诊断，避免刷屏 */
+const _avatarSlotDiagnosed = new Set<string>();
+
+/** el-avatar 的内联样式：有图片且成功加载 → 背景透明；否则（没图片/加载失败）→ 粉色渐变 + 白字粗体首字母 */
+function avatarSlotStyle(acc: AccountInfo) {
+  const imgSrc = avatarSlotImgSrc(acc);
+  const loaded = _avatarSlotResult.get(acc.id);
+  const showImg = !!imgSrc && loaded !== false;
+  if (showImg) {
+    return { background: 'transparent', color: '#fff', fontWeight: 600 as const };
+  }
+  return { background: '#ec4899', color: '#fff', fontWeight: 600 as const };
+}
+
+/** 默认 slot 里要不要渲染 `<img>` 节点
+ *  - 有图片 URL 且没确认过失败 → 渲染 <img>（onerror 后再把它切回 false）
+ *  - 没图片 URL 或加载失败过 → 直接显示首字母 */
+function avatarSlotRenderImg(acc: AccountInfo): boolean {
+  const imgSrc = avatarSlotImgSrc(acc);
+  if (!imgSrc) return false;
+  const loaded = _avatarSlotResult.get(acc.id);
+  return loaded !== false; // 如果之前确认过失败，就不要再渲染 <img> 了，直接显示首字母
+}
+
+/** 默认 slot 里 `<img>` 的 src：直接取"反引号三重保险"后的结果 + 再做一次 URL 规范化，
+ *  **完全绕开任何"失败过就返回空"的守卫分支**，确保只要原始值里有 URL，就一定会被剥干净。 */
+function avatarSlotImgSrc(acc: AccountInfo): string {
+  const raw = acc.avatar || '';
+  if (!raw) return '';
+  // Step 1：hardStripBackticks 先剥反引号（B 站这轮的根因）+ 从 /bfs/face/ 抽取真路径
+  const s0 = hardStripBackticks(raw, acc.platform);
+  // Step 2：normalizeAvatarSrc 补协议（//xxx → https:）+ 从噪音里提取 URL + B 站域名强制 https
+  const s1 = normalizeAvatarSrc(s0);
+  // Step 3：如果 s1 还是空（因为 normalizeAvatarSrc 对一些未知协议/相对路径比较严格），
+  //         但 s0 已经是合法 http(s) 开头，就直接用 s0（防御"规范化函数把值吃了"）
+  let finalSrc = s1;
+  if (!finalSrc && /^https?:\/\/[A-Za-z0-9\-.]+/.test(s0)) {
+    finalSrc = s0;
+  }
+  // 同一个账号 ID 只打一次"Slot 链路三步诊断"（不再刷屏，但足够排障）
+  const k = `${acc.platform}:${acc.id}:${acc.userId || acc.platformAccountId || 'anon'}`;
+  if (!_avatarSlotDiagnosed.has(k)) {
+    _avatarSlotDiagnosed.add(k);
+    // 额外再打一次 raw 字符串的逐字符 charCode（只打首尾 6 个字符），如果以后还有"看起来像反引号但没命中"的字符，直接从这里看码位
+    const headCh: string[] = [];
+    const tailCh: string[] = [];
+    const nHead = Math.min(6, raw.length);
+    const nTail = Math.min(6, raw.length);
+    for (let i = 0; i < nHead; i++) headCh.push(`${raw.charAt(i)}:U+${raw.charCodeAt(i).toString(16).toUpperCase().padStart(4, '0')}`);
+    for (let i = Math.max(0, raw.length - nTail); i < raw.length; i++) tailCh.push(`${raw.charAt(i)}:U+${raw.charCodeAt(i).toString(16).toUpperCase().padStart(4, '0')}`);
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[avatarSlot] ${acc.platform}/${acc.nickname || '?'} (id=${acc.id}) → ` +
+        `(1)raw[len=${raw.length}]="${raw.substring(0, 160)}" ` +
+        `raw.head=[${headCh.join(' | ')}] raw.tail=[${tailCh.join(' | ')}] ` +
+        `(2)strip="${s0.substring(0, 160)}" ` +
+        `(3)norm="${s1.substring(0, 160)}" ` +
+        `→ finalSrc truthy=!!${!!finalSrc}` +
+        (finalSrc ? `, finalSrc="${finalSrc.substring(0, 160)}"` : ''),
+    );
+  }
+  return finalSrc;
+}
+
+/** 成功加载 <img> → 记录 true（下次仍然渲染 <img>），首字母 slot 不会被切到 */
+function onAvatarSlotImgLoaded(acc: AccountInfo) {
+  if (_avatarSlotResult.get(acc.id) === true) return; // 已成功过就别再重复打日志
+  _avatarSlotResult.set(acc.id, true);
+  // eslint-disable-next-line no-console
+  console.info(
+    `[avatarSlot] ✅ LOADED: platform=${acc.platform}, id=${acc.id}, nickname=${acc.nickname}, src=${avatarSlotImgSrc(acc).substring(0, 160)}`,
+  );
+}
+
+/** 加载失败 <img> → 记录 false（下一次渲染 avatarSlotRenderImg 返回 false，直接切到"首字母占位"，不再反复发请求刷屏） */
+function onAvatarSlotImgFailed(acc: AccountInfo) {
+  if (_avatarSlotResult.get(acc.id) === false) return;
+  _avatarSlotResult.set(acc.id, false);
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[avatarSlot] ❌ FAILED: platform=${acc.platform}, id=${acc.id}, nickname=${acc.nickname}。` +
+      `请打开 Network 面板，按状态码定位：404→URL不对 / 403→防盗链 Referer 拦截 / blocked→CSP或广告插件 / ERR_CERT→证书问题。` +
+      `三步诊断：raw="${(acc.avatar || '').substring(0, 160)}"` +
+      ` → strip="${hardStripBackticks(acc.avatar || '', acc.platform).substring(0, 160)}"` +
+      ` → norm="${normalizeAvatarSrc(hardStripBackticks(acc.avatar || '', acc.platform)).substring(0, 160)}"`,
+  );
 }
 
 /** 类型辅助：将 el-table 默认的 DefaultRow 断言为 AccountCategory */
