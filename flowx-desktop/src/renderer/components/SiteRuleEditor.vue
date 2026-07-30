@@ -347,30 +347,34 @@ async function handleSave() {
 
         <!-- 图片选择器 -->
         <el-form-item label="图片选择器">
-          <div class="picker-input">
-            <el-input v-model="form.imageSelector" placeholder="可选，如 .article-content img" />
-            <el-button
-              :type="pickingField === 'image' ? 'warning' : 'primary'"
-              @click="startPicking('image', 'multi')"
-            >
-              {{ pickingField === 'image' ? '拾取中...' : '拾取' }}
-            </el-button>
+          <div class="picker-field">
+            <div class="picker-input">
+              <el-input v-model="form.imageSelector" placeholder="可选，如 .article-content img" />
+              <el-button
+                :type="pickingField === 'image' ? 'warning' : 'primary'"
+                @click="startPicking('image', 'multi')"
+              >
+                {{ pickingField === 'image' ? '拾取中...' : '拾取' }}
+              </el-button>
+            </div>
+            <div class="form-hint">多选模式：点击多张图片，自动推断通用选择器</div>
           </div>
-          <div class="form-hint">多选模式：点击多张图片，自动推断通用选择器</div>
         </el-form-item>
 
         <!-- 话题标签选择器 -->
         <el-form-item label="话题标签">
-          <div class="picker-input">
-            <el-input v-model="form.tagsSelector" placeholder="可选，如 .tags a" />
-            <el-button
-              :type="pickingField === 'tags' ? 'warning' : 'primary'"
-              @click="startPicking('tags', 'multi')"
-            >
-              {{ pickingField === 'tags' ? '拾取中...' : '拾取' }}
-            </el-button>
+          <div class="picker-field">
+            <div class="picker-input">
+              <el-input v-model="form.tagsSelector" placeholder="可选，如 .tags a" />
+              <el-button
+                :type="pickingField === 'tags' ? 'warning' : 'primary'"
+                @click="startPicking('tags', 'multi')"
+              >
+                {{ pickingField === 'tags' ? '拾取中...' : '拾取' }}
+              </el-button>
+            </div>
+            <div class="form-hint">多选模式：点击多个话题标签</div>
           </div>
-          <div class="form-hint">多选模式：点击多个话题标签</div>
         </el-form-item>
 
         <!-- 作者、日期 -->
@@ -467,10 +471,25 @@ async function handleSave() {
   display: flex;
   gap: 8px;
   flex: 1;
+  min-width: 0;
 }
 
 .picker-input :deep(.el-input) {
   flex: 1;
+}
+
+/* 带提示的选择器字段：竖向排列，让提示落在输入框下方，输入框占满整行（与正文选择器一致） */
+.picker-field {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  width: 100%;
+  gap: 4px;
+}
+
+.picker-field > .picker-input {
+  flex: 0 0 auto;
+  width: 100%;
 }
 
 .form-hint {

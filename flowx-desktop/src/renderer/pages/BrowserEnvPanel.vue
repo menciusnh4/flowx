@@ -56,19 +56,37 @@
     </div>
 
     <!-- 环境配置添加/编辑弹窗 -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑环境配置' : '添加环境配置'" width="500px" destroy-on-close>
-      <el-form :model="form" :rules="rules" ref="formRef" label-width="100px" label-position="right">
+    <el-dialog
+      v-model="dialogVisible"
+      :title="isEdit ? '编辑环境配置' : '添加环境配置'"
+      width="620px"
+      class="env-edit-dialog"
+      destroy-on-close
+      append-to-body
+    >
+      <el-form :model="form" :rules="rules" ref="formRef" label-position="top">
         <el-form-item label="环境名称" prop="name">
           <el-input v-model="form.name" placeholder="如：主账号防关联配置" />
         </el-form-item>
-        <el-form-item label="User-Agent" prop="userAgent">
-          <div style="display:flex; width:100%; gap:8px">
-            <el-input v-model="form.userAgent" type="textarea" :rows="3" placeholder="浏览器指纹标识(User-Agent)" />
-            <el-button type="warning" size="small" style="align-self:flex-end" @click="generateRandomUA">
-              随机生成
-            </el-button>
-          </div>
+
+        <el-form-item prop="userAgent" class="ua-form-item">
+          <template #label>
+            <div class="ua-label">
+              <span class="ua-label__text"><span class="req-asterisk">*</span>User-Agent（浏览器指纹标识）</span>
+              <el-button type="warning" size="small" @click="generateRandomUA">
+                <el-icon><Refresh /></el-icon>&nbsp;随机生成
+              </el-button>
+            </div>
+          </template>
+          <el-input
+            v-model="form.userAgent"
+            type="textarea"
+            :rows="4"
+            resize="vertical"
+            placeholder="浏览器指纹标识(User-Agent)"
+          />
         </el-form-item>
+
         <el-form-item label="绑定代理 IP" prop="proxyId">
           <el-select v-model="form.proxyId" placeholder="使用本机直连 (不开启代理)" clearable style="width: 100%">
             <el-option label="使用本机直连" value="" />
@@ -296,5 +314,31 @@ function formatTime(ts: number): string {
   color: #909399;
   font-size: 14px;
   padding: 40px 0;
+}
+/* 编辑弹窗：User-Agent 标签行（标签 + 随机生成按钮左右分布） */
+.ua-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 12px;
+}
+.ua-label__text {
+  display: inline-flex;
+  align-items: center;
+}
+/* 必填星号：手动渲染在文字前，并隐藏 element-plus 自动注入的 ::before（避免自定义 label 插槽下星号被挤到独立一行） */
+.req-asterisk {
+  color: var(--el-color-danger);
+  margin-right: 4px;
+  font-weight: 600;
+}
+:deep(.ua-form-item.is-required.asterisk-left .el-form-item__label::before) {
+  content: none;
+}
+/* 矮屏兜底：弹窗内容超高时内部滚动，避免被视口截断 */
+:deep(.env-edit-dialog) .el-dialog__body {
+  max-height: 72vh;
+  overflow-y: auto;
 }
 </style>
