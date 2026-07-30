@@ -66,7 +66,12 @@ flowx-desktop/
 │   │   │       ├── shared.ts         # 核心：窗口/导航/CDP/evalJS/填写/按钮点击
 │   │   │       ├── douyin.ts         # 抖音
 │   │   │       ├── xiaohongshu.ts    # 小红书
-│   │   │       └── kuaishou.ts       # 快手
+│   │   │       ├── kuaishou.ts       # 快手
+│   │   │       ├── zhihu.ts          # 知乎
+│   │   │       ├── wechat_channels.ts # 微信视频号
+│   │   │       ├── wechat_official.ts # 微信公众号（仅账号管理）
+│   │   │       ├── toutiao.ts        # 今日头条（仅账号管理）
+│   │   │       └── x.ts              # X/Twitter（仅账号管理）
 │   │   ├── ipc/
 │   │   │   ├── index.ts              # IPC 注册（safeInvoke 封装）
 │   │   │   ├── account.ts            # 账号通道
@@ -119,10 +124,11 @@ flowx-desktop/
 
 ### ✅ 账号管理
 
-- 抖音 / 小红书 / 快手 平台扫码授权
+- 抖音 / 小红书 / 快手 / 微信视频号 / 知乎 / 微信公众号 / 今日头条 / X（Twitter）平台扫码授权
 - 每个账号独立 session partition（`persist:account_{id}`）
 - cookies 使用 `safeStorage` 加密存储（操作系统级密钥）
 - 从页面 DOM 提取昵称、头像、粉丝数、关注数、获赞数
+- X（Twitter）平台支持 `window.__INITIAL_STATE__` 优先提取 + `SideNav_AccountSwitcher_Button` / `UserAvatar-Container-<handle>` 多数据源兜底
 - 支持刷新 token、编辑备注、删除账号
 - 支持点击"打开创作中心"直接跳到对应平台后台
 
