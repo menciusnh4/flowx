@@ -493,13 +493,176 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
       // ignore
     }
 
-    // 5. 提取粉丝数/关注数（优先从个人主页提取）
+    // 5. 提取粉丝数/关注数（优先从 window.__INITIAL_STATE__ 提取 followers_count / friends_count）
     try {
       const statsScript = `
         (function() {
           try {
             var result = { followers: null, following: null };
-            // 辅助：解析 "1.2万" / "12.3K" / "1,234" 等格式
+
+            // ================ 方式 0：优先从 window.__INITIAL_STATE__ 提取（最可靠） ================
+            // X 的 INITIAL_STATE 中：followers_count = 粉丝数，friends_count = 关注数
+            // 🔑 注意：X 把 INITIAL_STATE 存在 <script> 标签里赋值给 window.__INITIAL_STATE__，
+            // 但部分首屏情况下 window.__INITIAL_STATE__ 尚未被赋值（脚本仍在解析），
+            // 因此我们直接从第 4 个 script 标签里用括号深度平衡法抠 JSON 再解析，
+            // 这样不依赖 window 变量，首屏、刷新、二次打开都能稳定取到。
+            try {
+              var state = null;
+              // 0a. 先试 window.__INITIAL_STATE__
+              try {
+                if (window.__INITIAL_STATE__ && typeof window.__INITIAL_STATE__ === 'object') {
+                  state = window.__INITIAL_STATE__;
+                }
+              } catch(eWin) {}
+              // 0b. 若 window 上拿不到，从 <script> 标签里自行抠 JSON（括号匹配法）
+              if (!state) {
+                try {
+                  var sc = document.querySelectorAll('script');
+                  for (var sci = 0; sci < sc.length; sci++) {
+                    var sraw = sc[sci].textContent || '';
+                    if (!/window\\.__INITIAL_STATE__\\s*=/.test(sraw)) continue;
+                    var mBegin = sraw.indexOf('window.__INITIAL_STATE__');
+                    var braceStart = sraw.indexOf('{', mBegin);
+                    if (braceStart === -1) continue;
+                    var depth = 0, inStr = false, strCh = '', braceEnd = -1;
+                    for (var k = braceStart; k < sraw.length; k++) {
+                      var ch = sraw[k], pv = k > braceStart ? sraw[k-1] : '';
+                      if (inStr) {
+                        if (ch === '\\\\' && pv !== '\\\\') { k++; continue; }
+                        if (ch === strCh) { inStr = false; continue; }
+                        continue;
+                      }
+                      if (ch === '\"' || ch === \"'\") { inStr = true; strCh = ch; continue; }
+                      if (ch === '{') depth++;
+                      else if (ch === '}') {
+                        depth--;
+                        if (depth === 0) { braceEnd = k; break; }
+                      }
+                    }
+                    if (braceEnd !== -1) {
+                      var jsonTxt = sraw.slice(braceStart, braceEnd + 1);
+                      state = JSON.parse(jsonTxt);
+                      break;
+                    }
+                  }
+                } catch(eScript) {}
+              }
+
+              // 0c. state 拿到了 → 精确定位「当前登录账号」
+              if (state) {
+                // 步骤 1：从 state.session 等位置找出【当前登录账号】的 id_str / screen_name
+                var curId = null;    // 当前登录账号的数字 id（最优先）
+                var curScreen = null;// 当前登录账号的 screen_name（handle）
+                try {
+                  var sessionHit = null;
+                  // 找 session.* 下 user_id_str / user_id / id_str / screen_name
+                  (function walkS(o, p, d) {
+                    if (d > 8 || !o || sessionHit) return;
+                    if (Array.isArray(o)) { for (var wi = 0; wi < Math.min(o.length, 5); wi++) walkS(o[wi], p + '[' + wi + ']', d + 1); return; }
+                    if (typeof o !== 'object') return;
+                    for (var k in o) {
+                      if (!curId && /^(user_id_str|user_id|id_str|viewerId|viewer_id_str|logged_in_user_id)$/.test(k) && typeof o[k] === 'string' && /^\\d+$/.test(o[k])) {
+                        curId = o[k];
+                      }
+                      if (!curScreen && /^(screen_name)$/.test(k) && typeof o[k] === 'string') {
+                        // session 下的 screen_name 很可能就是当前登录用户
+                        if (/\\.session(?:\\.|\\[)/.test(p)) curScreen = o[k];
+                      }
+                      if (typeof o[k] === 'object') walkS(o[k], p + '.' + k, d + 1);
+                      if (curId && curScreen) break;
+                    }
+                  })(state, 'root', 0);
+                } catch(eWalkS) {}
+
+                // 步骤 2：从 DOM 再兜底找当前登录者的 screen_name（头像容器 data-testid / @xxx 文本）
+                if (!curScreen) {
+                  try {
+                    var ava = document.querySelector('[data-testid^=\"UserAvatar-Container-\"]');
+                    if (ava && ava.getAttribute) {
+                      var avaDT = ava.getAttribute('data-testid') || '';
+                      var avaM = avaDT.match(/UserAvatar-Container-([a-zA-Z0-9_]{1,15})/);
+                      if (avaM && avaM[1]) curScreen = avaM[1];
+                    }
+                  } catch(eAva) {}
+                }
+                if (!curScreen) {
+                  try {
+                    var sw = document.querySelector('[data-testid=\"SideNav_AccountSwitcher_Button\"]');
+                    if (sw) {
+                      var swText = sw.textContent || '';
+                      var atM = swText.match(/@([a-zA-Z0-9_]{1,15})/);
+                      if (atM && atM[1]) curScreen = atM[1];
+                    }
+                  } catch(eSw) {}
+                }
+
+                // 步骤 3：从 entities.users.entities 收集所有 user，先按精确命中取，否则走回退
+                var usersMap = (state.entities && state.entities.users && state.entities.users.entities) || {};
+                var userKeys = Object.keys(usersMap);
+                var primaryUser = null;      // 当前登录账号（命中 curId 或 curScreen）
+                var fallbackUser = null;     // 回退：取 map 中第一个有 follow*_count 的 user
+                for (var fui = 0; fui < userKeys.length; fui++) {
+                  var fk = userKeys[fui];
+                  var fu = usersMap[fk];
+                  if (!fu || typeof fu !== 'object') continue;
+                  if (!primaryUser) {
+                    var idMatch = curId && (fu.id_str === curId || String(fu.id) === String(curId) || fk === curId);
+                    var snMatch = curScreen && (fu.screen_name && fu.screen_name.toLowerCase() === String(curScreen).toLowerCase());
+                    if (idMatch || snMatch) primaryUser = fu;
+                  }
+                  if (!fallbackUser && (typeof fu.followers_count === 'number' || typeof fu.friends_count === 'number')) {
+                    fallbackUser = fu;
+                  }
+                  if (primaryUser) break;
+                }
+                var chosenUser = primaryUser || fallbackUser || null;
+
+                // 也试试 state.user / state.session.user / state.currentUser
+                var sideUsers = [];
+                try {
+                  if (state.user) sideUsers.push(state.user);
+                  if (state.session && state.session.user) sideUsers.push(state.session.user);
+                  if (state.currentUser) sideUsers.push(state.currentUser);
+                } catch(eSide) {}
+                for (var sui = 0; sui < sideUsers.length; sui++) {
+                  var su = sideUsers[sui];
+                  if (!su || typeof su !== 'object') continue;
+                  var idMatch2 = curId && (su.id_str === curId || String(su.id) === String(curId));
+                  var snMatch2 = curScreen && su.screen_name && su.screen_name.toLowerCase() === String(curScreen).toLowerCase();
+                  if (idMatch2 || snMatch2) { chosenUser = su; break; }
+                  if (!chosenUser && (typeof su.followers_count === 'number' || typeof su.friends_count === 'number')) {
+                    chosenUser = su;
+                  }
+                }
+
+                // 步骤 4：写入结果
+                if (chosenUser) {
+                  if (typeof chosenUser.followers_count === 'number') result.followers = chosenUser.followers_count;
+                  if (typeof chosenUser.friends_count === 'number')   result.following = chosenUser.friends_count;
+                  if (typeof chosenUser.following_count === 'number' && result.following === null) result.following = chosenUser.following_count;
+                }
+
+                // 把「当前登录者标识」挂到 result 上，方便上层日志诊断
+                try {
+                  result._diag = {
+                    curId: curId || null,
+                    curScreen: curScreen || null,
+                    chosenScreen: chosenUser ? chosenUser.screen_name : null,
+                    chosenName: chosenUser ? chosenUser.name : null,
+                    chosenIdStr: chosenUser ? chosenUser.id_str : null,
+                    usersMapLen: userKeys.length,
+                    hitPrimary: !!primaryUser,
+                  };
+                } catch(eDiag) {}
+              }
+            } catch(eInit) {}
+
+            // 若 INITIAL_STATE 已经把两个字段都拿到，直接返回（不再跑 DOM 兜底）
+            if (result.followers !== null && result.following !== null) {
+              return result;
+            }
+
+            // ================ 兜底：辅助：解析 "1.2万" / "12.3K" / "1,234" 等格式 ================
             function _parseNum(s) {
               if (!s) return null;
               var t = String(s).replace(/\\s+/g, '').replace(/,/g, '');
@@ -513,7 +676,8 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
               else if (/M/i.test(t)) base *= 1000000;
               return Math.round(base);
             }
-            // 方式 A：找 a[href$="/followers"] 和 a[href$="/following"]
+
+            // ================ 方式 A：找 a[href$="/followers"] 和 a[href$="/following"] ================
             var links = document.querySelectorAll('a[href$="/followers"], a[href$="/following"]');
             for (var i = 0; i < links.length; i++) {
               var a = links[i];
@@ -530,7 +694,7 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
               if (href.indexOf('/followers') !== -1 && result.followers === null) result.followers = val;
               if (href.indexOf('/following') !== -1 && result.following === null) result.following = val;
             }
-            // 方式 B：body 文本正则 "12.3K 粉丝" / "粉丝 12.3K" 或 "Followers"
+            // ================ 方式 B：body 文本正则 "12.3K 粉丝" / "粉丝 12.3K" 或 "Followers" ================
             if (result.followers === null || result.following === null) {
               try {
                 var bt = (document.body ? document.body.innerText : '') || '';
@@ -555,6 +719,10 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
       const stats: any = await win.webContents.executeJavaScript(statsScript) || {};
       if (typeof stats.followers === 'number') fansCount = stats.followers;
       if (typeof stats.following === 'number') followCount = stats.following;
+      // 把提取诊断信息打到日志，便于后续定位
+      if (stats._diag) {
+        log('info', 'extractPageInfo', `[x-fans-diag] ${JSON.stringify(stats._diag)}`);
+      }
     } catch (e) {
       log('warn', 'extractPageInfo', '提取粉丝/关注数失败: ' + (e as Error).message);
     }
