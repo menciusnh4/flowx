@@ -241,7 +241,7 @@ export abstract class BaseCollector {
     });
   }
 
-  private networkCollector: {
+  protected networkCollector: {
     urlPattern: RegExp | null;
     responses: any[];
     processedIndex: number;

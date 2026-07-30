@@ -696,7 +696,7 @@ export class DouyinCollector extends BaseCollector {
       while (hasMore && allWorks.length < limit && page < maxPages && !hitIncrementalStop) {
         const beforeCount = this.getResponseCount();
         
-        const scrolled = await this.scrollToBottom();
+        const scrolled = await this.tryScrollToBottom();
         if (!scrolled) {
           log('info', 'scroll-fail', '滚动到底部失败，停止加载');
           break;
@@ -784,7 +784,7 @@ export class DouyinCollector extends BaseCollector {
     throw new Error(`等待新响应超时（${timeoutMs}ms）`);
   }
 
-  private async scrollToBottom(): Promise<boolean> {
+  private async tryScrollToBottom(): Promise<boolean> {
     try {
       await this.safeEval(`
         window.scrollTo(0, document.body.scrollHeight);
