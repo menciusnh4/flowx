@@ -742,10 +742,118 @@ export interface AccountStatsSnapshot {
   totalInteractions?: number;
   /** 当日发布作品数 */
   worksPublished?: number;
+  /** 账号作品总数 */
+  worksCount?: number;
   /** 当日平均完播率 */
   avgCompletionRate?: number;
   /** 当日平均互动率 */
   avgInteractionRate?: number;
+  /** 采集时间戳 */
+  collectedAt: number;
+}
+
+/** 带环比的数值指标 */
+export interface AnalyticsMetricValue {
+  value: number;
+  /** 环比变化百分比（正数为+，负数为-），可能为 null 表示无数据 */
+  changePct?: number | null;
+  /** 单位：万/%/秒/分 等，空则按字段推断 */
+  unit?: string;
+}
+
+/** 单维度与同类创作者对比 */
+export interface PeerCompare {
+  dimension: string;
+  /** 我的数值 */
+  mine: number;
+  /** 同类作者平均/基准值 */
+  peer?: number;
+  /** 超过同类作者的百分比（0-100），-1 表示无数据 */
+  beatPct?: number;
+}
+
+/**
+ * 账号周期数据概况（近7天 / 近30天 / 昨日）
+ * 由各平台数据中心页面采集，支持跨平台通用字段 + 平台专属字段
+ */
+export interface AccountAnalyticsPeriodData {
+  /** 唯一ID：{accountId}_{period}_{timestamp} */
+  id: string;
+  /** 关联账号ID */
+  accountId: string;
+  /** 平台：douyin / xiaohongshu / kuaishou / wechatChannels */
+  platform: string;
+  /** 周期：yesterday / 7d / 30d */
+  period: 'yesterday' | '7d' | '30d';
+  /** 统计开始日期（本地时区 YYYY-MM-DD） */
+  startDate?: string;
+  /** 统计结束日期（本地时区 YYYY-MM-DD） */
+  endDate?: string;
+
+  // ====== 观看/曝光维度 ======
+  /** 曝光数（展现量） */
+  impressions?: AnalyticsMetricValue;
+  /** 播放/观看量 */
+  views?: AnalyticsMetricValue;
+  /** 封面点击率 % */
+  coverClickRate?: AnalyticsMetricValue;
+  /** 平均观看时长（秒） */
+  avgWatchDurationSec?: AnalyticsMetricValue;
+  /** 观看总时长（秒）— 平台有时会给分钟，统一存秒 */
+  totalWatchDurationSec?: AnalyticsMetricValue;
+  /** 完播率 % */
+  completionRate?: AnalyticsMetricValue;
+  /** 完成播放量 */
+  completedViews?: AnalyticsMetricValue;
+
+  // ====== 互动维度 ======
+  /** 点赞数 */
+  likes?: AnalyticsMetricValue;
+  /** 评论数 */
+  comments?: AnalyticsMetricValue;
+  /** 收藏数（小红书特有，其他平台也可能存在） */
+  favorites?: AnalyticsMetricValue;
+  /** 分享/转发数 */
+  shares?: AnalyticsMetricValue;
+  /** 互动数总和（赞+评+藏+转） */
+  interactions?: AnalyticsMetricValue;
+  /** 互动率 % */
+  interactionRate?: AnalyticsMetricValue;
+
+  // ====== 粉丝维度 ======
+  /** 净增粉丝 */
+  netFans?: AnalyticsMetricValue;
+  /** 新增关注/涨粉 */
+  newFans?: AnalyticsMetricValue;
+  /** 取关粉丝 */
+  lostFans?: AnalyticsMetricValue;
+  /** 主页访客数 */
+  profileViews?: AnalyticsMetricValue;
+  /** 主页转粉率 % */
+  profileToFanRate?: AnalyticsMetricValue;
+  /** 铁粉总量（快手特有） */
+  coreFansCount?: AnalyticsMetricValue;
+
+  // ====== 发布维度 ======
+  /** 发布作品数 */
+  publishCount?: AnalyticsMetricValue;
+  /** 发布视频数 */
+  publishVideoCount?: AnalyticsMetricValue;
+  /** 发布图文数（小红书特有） */
+  publishImageCount?: AnalyticsMetricValue;
+  /** 投稿数（与发布数含义相同，抖音称之为投稿） */
+  submissionCount?: AnalyticsMetricValue;
+
+  // ====== 收益维度 ======
+  /** 收入量（快手/抖音等收益） */
+  revenue?: AnalyticsMetricValue;
+
+  // ====== 账号诊断：同类作者对比（雷达图数据） ======
+  peerCompare?: PeerCompare[];
+
+  // ====== 平台专属原始字段 ======
+  extra?: Record<string, any>;
+
   /** 采集时间戳 */
   collectedAt: number;
 }

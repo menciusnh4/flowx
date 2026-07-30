@@ -11,7 +11,6 @@ import { AnalyticsService } from './services/analytics/AnalyticsService';
 import { ApiServer } from './services/ApiServer';
 import { registerMediaProtocol } from './protocols/mediaProtocol';
 import { registerNewTabProtocol } from './services/NewTabPageService';
-import { BrowserEnvService } from './services/BrowserEnvService';
 
 // 注册自定义协议为标准方案（必须在 app ready 之前调用）
 protocol.registerSchemesAsPrivileged([

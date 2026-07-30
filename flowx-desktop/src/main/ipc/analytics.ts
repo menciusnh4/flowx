@@ -53,6 +53,19 @@ export function registerAnalyticsIpc(): void {
     return AnalyticsService.getAccountStats(accountId, days);
   });
 
+  safeInvoke('analytics:getAccountAnalytics', (accountId: string, limit?: number) => {
+    if (!accountId) return [];
+    return AnalyticsService.getAccountAnalytics(accountId, limit);
+  });
+
+  safeInvoke('analytics:getLatestAccountAnalytics', (accountId: string, period?: string) => {
+    if (!accountId) return null;
+    const validPeriod = (period === 'yesterday' || period === '7d' || period === '30d')
+      ? period as 'yesterday' | '7d' | '30d'
+      : undefined;
+    return AnalyticsService.getLatestAccountAnalytics(accountId, validPeriod);
+  });
+
   safeInvoke('analytics:getBenchmarks', (ownerAccountId?: string) => {
     return AnalyticsService.getBenchmarks(ownerAccountId);
   });

@@ -4,7 +4,7 @@ import { getAppIcon } from '../../windows/MainWindow';
 import { BrowserEnvService } from '../BrowserEnvService';
 import { injectAccountCookies } from '../AccountService';
 import { sleep, evalJS } from '../platforms/shared';
-import type { AccountCredential, PlatformType } from '../../../types';
+import type { AccountCredential, PlatformType, AccountAnalyticsPeriodData } from '../../../types';
 import { getPlatform } from '../platforms';
 import { applyDouyinAntiCrash } from '../platforms';
 
@@ -241,7 +241,7 @@ export abstract class BaseCollector {
     });
   }
 
-  private networkCollector: {
+  protected networkCollector: {
     urlPattern: RegExp | null;
     responses: any[];
     processedIndex: number;
@@ -393,8 +393,8 @@ export abstract class BaseCollector {
     return false;
   }
 
-  async scrollToBottom(): Promise<void> {
-    if (!this.win) return;
+  async scrollToBottom(): Promise<boolean> {
+    if (!this.win) return false;
     await this.eval(`
       (async () => {
         let lastHeight = document.body.scrollHeight;
@@ -414,6 +414,7 @@ export abstract class BaseCollector {
         window.scrollTo(0, 0);
       })();
     `, 'scroll-to-bottom');
+    return true;
   }
 
   destroy(): void {
@@ -440,7 +441,16 @@ export abstract class BaseCollector {
     extra?: Record<string, number>;
   }>;
 
-  abstract collectWorksList(limit?: number): Promise<Array<{
+  /**
+   * 采集账号周期数据概况（近7天 / 近30天 / 昨日）
+   * 默认同时采集7天和30天两个周期，返回周期数据数组
+   */
+  abstract collectAccountAnalytics(): Promise<AccountAnalyticsPeriodData[]>;
+
+  abstract collectWorksList(limit?: number, incremental?: {
+    lastWorkId?: string;
+    lastWorkPublishTime?: number;
+  }): Promise<Array<{
     workId: string;
     title: string;
     coverUrl?: string;
