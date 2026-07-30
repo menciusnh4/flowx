@@ -9,6 +9,7 @@ import type {
   WorksQueryParams,
   PagedResult,
   CollectProgress,
+  AccountAnalyticsPeriodData,
 } from '../../types';
 
 type SortByField = 'publishTime' | 'views' | 'likes' | 'comments' | 'favorites' | 'completionRate' | 'interactionRate';
@@ -34,6 +35,8 @@ export const useAnalyticsStore = defineStore('analytics', {
     queueStatus: { queued: 0, running: 0, completed: 0 },
     error: '' as string,
     selectedAccountId: '' as string,
+    accountAnalyticsList: [] as AccountAnalyticsPeriodData[],
+    latestAccountAnalytics: null as AccountAnalyticsPeriodData | null,
   }),
   getters: {
     totalPages: (s) => Math.ceil(s.worksTotal / s.worksPageSize) || 1,
@@ -192,6 +195,22 @@ export const useAnalyticsStore = defineStore('analytics', {
     setPage(page: number) {
       this.worksPage = page;
       this.loadWorks();
+    },
+
+    async loadAccountAnalytics(accountId: string, limit?: number) {
+      try {
+        this.accountAnalyticsList = await electronApi.analytics.getAccountAnalytics(accountId, limit);
+      } catch (e) {
+        this.error = e instanceof Error ? e.message : String(e);
+      }
+    },
+
+    async loadLatestAccountAnalytics(accountId: string, period?: 'yesterday' | '7d' | '30d') {
+      try {
+        this.latestAccountAnalytics = await electronApi.analytics.getLatestAccountAnalytics(accountId, period);
+      } catch (e) {
+        this.error = e instanceof Error ? e.message : String(e);
+      }
     },
 
     async clearData(accountId: string) {

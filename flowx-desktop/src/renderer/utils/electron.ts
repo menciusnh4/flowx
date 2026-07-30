@@ -35,6 +35,7 @@ import type {
   AnalyticsConfig,
   WorksQueryParams,
   CollectProgress,
+  AccountAnalyticsPeriodData,
 } from '../../types';
 
 type StatusCb = (evt: unknown) => void;
@@ -580,6 +581,15 @@ export const electronApi = {
     },
     async getAccountStats(accountId: string, days?: number): Promise<AccountStatsSnapshot[]> {
       return invokeElectron('analytics.getAccountStats', 'analytics:getAccountStats', accountId, days);
+    },
+    async getAccountAnalytics(accountId: string, limit?: number): Promise<AccountAnalyticsPeriodData[]> {
+      return invokeElectron('analytics.getAccountAnalytics', 'analytics:getAccountAnalytics', accountId, limit);
+    },
+    async getLatestAccountAnalytics(
+      accountId: string,
+      period?: 'yesterday' | '7d' | '30d'
+    ): Promise<AccountAnalyticsPeriodData | null> {
+      return invokeElectron('analytics.getLatestAccountAnalytics', 'analytics:getLatestAccountAnalytics', accountId, period);
     },
     async getBenchmarks(ownerAccountId?: string): Promise<BenchmarkAccount[]> {
       return invokeElectron('analytics.getBenchmarks', 'analytics:getBenchmarks', ownerAccountId);

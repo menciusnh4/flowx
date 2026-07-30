@@ -110,6 +110,47 @@
       </div>
     </div>
 
+    <!-- 数据概况区 -->
+    <div class="panel analytics-overview-section">
+      <div class="section-header">
+        <h2 class="section-title">数据概况</h2>
+        <div class="header-actions">
+          <span class="period-info">
+            {{ formatPeriodInfo() }}
+          </span>
+          <el-radio-group v-model="activePeriodTab" size="default" @change="(val: any) => onPeriodChange(val)">
+            <el-radio-button value="yesterday">昨日</el-radio-button>
+            <el-radio-button value="7d">近7天</el-radio-button>
+            <el-radio-button value="30d">近30天</el-radio-button>
+          </el-radio-group>
+        </div>
+      </div>
+
+      <div v-if="!analyticsStore.latestAccountAnalytics" class="overview-empty">
+        <el-empty description="暂无数据，点击开始采集后将同步拉取数据中心概况" :image-size="80" />
+      </div>
+
+      <div v-else class="overview-groups">
+        <div v-for="group in OVERVIEW_GROUPS" :key="group.key" class="overview-group">
+          <div class="group-header">{{ group.name }}</div>
+          <div class="metrics-cards">
+            <div
+              v-for="field in group.fields"
+              :key="field.key"
+              class="metric-card"
+              v-show="hasMetricValue(field.key)"
+            >
+              <div class="metric-label">{{ field.label }}</div>
+              <div class="metric-value">{{ formatMetricValue(field.key, getMetricValue(field.key)) }}</div>
+              <div class="metric-change" :class="getChangeClass(field.key)">
+                {{ formatChangeTag(field.key) }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 作品分析区 -->
     <div class="panel">
       <div class="section-header">
@@ -333,7 +374,7 @@ import { useAnalyticsStore } from '../stores/analytics';
 import { electronApi } from '../utils/electron';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import type { WorkItem, WorkMetrics, AccountInfo } from '../../types';
+import type { WorkItem, WorkMetrics, AccountInfo, AccountAnalyticsPeriodData, AnalyticsMetricValue } from '../../types';
 import iconXiaohongshu from '../assets/xiaohongshu.svg';
 import iconDouyin from '../assets/douyin.svg';
 import iconKuaishou from '../assets/kuaishou.svg';
@@ -361,6 +402,58 @@ const analyticsStore = useAnalyticsStore();
 
 const selectedAccountId = ref('');
 const localFilterPlatformAccountIds = ref<string[]>([]);
+const activePeriodTab = ref<'yesterday' | '7d' | '30d'>('7d');
+
+const OVERVIEW_GROUPS = [
+  {
+    key: 'view',
+    name: '观看曝光',
+    fields: [
+      { key: 'impressions', label: '曝光数' },
+      { key: 'views', label: '播放量' },
+      { key: 'coverClickRate', label: '封面点击率' },
+      { key: 'completionRate', label: '完播率' },
+      { key: 'avgWatchDurationSec', label: '平均观看时长' },
+      { key: 'totalWatchDurationSec', label: '观看总时长' },
+      { key: 'completedViews', label: '完成播放量' },
+    ],
+  },
+  {
+    key: 'engagement',
+    name: '互动',
+    fields: [
+      { key: 'likes', label: '点赞' },
+      { key: 'comments', label: '评论' },
+      { key: 'favorites', label: '收藏' },
+      { key: 'shares', label: '分享' },
+      { key: 'interactions', label: '互动数总和' },
+      { key: 'interactionRate', label: '互动率' },
+    ],
+  },
+  {
+    key: 'fans',
+    name: '粉丝',
+    fields: [
+      { key: 'netFans', label: '净增粉丝' },
+      { key: 'newFans', label: '新增关注' },
+      { key: 'lostFans', label: '取关粉丝' },
+      { key: 'profileViews', label: '主页访客' },
+      { key: 'profileToFanRate', label: '主页转粉率' },
+      { key: 'coreFansCount', label: '铁粉总量' },
+    ],
+  },
+  {
+    key: 'publish',
+    name: '发布 & 其他',
+    fields: [
+      { key: 'publishCount', label: '发布数' },
+      { key: 'publishVideoCount', label: '发布视频' },
+      { key: 'publishImageCount', label: '发布图文' },
+      { key: 'submissionCount', label: '投稿数' },
+      { key: 'revenue', label: '收入量' },
+    ],
+  },
+] as const;
 
 const currentAccount = computed(() => {
   if (!selectedAccountId.value) return null;
@@ -476,11 +569,99 @@ function calcInteractionRate(row: any): string {
   return rate.toFixed(2) + '%';
 }
 
+const PERCENT_FIELDS = new Set([
+  'coverClickRate', 'completionRate', 'interactionRate', 'profileToFanRate',
+]);
+
+const AVG_DURATION_FIELDS = new Set(['avgWatchDurationSec']);
+const TOTAL_DURATION_FIELDS = new Set(['totalWatchDurationSec']);
+
+function getMetric(key: string): AnalyticsMetricValue | undefined {
+  const data = analyticsStore.latestAccountAnalytics;
+  if (!data) return undefined;
+  return (data as any)[key];
+}
+
+function hasMetricValue(key: string): boolean {
+  const m = getMetric(key);
+  return m !== undefined && m !== null && typeof m.value === 'number' && !isNaN(m.value);
+}
+
+function getMetricValue(key: string): number | undefined {
+  const m = getMetric(key);
+  return m?.value;
+}
+
+function getChangePct(key: string): number | null | undefined {
+  const m = getMetric(key);
+  return m?.changePct ?? null;
+}
+
+function formatMetricValue(key: string, value: number | undefined): string {
+  if (value === undefined || value === null || isNaN(value)) return '—';
+  if (PERCENT_FIELDS.has(key)) {
+    return value.toFixed(1) + '%';
+  }
+  if (AVG_DURATION_FIELDS.has(key)) {
+    if (value < 60) return Math.round(value) + '秒';
+    if (value < 3600) return (value / 60).toFixed(1) + '分钟';
+    return (value / 3600).toFixed(1) + '小时';
+  }
+  if (TOTAL_DURATION_FIELDS.has(key)) {
+    const hours = value / 3600;
+    if (hours >= 1) return hours.toFixed(1) + '小时';
+    const minutes = value / 60;
+    return minutes.toFixed(1) + '分钟';
+  }
+  if (key === 'revenue') {
+    return '¥' + formatNumber(value);
+  }
+  return formatNumber(value);
+}
+
+function formatChangeTag(key: string): string {
+  const pct = getChangePct(key);
+  if (pct === null || pct === undefined || isNaN(pct)) return '—';
+  if (pct > 0) return `▲ ${pct.toFixed(1)}%`;
+  if (pct < 0) return `▼ ${Math.abs(pct).toFixed(1)}%`;
+  return '—';
+}
+
+function getChangeClass(key: string): string {
+  const pct = getChangePct(key);
+  if (pct === null || pct === undefined || isNaN(pct) || pct === 0) return 'change-neutral';
+  return pct > 0 ? 'change-up' : 'change-down';
+}
+
+function formatPeriodInfo(): string {
+  const data = analyticsStore.latestAccountAnalytics;
+  if (data?.startDate && data?.endDate) {
+    return `${data.startDate} ~ ${data.endDate}`;
+  }
+  if (data?.collectedAt) {
+    const d = new Date(data.collectedAt);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `更新于 ${hh}:${mi} ${mm}/${dd}`;
+  }
+  return '';
+}
+
+async function onPeriodChange(period: 'yesterday' | '7d' | '30d') {
+  if (selectedAccountId.value) {
+    await analyticsStore.loadLatestAccountAnalytics(selectedAccountId.value, period);
+  }
+}
+
 function onAccountChange(accountId: string) {
   analyticsStore.setSelectedAccount(accountId);
   selectedAccountId.value = accountId;
+  activePeriodTab.value = '7d';
   if (accountId) {
     analyticsStore.loadAccountStats(accountId);
+    analyticsStore.loadLatestAccountAnalytics(accountId, '7d');
   }
 }
 
@@ -577,6 +758,17 @@ function onAvatarError(e: Event) {
   target.style.display = 'none';
 }
 
+watch(
+  () => analyticsStore.currentProgress?.status,
+  (newStatus, oldStatus) => {
+    if (newStatus === 'completed' && oldStatus !== 'completed') {
+      if (selectedAccountId.value) {
+        analyticsStore.loadLatestAccountAnalytics(selectedAccountId.value, activePeriodTab.value);
+      }
+    }
+  }
+);
+
 onMounted(async () => {
   await accountStore.loadPlatforms();
   await accountStore.refreshAccounts();
@@ -584,6 +776,7 @@ onMounted(async () => {
     selectedAccountId.value = accountStore.accounts[0].id;
     analyticsStore.setSelectedAccount(accountStore.accounts[0].id);
     await analyticsStore.loadAccountStats(accountStore.accounts[0].id);
+    await analyticsStore.loadLatestAccountAnalytics(accountStore.accounts[0].id, '7d');
   }
   await analyticsStore.loadConfig();
   await loadWorks();
@@ -992,5 +1185,94 @@ onMounted(async () => {
 .percentage-text {
   font-size: 13px;
   color: #606266;
+}
+
+.analytics-overview-section {
+  margin-bottom: 16px;
+}
+
+.analytics-overview-section .period-info {
+  font-size: 13px;
+  color: #909399;
+  margin-right: 8px;
+}
+
+.overview-empty {
+  padding: 32px 0;
+}
+
+.overview-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-top: 8px;
+}
+
+.overview-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.group-header {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  padding-left: 8px;
+  border-left: 3px solid #409eff;
+  line-height: 1;
+}
+
+.metrics-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.metric-card {
+  background: #f5f7fa;
+  border-radius: 8px;
+  padding: 14px 16px;
+  flex: 1;
+  min-width: 130px;
+  max-width: 200px;
+  position: relative;
+  transition: all 0.2s;
+}
+
+.metric-card:hover {
+  background: #ecf1f7;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.metric-label {
+  font-size: 13px;
+  color: #909399;
+  margin-bottom: 8px;
+}
+
+.metric-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: #303133;
+  line-height: 1.2;
+}
+
+.metric-change {
+  font-size: 12px;
+  margin-top: 8px;
+  text-align: right;
+}
+
+.change-up {
+  color: #67c23a;
+}
+
+.change-down {
+  color: #f56c6c;
+}
+
+.change-neutral {
+  color: #909399;
 }
 </style>

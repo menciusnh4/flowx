@@ -1,6 +1,6 @@
 import { logger } from '../../../utils/logger';
 import { BaseCollector } from '../BaseCollector';
-import type { AccountCredential } from '../../../../types';
+import type { AccountCredential, AccountAnalyticsPeriodData, AnalyticsMetricValue, PeerCompare } from '../../../../types';
 import { sleep } from '../../platforms/shared';
 
 function parseZhNumber(text: string | number | undefined | null): number {
@@ -260,6 +260,633 @@ export class XiaohongshuCollector extends BaseCollector {
         collects: data.collects || 0,
       },
     };
+  }
+
+  async collectAccountAnalytics(): Promise<AccountAnalyticsPeriodData[]> {
+    const log = this.makeLog('xhs-analytics');
+    const analyticsUrl = 'https://creator.xiaohongshu.com/statistics/account/v2?source=official';
+
+    log('info', 'goto', '跳转到账号数据分析页');
+    await this.goto(analyticsUrl, 3000);
+    await sleep(5000);
+
+    try {
+      await this.waitForAccountAnalyticsContent(15000);
+    } catch {
+      log('warn', 'wait-timeout', '等待数据分析内容加载超时，继续尝试');
+    }
+
+    log('info', 'extract-peer', '提取账号诊断维度数据');
+    const peerCompare = await this.extractPeerCompare();
+    log('info', 'peer-result', `账号诊断提取完成，共 ${peerCompare.length} 个维度`);
+
+    const periods: Array<'7d' | '30d'> = ['7d', '30d'];
+    const results: AccountAnalyticsPeriodData[] = [];
+    const collectedAt = Date.now();
+    // 用于记录 7d 的关键指标指纹，避免切换周期不生效导致 7d/30d 完全一致
+    let period7dFingerprint = '';
+    function buildFingerprint(m: Record<string, AnalyticsMetricValue>): string {
+      const keys = ['曝光数', '观看数', '点赞数', '评论数', '收藏数', '分享数', '净涨粉', '新增关注', '取消关注', '主页访客', '总发布'];
+      return keys.map(k => {
+        const v = m[k]; if (!v) return '';
+        return `${k}=${v.value}${typeof v.changePct === 'number' ? ',' + v.changePct : ''}`;
+      }).join('|');
+    }
+
+    for (const period of periods) {
+      log('info', `period-${period}`, `开始采集周期 ${period} 数据`);
+
+      const periodText = period === '7d' ? '近7日' : '近30日';
+      const periodClicked = await this.clickPeriodTab(periodText);
+      if (!periodClicked) {
+        log('warn', `period-click-fail`, `点击周期 ${periodText} 失败，尝试继续`);
+      }
+      await sleep(2000);
+
+      const metricMap: Record<string, AnalyticsMetricValue> = {};
+
+      const tabs = [
+        { key: '观看数据', metrics: ['曝光数', '观看数', '封面点击率', '平均观看时长', '观看总时长', '视频完播率'] },
+        { key: '互动数据', metrics: ['点赞数', '评论数', '收藏数', '分享数'] },
+        { key: '涨粉数据', metrics: ['净涨粉', '新增关注', '取消关注', '主页访客', '主页转粉率'] },
+        { key: '发布数据', metrics: ['总发布', '发布视频', '发布图文'] },
+      ];
+
+      for (const tab of tabs) {
+        log('info', `tab-${tab.key}`, `切换到 ${tab.key} Tab`);
+        const tabClicked = await this.clickContentTab(tab.key);
+        if (!tabClicked) {
+          log('warn', `tab-click-fail`, `点击 ${tab.key} Tab 失败，尝试继续`);
+        }
+        await sleep(1500);
+
+        const blocks = await this.extractCreatorBlocks();
+        log('info', `blocks-${tab.key}`, `提取到 ${blocks.length} 个 creator-block`);
+
+        for (const block of blocks) {
+          const metric = this.parseCreatorBlock(block);
+          if (metric && metric.name) {
+            metricMap[metric.name] = {
+              value: metric.value,
+              changePct: metric.changePct,
+              unit: metric.unit,
+            };
+          }
+        }
+      }
+
+      // ============ 周期校验：30d 的数据不能和 7d 完全一致 ============
+      if (period === '7d') {
+        period7dFingerprint = buildFingerprint(metricMap);
+        log('debug', 'fingerprint-7d', period7dFingerprint || '<empty>');
+      } else if (period === '30d') {
+        const curFingerprint = buildFingerprint(metricMap);
+        log('debug', 'fingerprint-30d', curFingerprint || '<empty>');
+        if (period7dFingerprint && curFingerprint && curFingerprint === period7dFingerprint) {
+          log('warn', 'period-dup', `检测到 30d 数据与 7d 完全一致，周期切换可能未生效，重试一次 30d 点击`);
+          // 重试：强制按 segment-item / active 路径再次点击
+          await this.safeEval<void>(`
+            (async function() {
+              var T = function(ms){ return new Promise(function(r){setTimeout(r,ms);}); };
+              var all = document.querySelectorAll('[class*="segment-item"], [class*="SegmentItem"], button, [class*="time-item"], [class*="period-item"]');
+              for (var i=0;i<all.length;i++) {
+                var t = (all[i].innerText||'').trim();
+                if (t === '近30日' || (t.indexOf('近30')>=0 && t.length<10)) {
+                  try { all[i].scrollIntoView({block:'center'}); } catch(_){}
+                  try { all[i].click(); }
+                  catch(e) { try { var ev=new MouseEvent('click',{bubbles:true,cancelable:true}); all[i].dispatchEvent(ev);} catch(_){} }
+                  await T(1500);
+                  return;
+                }
+              }
+            })();
+          `, 'period-30d-retry');
+          await sleep(2500);
+
+          // 重新拉一遍 4 个 tab 的 creator-block
+          const retryMetricMap: Record<string, AnalyticsMetricValue> = {};
+          for (const tab of tabs) {
+            await this.clickContentTab(tab.key);
+            await sleep(1200);
+            const blocks = await this.extractCreatorBlocks();
+            for (const block of blocks) {
+              const metric = this.parseCreatorBlock(block);
+              if (metric?.name) {
+                retryMetricMap[metric.name] = {
+                  value: metric.value, changePct: metric.changePct, unit: metric.unit,
+                };
+              }
+            }
+          }
+          const retryFP = buildFingerprint(retryMetricMap);
+          log('debug', 'fingerprint-30d-retry', retryFP || '<empty>');
+          // 只有 retry 和 7d 不同时才覆盖，否则继续用原数据（可能确实数据就一样，日志提示一下就行）
+          if (retryFP && retryFP !== period7dFingerprint) {
+            Object.keys(retryMetricMap).forEach(k => { metricMap[k] = retryMetricMap[k]; });
+          } else {
+            log('warn', 'period-dup-retry-fail', `重试后 30d 数据仍与 7d 一致，可能是账号 30 天内确无数据，保留结果`);
+          }
+        }
+      }
+
+      const accountId = this.account.id;
+      const periodData: AccountAnalyticsPeriodData = {
+        id: `${accountId}_${period}_${collectedAt}`,
+        accountId,
+        platform: 'xiaohongshu',
+        period,
+        impressions: metricMap['曝光数'],
+        views: metricMap['观看数'],
+        coverClickRate: metricMap['封面点击率'],
+        avgWatchDurationSec: metricMap['平均观看时长'],
+        totalWatchDurationSec: metricMap['观看总时长'],
+        completionRate: metricMap['视频完播率'],
+        likes: metricMap['点赞数'],
+        comments: metricMap['评论数'],
+        favorites: metricMap['收藏数'],
+        shares: metricMap['分享数'],
+        netFans: metricMap['净涨粉'],
+        newFans: metricMap['新增关注'],
+        lostFans: metricMap['取消关注'],
+        profileViews: metricMap['主页访客'],
+        profileToFanRate: metricMap['主页转粉率'],
+        publishCount: metricMap['总发布'],
+        publishVideoCount: metricMap['发布视频'],
+        publishImageCount: metricMap['发布图文'],
+        peerCompare,
+        collectedAt,
+      };
+
+      results.push(periodData);
+      log('info', `period-done-${period}`, `周期 ${period} 数据采集完成`);
+    }
+
+    log('info', 'done', '账号分析数据全部采集完成');
+    return results;
+  }
+
+  private async waitForAccountAnalyticsContent(timeoutMs: number = 15000): Promise<boolean> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const hasContent = await this.safeEval<boolean>(`
+          var txt = (document.body.innerText || '').trim();
+          var hasCreatorBlock = document.querySelectorAll('div.creator-block').length > 0;
+          var hasWatch = txt.indexOf('观看数') >= 0 || txt.indexOf('观看数据') >= 0;
+          return hasCreatorBlock || hasWatch;
+        `, 'check-analytics-content');
+        if (hasContent) return true;
+      } catch {
+        // ignore
+      }
+      await sleep(500);
+    }
+    return false;
+  }
+
+  private async extractPeerCompare(): Promise<PeerCompare[]> {
+    try {
+      return await this.safeEval<PeerCompare[]>(`
+        function parseNum(text) {
+          if (!text) return 0;
+          var t = String(text).trim();
+          if (!t) return 0;
+          if (t.indexOf('万') >= 0 || t.indexOf('w') >= 0) {
+            var num = parseFloat(t.replace(/[万w]/g, ''));
+            return Math.round(num * 10000);
+          }
+          if (t.indexOf('千') >= 0 || t.indexOf('k') >= 0) {
+            var num2 = parseFloat(t.replace(/[千k]/g, ''));
+            return Math.round(num2 * 1000);
+          }
+          var n = parseInt(t.replace(/,/g, ''), 10);
+          return isNaN(n) ? 0 : n;
+        }
+
+        function parseBeatPct(text) {
+          if (!text) return -1;
+          var t = String(text).trim();
+          var m = t.match(/超过[^\\d]*(\\d+(?:\\.\\d+)?)%/);
+          if (m) return parseFloat(m[1]);
+          var m2 = t.match(/(\\d+(?:\\.\\d+)?)%[^\\d]*同类/);
+          if (m2) return parseFloat(m2[1]);
+          var m3 = t.match(/(\\d+(?:\\.\\d+)?)%/);
+          if (m3) return parseFloat(m3[1]);
+          return -1;
+        }
+
+        var dimensionMap = {
+          '观看数': '观看数',
+          '观看': '观看数',
+          '互动数': '互动数',
+          '互动': '互动数',
+          '涨粉数': '涨粉数',
+          '涨粉': '涨粉数',
+          '主页访客数': '主页访客数',
+          '主页访客': '主页访客数',
+          '发布数': '发布数',
+          '发布': '发布数'
+        };
+
+        var result = [];
+
+        var suggestionSelectors = [
+          '.suggestionData', '.suggestionItem', '.suggestion-item', '.suggestion-data',
+          '[class*="suggestion"]', '[class*="diagnosis"]', '[class*="diagnose"]',
+          '.account-diagnosis', '.accountDiagnosis', '.creator-diagnosis', '.peer-compare',
+          '.radar-chart', '[class*="radar"]', '.data-overview', '.top-diagnosis'
+        ];
+
+        var containers = [];
+        for (var s = 0; s < suggestionSelectors.length; s++) {
+          var els = document.querySelectorAll(suggestionSelectors[s]);
+          for (var e = 0; e < els.length; e++) {
+            containers.push(els[e]);
+          }
+        }
+
+        var allItems = [];
+        if (containers.length > 0) {
+          for (var c = 0; c < containers.length; c++) {
+            var children = containers[c].querySelectorAll('div, li, span, p, a, section');
+            for (var ch = 0; ch < children.length; ch++) {
+              allItems.push(children[ch]);
+            }
+          }
+        }
+
+        var topLevelCards = document.querySelectorAll('div[class*="card"], div[class*="stat"], div[class*="metric"], div[class*="data-item"], div[class*="item"]');
+        for (var tl = 0; tl < topLevelCards.length; tl++) {
+          allItems.push(topLevelCards[tl]);
+        }
+
+        var seenDimensions = {};
+
+        for (var i = 0; i < allItems.length; i++) {
+          var el = allItems[i];
+          var txt = (el.innerText || '').trim();
+          if (!txt || txt.length < 3 || txt.length > 100) continue;
+
+          var lines = txt.split('\\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
+          if (lines.length < 2) continue;
+
+          var dimension = null;
+          var value = 0;
+          var beatPct = -1;
+
+          for (var li = 0; li < lines.length; li++) {
+            var line = lines[li];
+            for (var key in dimensionMap) {
+              if (line.indexOf(key) >= 0 && line.length < key.length + 10) {
+                dimension = dimensionMap[key];
+                break;
+              }
+            }
+            if (dimension) break;
+          }
+
+          if (!dimension) continue;
+          if (seenDimensions[dimension]) continue;
+
+          for (var li2 = 0; li2 < lines.length; li2++) {
+            var line2 = lines[li2];
+            var bp = parseBeatPct(line2);
+            if (bp >= 0) {
+              beatPct = bp;
+            }
+            var v = parseNum(line2);
+            if (v > 0 && value === 0) {
+              value = v;
+            }
+          }
+
+          if (dimension && (value > 0 || beatPct >= 0)) {
+            seenDimensions[dimension] = true;
+            result.push({
+              dimension: dimension,
+              mine: value,
+              beatPct: beatPct >= 0 ? beatPct : -1
+            });
+          }
+        }
+
+        if (result.length < 5) {
+          var bodyText = (document.body.innerText || '').trim();
+          var bodyLines = bodyText.split('\\n').map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
+
+          var dimKeys = Object.keys(dimensionMap);
+          for (var bi = 0; bi < bodyLines.length; bi++) {
+            var bline = bodyLines[bi];
+            for (var dk = 0; dk < dimKeys.length; dk++) {
+              var dimKey = dimKeys[dk];
+              var mappedDim = dimensionMap[dimKey];
+              if (seenDimensions[mappedDim]) continue;
+              if (bline.indexOf(dimKey) >= 0 && bline.length < dimKey.length + 15) {
+                var bValue = 0;
+                var bBeat = -1;
+                for (var step = 0; step < 5; step++) {
+                  var checkIdx = bi + step;
+                  if (checkIdx < bodyLines.length) {
+                    var checkLine = bodyLines[checkIdx];
+                    var cv = parseNum(checkLine);
+                    if (cv > 0 && bValue === 0) bValue = cv;
+                    var cb = parseBeatPct(checkLine);
+                    if (cb >= 0) bBeat = cb;
+                  }
+                }
+                if (bValue > 0 || bBeat >= 0) {
+                  seenDimensions[mappedDim] = true;
+                  result.push({
+                    dimension: mappedDim,
+                    mine: bValue,
+                    beatPct: bBeat >= 0 ? bBeat : -1
+                  });
+                }
+              }
+            }
+          }
+        }
+
+        return result;
+      `, 'extract-peer-compare');
+    } catch (e) {
+      logger.error('[XiaohongshuCollector] 提取账号诊断失败', { error: (e as Error).message });
+      return [];
+    }
+  }
+
+  private async clickPeriodTab(periodText: string): Promise<boolean> {
+    try {
+      return await this.safeEval<boolean>(`
+        (async function() {
+          var targetText = '${periodText}';
+          var TICK = function(ms) { return new Promise(function(r){ setTimeout(r, ms); }); };
+
+          // ========== 1. 收集所有可点击候选，优先小范围精确元素 ==========
+          var all = document.querySelectorAll('*');
+          var exactHits = [];   // 完全匹配文本的元素
+          var fuzzyHits = [];   // 模糊匹配的元素
+
+          for (var i = 0; i < all.length; i++) {
+            var el = all[i];
+            var t = (el.innerText || el.textContent || '').trim();
+            if (!t) continue;
+            // 完全匹配
+            if (t === targetText) {
+              var childCount = el.querySelectorAll('*').length;
+              // 越靠近叶子(child越少)越精准，排前面
+              exactHits.push({ el: el, children: childCount });
+            }
+            // 模糊匹配：长度稍长一点点就包含关键字，避免包含其它周期文字
+            else if (t.length <= targetText.length + 6 && t.indexOf(targetText) >= 0) {
+              var c2 = el.querySelectorAll('*').length;
+              fuzzyHits.push({ el: el, children: c2 });
+            }
+          }
+          // 子节点越少越靠前
+          exactHits.sort(function(a, b) { return a.children - b.children; });
+          fuzzyHits.sort(function(a, b) { return a.children - b.children; });
+
+          var candidates = exactHits.concat(fuzzyHits);
+          if (candidates.length === 0) return false;
+
+          // 辅助：检查某个元素的父链中是否含 active/selected/current 等类
+          function hasActive(el) {
+            var cur = el;
+            var steps = 0;
+            while (cur && steps < 8) {
+              if (cur.nodeType !== 1) { cur = cur.parentNode; steps++; continue; }
+              var cls = (cur.className || '').toString();
+              if (/(active|selected|current|checked|on)/i.test(cls)) return true;
+              cur = cur.parentNode;
+              steps++;
+            }
+            return false;
+          }
+          // 执行点击（多种策略）
+          function doClick(el) {
+            try {
+              el.click();
+              return true;
+            } catch(e) {}
+            try {
+              var ev = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+              el.dispatchEvent(ev);
+              return true;
+            } catch(e2) { return false; }
+          }
+
+          // ========== 2. 逐个候选尝试，点击后等 800ms 再校验是否 active ==========
+          var maxTry = Math.min(candidates.length, 15);
+          for (var k = 0; k < maxTry; k++) {
+            var cand = candidates[k].el;
+
+            // 先滚动到视图内
+            try { cand.scrollIntoView({ behavior: 'auto', block: 'center' }); } catch(_) {}
+            await TICK(100);
+
+            // 检查点击前状态
+            var prevActive = hasActive(cand);
+
+            var ok = doClick(cand);
+            if (!ok) continue;
+
+            await TICK(800);
+
+            // 点击后检查：是否获得 active（或者它的父链变 active）
+            var nowActive = hasActive(cand);
+            // 判胜条件：
+            //  a) 点击后变为 active；
+            //  b) 或者原本就是 active（如默认的近7日首次）；
+            //  c) 或者在 body 中可以找到「近30日」变成 active 类（跨元素判断）
+            if (nowActive) return true;
+
+            // 兜底：如果候选原本就是 active 且点完没变，说明是目标默认态，也算命中
+            if (prevActive) {
+              // 再做一次数据层面的双重校验：找至少一个 creator-block 存在，或看是否含 targetText 所在元素现在处于激活态
+              var bodyText = document.body.innerText || '';
+              // 模糊回退：直接认为点击了，留给上层 sleep 等待实际刷新
+              return true;
+            }
+          }
+
+          // ========== 3. 兜底：直接按 d-segment-item 精确按钮点击 ==========
+          try {
+            var segItems = document.querySelectorAll('[class*="segment-item"], [class*="SegmentItem"], button[class*="time"], button[class*="period"]');
+            for (var j = 0; j < segItems.length; j++) {
+              var txt2 = (segItems[j].innerText || '').trim();
+              if (txt2 === targetText || (txt2.length <= targetText.length + 8 && txt2.indexOf(targetText) >= 0)) {
+                doClick(segItems[j]);
+                await TICK(600);
+                return true;
+              }
+            }
+          } catch(_) {}
+
+          return false;
+        })();
+      `, 'click-period-' + periodText);
+    } catch {
+      return false;
+    }
+  }
+
+  private async clickContentTab(tabText: string): Promise<boolean> {
+    try {
+      return await this.safeEval<boolean>(`
+        var targetText = '${tabText}';
+        var selectors = [
+          'div[class*="tab"]', 'span[class*="tab"]', 'button[class*="tab"]',
+          'div[class*="header"] span', 'div[class*="header"] div',
+          'li[class*="tab"]', 'a[class*="tab"]',
+          '[role="tab"]', '[class*="nav"] div', '[class*="nav"] span'
+        ];
+
+        var candidates = [];
+        for (var s = 0; s < selectors.length; s++) {
+          var els = document.querySelectorAll(selectors[s]);
+          for (var i = 0; i < els.length; i++) {
+            candidates.push(els[i]);
+          }
+        }
+
+        for (var i = 0; i < candidates.length; i++) {
+          var el = candidates[i];
+          var txt = (el.innerText || '').trim();
+          if (txt === targetText) {
+            el.scrollIntoView({ behavior: 'auto', block: 'center' });
+            try {
+              el.click();
+              return true;
+            } catch (e) {
+              try {
+                var evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                el.dispatchEvent(evt);
+                return true;
+              } catch (e2) {
+                continue;
+              }
+            }
+          }
+        }
+
+        for (var i2 = 0; i2 < candidates.length; i2++) {
+          var el2 = candidates[i2];
+          var txt2 = (el2.innerText || '').trim();
+          if (txt2.indexOf(targetText) >= 0 && txt2.length < targetText.length + 5) {
+            el2.scrollIntoView({ behavior: 'auto', block: 'center' });
+            try {
+              el2.click();
+              return true;
+            } catch (e3) {
+              try {
+                var evt2 = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                el2.dispatchEvent(evt2);
+                return true;
+              } catch (e4) {
+                continue;
+              }
+            }
+          }
+        }
+
+        return false;
+      `, 'click-content-tab-' + tabText);
+    } catch {
+      return false;
+    }
+  }
+
+  private async extractCreatorBlocks(): Promise<string[]> {
+    try {
+      return await this.safeEval<string[]>(`
+        var blocks = document.querySelectorAll('div.creator-block');
+        var result = [];
+        for (var i = 0; i < blocks.length; i++) {
+          var txt = (blocks[i].innerText || '').trim();
+          if (txt) result.push(txt);
+        }
+        if (result.length === 0) {
+          var fallbackSelectors = [
+            'div[class*="creator-block"]', 'div[class*="metric-block"]',
+            'div[class*="stat-block"]', 'div[class*="data-block"]',
+            'div[class*="indicator"]', 'div[class*="index-item"]',
+            'div[class*="item-card"]', 'div[class*="block-item"]'
+          ];
+          for (var s = 0; s < fallbackSelectors.length; s++) {
+            var fb = document.querySelectorAll(fallbackSelectors[s]);
+            for (var j = 0; j < fb.length; j++) {
+              var txt2 = (fb[j].innerText || '').trim();
+              if (txt2 && txt2.length >= 3 && txt2.length <= 100) {
+                result.push(txt2);
+              }
+            }
+            if (result.length > 0) break;
+          }
+        }
+        return result;
+      `, 'extract-creator-blocks');
+    } catch (e) {
+      logger.error('[XiaohongshuCollector] 提取 creator-block 失败', { error: (e as Error).message });
+      return [];
+    }
+  }
+
+  private parseCreatorBlock(blockText: string): { name: string; value: number; changePct: number | null; unit?: string } | null {
+    if (!blockText) return null;
+    const lines = blockText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length < 2) return null;
+
+    const name = lines[0];
+    const valueString = lines[1] || '';
+    const changeString = lines[2] || '';
+
+    let value = 0;
+    let unit: string | undefined = undefined;
+
+    const vs = valueString;
+
+    if (vs.includes('秒')) {
+      unit = '秒';
+      const numPart = vs.replace(/秒/g, '').trim();
+      value = parseZhNumber(numPart);
+    } else if (vs.includes('分钟')) {
+      unit = '分钟';
+      const numPart = vs.replace(/分钟/g, '').trim();
+      const minutes = parseZhNumber(numPart);
+      value = Math.round(minutes * 60);
+    } else if (vs.includes('%')) {
+      unit = '%';
+      const numPart = vs.replace(/%/g, '').trim();
+      value = parseFloat(numPart) || 0;
+    } else {
+      value = parseZhNumber(vs);
+    }
+
+    let changePct: number | null = null;
+    const cs = changeString;
+    if (cs.includes('环比') || cs.includes('%')) {
+      const match = cs.match(/环比\s*([+-]?\d+(?:\.\d+)?)%/);
+      if (match) {
+        changePct = parseFloat(match[1]);
+      } else {
+        const match2 = cs.match(/([+-]\d+(?:\.\d+)?)%/);
+        if (match2) {
+          changePct = parseFloat(match2[1]);
+        } else {
+          const match3 = cs.match(/(\d+(?:\.\d+)?)%/);
+          if (match3) {
+            if (cs.includes('下降') || cs.includes('减少') || cs.includes('-')) {
+              changePct = -parseFloat(match3[1]);
+            } else {
+              changePct = parseFloat(match3[1]);
+            }
+          }
+        }
+      }
+    }
+
+    return { name, value, changePct, unit };
   }
 
   async collectWorksList(limit: number = 50, incremental?: {

@@ -1,6 +1,6 @@
 import { logger } from '../../../utils/logger';
 import { BaseCollector } from '../BaseCollector';
-import type { AccountCredential } from '../../../../types';
+import type { AccountCredential, AccountAnalyticsPeriodData } from '../../../../types';
 import { sleep } from '../../platforms/shared';
 
 export class WechatChannelsCollector extends BaseCollector {
@@ -190,6 +190,11 @@ export class WechatChannelsCollector extends BaseCollector {
         imageCount: data.imageCount,
       },
     };
+  }
+
+  async collectAccountAnalytics(): Promise<AccountAnalyticsPeriodData[]> {
+    // TODO: 微信视频号数据中心分析暂未实现
+    return [];
   }
 
   async collectWorksList(limit: number = 20, incremental?: {

@@ -10,6 +10,7 @@ import type {
   AnalyticsConfig,
   WorksQueryParams,
   PagedResult,
+  AccountAnalyticsPeriodData,
 } from '../../../types';
 
 const STORE_KEY = 'analyticsData';
@@ -18,6 +19,7 @@ interface AnalyticsStoreSchema {
   works: Record<string, WorkItem[]>;
   workMetrics: Record<string, WorkMetrics>;
   accountStats: Record<string, AccountStatsSnapshot[]>;
+  accountAnalyticsData: Record<string, AccountAnalyticsPeriodData[]>;
   diagnoses: Record<string, WorkDiagnosis>;
   benchmarks: BenchmarkAccount[];
   benchmarkSnapshots: Record<string, BenchmarkSnapshot[]>;
@@ -42,6 +44,7 @@ function getDefaultSchema(): AnalyticsStoreSchema {
     works: {},
     workMetrics: {},
     accountStats: {},
+    accountAnalyticsData: {},
     diagnoses: {},
     benchmarks: [],
     benchmarkSnapshots: {},
@@ -68,6 +71,7 @@ function ensureInit(): AnalyticsStoreSchema {
   if (!data.works) data.works = {};
   if (!data.workMetrics) data.workMetrics = {};
   if (!data.accountStats) data.accountStats = {};
+  if (!data.accountAnalyticsData) data.accountAnalyticsData = {};
   if (!data.diagnoses) data.diagnoses = {};
   if (!data.benchmarks) data.benchmarks = [];
   if (!data.benchmarkSnapshots) data.benchmarkSnapshots = {};
@@ -276,6 +280,7 @@ export function clearAccountData(accountId: string): void {
   }
   
   delete data.accountStats[accountId];
+  delete data.accountAnalyticsData[accountId];
   delete data.diagnoses[accountId];
   delete data.lastCollectInfo[accountId];
   
@@ -328,6 +333,74 @@ export function saveAccountStats(snapshot: AccountStatsSnapshot): void {
 
   saveData(data);
 }
+
+// ==================== 账号周期数据概况相关 ====================
+
+export function saveAccountAnalytics(list: AccountAnalyticsPeriodData[]): number {
+  const data = ensureInit();
+  let savedCount = 0;
+
+  for (const item of list) {
+    const accountId = item.accountId;
+    if (!data.accountAnalyticsData[accountId]) {
+      data.accountAnalyticsData[accountId] = [];
+    }
+
+    const existingIdx = data.accountAnalyticsData[accountId].findIndex(
+      s => s.accountId === item.accountId && s.period === item.period && s.startDate === item.startDate
+    );
+
+    if (existingIdx >= 0) {
+      const existing = data.accountAnalyticsData[accountId][existingIdx];
+      if (item.collectedAt >= existing.collectedAt) {
+        data.accountAnalyticsData[accountId][existingIdx] = item;
+      }
+    } else {
+      data.accountAnalyticsData[accountId].push(item);
+    }
+    savedCount++;
+  }
+
+  for (const accountId of Object.keys(data.accountAnalyticsData)) {
+    data.accountAnalyticsData[accountId].sort((a, b) => a.collectedAt - b.collectedAt);
+    if (data.accountAnalyticsData[accountId].length > 120) {
+      data.accountAnalyticsData[accountId] = data.accountAnalyticsData[accountId].slice(-120);
+    }
+  }
+
+  saveData(data);
+  logger.info('[AnalyticsStore] 保存账号周期数据:', savedCount, '条');
+  return savedCount;
+}
+
+export function getAccountAnalytics(accountId: string, limit?: number): AccountAnalyticsPeriodData[] {
+  const data = ensureInit();
+  const list = data.accountAnalyticsData[accountId] || [];
+  if (limit && limit > 0) {
+    return list.slice(-limit);
+  }
+  return [...list];
+}
+
+export function getLatestAccountAnalytics(
+  accountId: string,
+  period?: 'yesterday' | '7d' | '30d'
+): AccountAnalyticsPeriodData | null {
+  const data = ensureInit();
+  let list = data.accountAnalyticsData[accountId] || [];
+  if (period) {
+    list = list.filter(s => s.period === period);
+  }
+  if (list.length === 0) return null;
+  let latest = list[0];
+  for (const item of list) {
+    if (item.collectedAt > latest.collectedAt) {
+      latest = item;
+    }
+  }
+  return latest;
+}
+
 // ==================== 诊断结果相关 ====================
 
 export function getDiagnosis(workId: string): WorkDiagnosis | undefined {
