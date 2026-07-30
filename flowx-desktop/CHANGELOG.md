@@ -4,196 +4,116 @@ All notable changes to the FlowX Desktop project will be documented in this file
 
 ---
 
-## [v0.1.7] - 2026-07-30
+## [v0.1.5] - 2026-07-30
 
-> X（Twitter）平台账号管理接入 · 多源账号信息精准提取 · 前端平台图标集成
+> 账号数据洞察中心 · 多平台采集引擎升级 · X(Twitter) 与知乎接入 · 防盗链图片代理
 
-### ✨ 亮点速览
+### ✨ 亮点速览（v0.1.4 → v0.1.5 迭代总览）
 
-- 🐦 **X（Twitter）账号管理接入** — 全新平台适配器 `x.ts`，支持扫码授权、登录态检测、昵称/头像/handle/粉丝数/关注数提取、刷新账号信息、打开创作中心
-- 🧠 **多源账号信息提取策略** — 优先从 `window.__INITIAL_STATE__`（`state.entities.users.entities` / `state.user` / `state.session.user` / `state.currentUser`）提取昵称、头像、handle；同时支持 `SideNav_AccountSwitcher_Button` DOM、`UserAvatar-Container-<handle>` data-testid、meta/title 等 8 级兜底策略
-- 🎨 **前端 X 平台图标集成** — 新增 `assets/x.svg`（黑底白 X 风格），并在账号管理页、仪表盘、数据分析页三个页面的 `PLATFORM_ICONS` 中完成映射
-- 🔧 **发布功能占位实现** — `publishVideo / publishImage / publishArticle` 默认返回"发布功能开发中"提示，避免平台选择时出现空实现异常
+从 v0.1.4 到 v0.1.5，FlowX 完成了两大能力升级：**内容提取侧的智能优化**（v0.1.4）和**运营数据侧的洞察中心**（v0.1.5），共同构成「采集 → 编辑 → 发布 → 复盘」完整闭环。
 
-### 🚀 新功能
+#### 内容提取与编辑升级（继承自 v0.1.4）
 
-#### 1. X（Twitter）平台适配器（`src/main/services/platforms/x.ts`）
+- 🧠 **智能内容类型选择** — 自定义规则同时配置图文和文章时，正文超过 1000 字自动选择文章模式，长文自动走 Markdown 导入发布流
+- 📝 **HTML 自动转 Markdown** — 文章模式下自动将提取的 HTML 转换为 Markdown 格式，直接适配小红书/抖音文档导入；正文中的图片自动过滤（平台 Markdown 不支持内嵌图）
+- 🖼️ **图片拾取容器选择** — 拾取图片时可选中父级容器，自动提取所有层级的后代图片；选择器自动追加 ` img` 后代选择器，不再出现「选择器命中 11 张却提取不到」
+- 📋 **多选预览面板** — 图片/话题多选模式下底部实时显示已选数量，支持 Hover 高亮和点击移除
+
+#### 运营数据与平台扩展（新增 v0.1.5）
+
+- 📊 **账号数据洞察中心** — 全新「数据分析」页面，统一管理多平台运营数据：账号概览、作品列表、近 7/30 天周期数据趋势、关注者增减分析
+- 📡 **CDP 网络层采集引擎** — 抖音/小红书/快手/知乎全面接入 Chrome DevTools Protocol 监听接口 JSON 响应，字段精度与采集速度全面优于 DOM 解析；CDP 异常时自动回退 DOM，保证不中断
+- 🔁 **增量采集 + 稳定去重** — 基于 workId 指纹 + 上次发布时间双重锚点的增量采集，只拉取新作品；翻页命中 `is_end=true` 立即停止，不会出现 4 条作品抓 20 条重复数据
+- 🐦 **X（Twitter）平台账号管理接入** — 扫码授权 + 登录态检测，`__INITIAL_STATE__` 优先 + 8 级 DOM 兜底提取昵称、头像、Handle；发布功能占位，避免平台切换时空实现异常
+- 🧩 **知乎平台数据分析接入** — 覆盖账号概览、作品列表、内容分析周期数据（近 7/30 天）、关注者分析周期数据；额外区分「赞同/喜欢/收藏」三种口径
+- 🔒 **小红书防盗链图片代理** — 本地 HTTP 代理自动注入 `Referer: https://www.xiaohongshu.com/`，分析面板封面图告别 403 白板
+
+---
+
+### 🚀 新功能详解（v0.1.5 新增部分）
+
+#### 1. 账号数据洞察中心
+
+新增左侧导航「数据分析」菜单，为每一个绑定账号提供**账号概览 + 作品列表 + 周期数据**三位一体的洞察视图。
+
+- **账号概览**：作品数、粉丝数、获赞数、关注数、收藏数、分享数等核心指标，onMounted 选中默认账号后自动刷新
+- **周期数据**：每个账号独立采集「近 7 天」「近 30 天」两份快照，内容分析 + 关注者分析独立展示；7d/30d 指纹相同时自动重试切换，防止两份数据完全一样
+- **作品列表**：封面图、标题、平台 + 账号、发布时间、播放/阅读/点赞/评论/收藏/分享六大指标，支持平台/账号/关键词组合筛选和多维排序
+- **批量采集队列**：`CollectTaskQueue` 统一调度，默认 2 并发，单账号采集窗口独立，失败自动记录 warn 不影响其他账号
+
+#### 2. CDP 网络层采集引擎（抖音/小红书/快手/知乎）
+
+所有平台采集器统一升级「CDP 监听为主 + DOM 解析兜底」的双层架构，解决之前 DOM 解析字段串位、重复抓取、当天时间戳等顽疾。
 
 | 能力 | 实现方式 |
 |---|---|
-| **登录态检测** | 优先 `auth_token` + `ct0` cookie → URL 保护页命中 → DOM 辅助（Home 导航/Compose 按钮/Profile 链接/退出文本）综合判断 |
-| **昵称提取** | ① `window.__INITIAL_STATE__` 多路径 → ② `SideNav_AccountSwitcher_Button` 内 span 过滤 @ → ③ 按钮内 `[aria-label]` → ④ `User-Name` → ⑤ `UserAvatar-Container-*` 子 `[aria-label]` → ⑥ `og:title` → ⑦ `document.title` |
-| **头像提取** | ① `__INITIAL_STATE__` 中 `profile_image_url_https` / `profile_image_url` → ② 账号切换按钮 `img` → ③ `UserAvatar-Container-*` 容器 `img` → ④ `AppTabBar_Profile_Link img` → ⑤ meta `og:image` → ⑥ 兜底 `pbs.twimg.com/profile_images` |
-| **Handle 提取** | ① `__INITIAL_STATE__` 中 `screen_name`（正则校验 `^[a-zA-Z0-9_]{1,15}$`）→ ② `UserAvatar-Container-<handle>` data-testid 正则提取 → ③ 按钮 `@xxx` 文本 → ④ 按钮内 `a[href]` → ⑤ 个人资料链接 → ⑥ title/meta → ⑦ body 全文 |
-| **创作中心 URL** | `https://x.com/home` |
-| **发布入口 URL** | `https://x.com/compose/post`（占位，发布功能待开发） |
+| **CDP 附加** | 创建 `BrowserWindow` 后 `webContents.debugger.attach('1.3')`，监听 `Network.responseReceived` + `Network.loadingFinished` |
+| **URL 匹配** | 每个平台注册自己的 API URL 白名单（如抖音 `/aweme/v1/web/aweme/post/`、知乎 `/api/v4/creators/creations/v2/all`） |
+| **字段映射** | 直接取 JSON 原始字段，秒级时间戳 × 1000 转 Date，`http://` 自动转 `https://`，不再是 DOM 文本反推 |
+| **回退保障** | Debugger 附加失败 / 30s 没拿到首屏响应 / 翻页超时 → 自动切 DOM 解析脚本，至少拿到一部分 |
 
-#### 2. 平台注册表与类型扩展
+#### 3. 知乎平台数据分析
 
-- `src/types/index.ts`：`KNOWN_PLATFORMS` 数组新增 `'x'`
-- `src/main/services/platforms/index.ts`：新增 `import './x'` 隐式注册入口
-- `PlatformMeta.contentLimits`：推文正文字数限制 280 字符；长推文（article）限制 25000 字符
-- `PlatformMeta.nicknameSelectors / avatarSelectors`：列出 DOM 兜底选择器，供外部诊断工具使用
-- `capabilities`：`publishVideo / publishImage / publishArticle` 均设为 `false`，明确当前仅账号管理
+平台 key = `zhihu`，与发布模块的平台适配器自动复用，无需重复注册。
 
-#### 3. 前端三页图标映射
+- **作品列表**：入口 `https://www.zhihu.com/creator/manage/creation/all`，覆盖 answer / article / pin（想法）/ zvideo（视频）四种创作类型；标题自动剥离「回答/文章/想法/视频」前缀
+- **内容分析周期数据**：入口 `https://www.zhihu.com/creator/analytics/work/all`，「最近 7 天/近7天/7日 / 最近 30 天/近30天/30日」多种文案全部匹配；产出赞同、喜欢、收藏、评论、转发等全量指标
+- **关注者分析周期数据**：入口 `https://www.zhihu.com/creator/followers`，采集新增/减少/净增关注者；30 天周期额外存入「近 30 日活跃关注者」到 `coreFansCount`
 
-| 页面 | 文件 | 变更 |
-|---|---|---|
-| 账号管理 | `AccountPanel.vue` | `import iconX from '../assets/x.svg'` + `PLATFORM_ICONS.x = iconX` |
-| 仪表盘 | `Dashboard.vue` | 同上 |
-| 数据分析 | `AnalyticsPanel.vue` | 同上 |
+#### 4. X（Twitter）平台账号管理
 
-### 📐 设计要点
+平台适配器 `x.ts` 完整实现账号管理侧能力，发布功能开发中（`publish*` 接口返回友好占位提示，不会出现空实现异常）。
 
-- **分层兜底**：每个字段（昵称/头像/handle）均采用 `window.__INITIAL_STATE__` 第一层 + DOM 精确匹配第二层 + meta/title 第三层 + body 全文第四层的四级架构；任何一层失败都不会影响其他字段
-- **用户偏好对齐**：handle 提取使用 `platformAccountId` 字段（符合「用平台原生账号 ID 筛选」的偏好），并对从 `data-testid` 提取的 handle 做严格 `^[a-zA-Z0-9_]{1,15}$` 校验，避免脏数据
-- **失败安全**：所有注入脚本使用独立 try-catch，单个脚本失败仅记录 warn 日志，整个 `extractPageInfo` 一定会返回至少 `{ nickname: '' }`，不会向上层抛异常
-- **向后兼容**：`meta.icon = 'X'` 字符串占位保留，`PLATFORM_ICONS.x` 前端映射优先于 meta.icon；两者并存不冲突
+| 能力 | 提取策略（从优先到兜底） |
+|---|---|
+| **登录态** | `auth_token` + `ct0` cookie → URL 保护页命中 → DOM（Home 导航 / Compose 按钮 / Profile 链接）综合判断 |
+| **昵称** | `__INITIAL_STATE__` 多路径 → `SideNav_AccountSwitcher_Button` 内 span 过滤 @ → `[aria-label]` → `User-Name` → meta/title |
+| **头像** | `profile_image_url_https` / `profile_image_url` → 账号切换按钮 `img` → `UserAvatar-Container-*` 容器 `img` → `og:image` |
+| **Handle** | `screen_name`（正则 `^[a-zA-Z0-9_]{1,15}$` 校验）→ `UserAvatar-Container-<handle>` data-testid → @xxx 文本 → href → title |
+| **创作中心** | `https://x.com/home` |
+| **发布入口** | `https://x.com/compose/post`（占位） |
 
-### 🧪 验证结果
+前端三个页面（账号管理 / 仪表盘 / 数据分析）的 `PLATFORM_ICONS` 均完成 X 图标（`assets/x.svg` 黑底白 X）映射。
 
-- 对 `x.ts` 中 **4 个 `executeJavaScript` 注入脚本**（登录检测 / 昵称提取 / 头像提取 / handle 提取）做独立语法校验，全部通过
-- TypeScript 平台适配器接口方法签名校验通过（`detectLoggedIn` / `extractPageInfo` / `publish`）
+#### 5. 小红书防盗链图片代理
+
+小红书封面图 `sns-webpic-qc.xhscdn.com` 默认校验 `Referer`，跨域请求会返回 403；通过本地 `BrowserEnvService` HTTP 代理自动补全 Referer 请求头，分析面板封面图全部正常显示。
 
 ---
 
-## [v0.1.6] - 2026-07-29
+### ⚡ 体验优化（v0.1.4 + v0.1.5）
 
-> 知乎平台数据分析接入 · CDP API 监听精准采集 · 账号周期数据 · 增量采集稳定化
+- 元素拾取器方向键导航改为顶部对齐，不再滚动到视口中间
+- 鼠标悬停路径提示改为层级列表形式，一行显示一级，右键可选择层级
+- 修复多选模式下 infoBar 点击事件阻止冒泡导致确认/取消按钮无反应
+- 修复右键菜单层级选择时左键点击穿透的问题
+- 账号下拉框头像自定义样式，替换 `el-avatar`，解决多选下拉框中头像与文字不对齐
+- 平台下拉框从本地 `assets` 目录导入 SVG/PNG 图标资源，修复图标加载失败
+- 7d/30d 周期数据指纹相同时自动重试 30d 周期点击，避免两份同数据
 
-### ✨ 亮点速览
+### 🐛 修复
 
-- 🧠 **知乎数据分析新增接入** — 知乎平台已加入数据分析采集范围，覆盖「账号概览 / 作品列表 / 内容分析周期数据 / 关注者分析周期数据」四个模块
-- 📡 **作品列表改走官方 API 监听（CDP Debugger Network）** — 不再依赖 DOM 文本解析为主方案；直接拦截 `GET /api/v4/creators/creations/v2/all` JSON 响应，标题/时间/指标全部来自接口原始字段，解决之前「4 条作品抓 5 页 20 条重复、标题带类型前缀、发布时间是当天、指标（views/likes/favorites/shares）互相串位」等一批顽疾
-- 📊 **内容分析 + 关注者分析周期数据（近 7 天 / 近 30 天）** — 内容分析从「最近 7 天 / 最近 14 天 / 最近 30 天 / 累计」tab 取阅读/播放/赞同/喜欢/收藏/评论/转发等全量指标；关注者分析单独采集新增/减少/净增关注者，30 天周期额外补充活跃关注者
-- 🔁 **增量采集再加固** — workId 改稳定命名（`zh_${type}_${creationId}`），不再带页码/索引哈希；`paging.is_end=true` 时立即停止翻页，不会多跑 4 页重复数据
-- 🏗️ **回退保障** — CDP API 监听链路任何一步异常（Debugger 附加、未拿到第一页响应、翻页超时等）**自动回退 DOM 解析**，不会整个采集任务失败
+- 修复图片选择器选中容器元素时无法提取图片的问题
+- 修复右键菜单使用自定义规则提取时没有智能判断内容类型的问题
+- 修复小红书防盗链 403 导致分析面板封面图全部白板的问题
+- 修复快手概览粉丝/关注数始终为 0 的问题（紧凑型文本解析 + 创作数据页 URL 校准）
+- 修复账号概览 `worksCount` 一直为 0 的问题（`collectAccountOverview()` 结果正确存入 DB 字段）
+- 修复 X 平台粉丝/关注数提取错误（v0.1.5 内部补丁 `7798672`）
 
-### 🚀 新功能
+### 📦 技术细节
 
-#### 1. 知乎账号分析接入
+| 类别 | 详情 |
+|------|------|
+| 新增模块 | `src/main/services/analytics/`（AnalyticsService / BaseCollector / 各平台 Collector / AnalyticsStore / CollectTaskQueue） |
+| 新增平台 | `src/main/services/platforms/x.ts`（X 账号适配器）、`ZhihuCollector`（知乎数据分析） |
+| 新增依赖 | `turndown`、`@types/turndown`（HTML → Markdown） |
+| IPC 通道 | `analytics:getWorks` / `analytics:collectWorks` / `analytics:getAccountStats` / `analytics:getAccountAnalytics` 等 |
+| 防盗链 | `BrowserEnvService` 本地 HTTP 代理 + Referer 自动注入 |
+| 数据存储 | `AnalyticsStore`（electron-store），按 `accountId` 分桶，`workMetrics` 按 `workId` 独立存储 |
 
-左侧「数据分析」平台筛选、账号注册流程均支持知乎（平台 key = `zhihu`，显示名「知乎」，与发布模块的平台适配器已对齐、自动复用）。
+### 🔄 升级方式
 
-- **作品列表采集**（[ZhihuCollector.ts](flowx-desktop/src/main/services/analytics/platforms/ZhihuCollector.ts)）
-  - 入口页面：`https://www.zhihu.com/creator/manage/creation/all`
-  - 主方案：CDP 监听 `/api/v4/creators/creations/v2/all`，原生 JSON 字段，支持 answer / article / pin（想法）/ zvideo（视频）四种创作类型
-  - 回退方案：DOM 解析，对作品行的「数值-数值-标签」三段式格式（如图片想法 `[2, 114, 被浏览]`）做 i-2 向前看双格容错
-- **账号概览采集**（`collectAccountOverview`）
-  - 作品数：内容管理页「共 N 条内容」+ 列表聚合兜底
-  - 粉丝数：关注者分析页「关注者总数 / 总关注者数」
-  - 获赞数：内容分析页「累计」周期的 `赞同总量 + 喜欢总量` 双字段和
-  - 关注数：关注者分析页匹配「关注数 / 关注了」
-- **周期数据采集**（`collectAccountAnalytics`，近 7 天 + 近 30 天各一份）
-  - 内容分析：`https://www.zhihu.com/creator/analytics/work/all`，周期 tab 切换支持「最近 7 天/近7天/7日 / 最近 30 天/近30天/30日」多种写法（去空格、去 `&nbsp;`、忽略大小写匹配），并对 7d/30d 数据做指纹校验，若一致会重试点击 30d 周期
-  - 关注者分析：`https://www.zhihu.com/creator/followers`，采集新增关注者、减少关注者、净增关注者，30d 周期额外存「近 30 日活跃关注者」到 `coreFansCount`
-
-#### 2. 知乎作品 API 字段映射（`parseApiPageWorks`）
-
-| 输出字段 | 真实 API 路径 | 备注 |
-|---|---|---|
-| workId | `zh_${item.type}_${data.id\|url_token}` | 稳定唯一，增量/去重基于它 |
-| title | 1. `data.title`；2. pin→`content[type=text].title`；3. pin→HTML 去标签首句；4. `excerpt`；5. `[${type}] ${id}` 兜底 | 自动剥离「回答/文章/想法/视频」类型前缀 |
-| coverUrl | `new_thumbnail / thumbnail / cover`；pin→图块的 `watermark_url / url / original_url` | `http://` 自动转 `https://` |
-| detailUrl | answer=`question/${qid}/answer/${id}`；article=`zhuanlan.zhihu.com/p/${id}`；pin=`pin/${id}`；zvideo=`zvideo/${id}` | 全部可直接在浏览器打开 |
-| publishTime | `data.created_time * 1000`（秒级才乘） | 真实时间戳，不再是「当天」 |
-| views | `reaction.read_count \|\| view_count \|\| play_count` | 兼容「阅读/被浏览/播放」三种口径 |
-| likes | `reaction.vote_up_count`（知乎的「赞同」） | |
-| comments | `reaction.comment_count` | |
-| favorites | `reaction.collect_count`（知乎的「收藏」） | |
-| shares | `reaction.repin_count \|\| share_count`（知乎的「转发」） | |
-| extra.likesZhihu | `reaction.like_count`（知乎的「喜欢」） | 与 `赞同 / 收藏` 独立分开，不再互相覆盖 |
-
-#### 3. 翻页与去重策略（解决重复采集）
-
-| 停止触发 | 位置 | 效果 |
-|---|---|---|
-| `paging.is_end === true` | `parseApiPageWorks` 返回 | 第一页命中就不再点「下一页」，不会再 4 条抓成 20 条 |
-| `workId` 已在全局 seenIds | 单条循环 | 同作品（跨页/同页重复）只保留第一次出现 |
-| `incremental.lastWorkId` 命中 | 单条循环 | 增量采集时直接 break 当前页 + 下一页 |
-| `incremental.lastWorkPublishTime >= publishTime` | 单条循环 | 同上，秒级时间戳精度不再会误停/漏停 |
-| 翻页 click 失败 / waitForNewResponse 超时 | while 循环 | break 并 warn，不挂死 |
-| page >= 50 | while 条件 | 保险上限 |
-
-### 🐛 修复与优化
-
-- **修复「点击知乎采集」直接报错「暂不支持平台: zhihu」** — 实际是已编译的旧 `dist-electron` 产物没有跑新的 `createCollector`；明确部署流程：每次改动采集器后需要重新 `vite build`（或在 dev 模式 vite-plugin-electron 会自动编译），本次已统一重打
-- **修复小红书 7d/30d 数据指纹一致时误抓成同一份** — 沿用已有的指纹校验 + 30d 强制重试点击（本次一并给知乎对齐同样的策略）
-- **修复快手概览粉丝/关注数都为 0** — 沿用已有的 `parseCompactText` 紧凑型解析与创作数据页访问 URL 校准
-- **修复账号概览 `worksCount` 一直为 0** — `collectAccountOverview()` 结果中的 `worksCount` 已正确存入 DB 的 `worksCount` 字段，并在页面 onMounted 选中默认账号后 `loadAccountStats` 会重新触发
-
-### 🔧 技术实现
-
-- **采集器注册**：`AnalyticsService.createCollector` 的 switch 已新增 `case 'zhihu' → new ZhihuCollector(account)`
-- **平台枚举**：`types/index.ts` 的 `KNOWN_PLATFORMS` 已包含 `'zhihu'`，前端平台下拉自动显示
-- **前端概览 OVERVIEW_GROUPS 兼容**：指标 key 未做平台过滤，知乎产出的 `views/likes/comments/favorites/shares/newFans/lostFans/netFans` 都能直接渲染
-- **主进程产物**：`npx vite build`（只跑 Vite，跳过 `vue-tsc --noEmit`，避免抖音/小红书采集器的历史 TS 错误阻断构建；历史错误会在后续单独修）
-
----
-
-## [v0.1.5] - 2026-07-28
-
-> 账号数据分析功能 · 多平台作品采集 · 多条件筛选 · 真分页
-
-### ✨ 亮点速览
-
-- 📊 **账号数据分析** — 新增账号分析页面，支持多平台作品数据采集和展示
-- 🔍 **多条件筛选** — 支持按平台、账号、关键词筛选，按发布时间/点赞/评论等排序
-- 📄 **真分页** — 服务端分页，默认 20 条/页，数据量大也流畅
-- 🎯 **平台账号ID** — 采集时保存各平台原生账号标识（抖音号/小红书号/快手号/视频号等），筛选使用平台账号ID，稳定可靠
-- 📱 **微信视频号图文采集** — 支持视频号图文作品采集，与视频采集独立分开
-
-### 🚀 新功能
-
-#### 1. 账号数据分析页面
-
-新增左侧导航"数据分析"菜单，包含作品列表和数据概览功能。
-
-- **作品列表展示**：封面图、标题、平台图标+平台名称+平台账号ID、发布时间、点赞数、评论数、收藏数、分享数
-- **多维度筛选**：
-  - 平台筛选（单选下拉框，带平台图标）
-  - 账号筛选（多选下拉框，显示头像+昵称+平台账号ID）
-  - 关键词搜索（匹配标题）
-  - 排序方式（发布时间/点赞数/评论数/收藏数/分享数，升序/降序）
-- **搜索按钮**：筛选条件变更不立即查询，点击"搜索"按钮后才执行，避免频繁刷新
-- **重置按钮**：一键清空所有筛选条件
-- **真分页**：后端分页，前端只加载当前页数据，默认 20 条/页
-
-#### 2. 作品数据采集
-
-选择账号后点击"开始采集"，自动从各平台创作者后台采集作品数据。
-
-- **支持平台**：抖音、小红书、快手、微信视频号
-- **采集内容**：作品ID、标题、封面、发布时间、播放/点赞/评论/收藏/分享等指标
-- **并发控制**：默认 2 并发，可配置，避免开太多窗口占资源
-- **增量采集**：记录上次采集位置，只采集新作品（后续版本完善）
-- **平台账号ID**：采集时自动保存各平台原生账号标识，用于数据关联和筛选
-
-#### 3. 微信视频号图文采集
-
-视频号的视频和图文是两个独立的列表，分别采集。
-
-- **视频采集**：从"视频管理"页面采集视频作品
-- **图文采集**：从"图文管理"页面采集图文作品
-- **脚本重构**：使用 `buildExtractionScript` 方法构建提取脚本，字符串拼接替代模板字符串，避免转义问题
-- **停止关键词**：视频和图文分别使用不同的停止关键词判断是否到底
-
-### 🐛 修复与优化
-
-- **平台图标显示**：从本地 `assets` 目录导入 SVG/PNG 图标资源，修复图标加载失败问题
-- **账号下拉框头像错位**：自定义头像样式，替代 `el-avatar` 组件，解决多选下拉框中头像与文字不对齐问题
-- **筛选条件状态管理**：筛选条件统一在 store 中管理，翻页时不会丢失筛选条件
-- **类型兼容**：平台账号ID筛选时使用 `String()` 转换，避免数字/字符串类型不匹配的问题
-- **筛选逻辑统一**：所有筛选条件（平台/账号/关键词等）采用统一的过滤方式，逻辑更清晰可靠
-
-### 🔧 技术实现
-
-- **数据存储**：使用 electron-store 持久化存储，key = `analyticsData`
-- **数据结构**：`works` 按 `accountId` 分桶存储，`workMetrics` 按 `workId` 存储指标
-- **筛选架构**：全量数据加载 → 统一过滤 → 排序 → 分页截取
-- **IPC 通道**：`analytics:getWorks` 分页查询，`analytics:collectWorks` 采集作品
-- **类型安全**：TypeScript 严格模式，`WorksQueryParams` / `WorkItem` / `WorkMetrics` 完整类型定义
+**Windows 用户**：下载最新版安装包，直接运行安装即可自动覆盖旧版本。用户数据和账号信息将完整保留。
 
 ---
 
