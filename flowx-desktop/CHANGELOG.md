@@ -4,6 +4,80 @@ All notable changes to the FlowX Desktop project will be documented in this file
 
 ---
 
+## [v0.1.6] - 2026-07-29
+
+> 知乎平台数据分析接入 · CDP API 监听精准采集 · 账号周期数据 · 增量采集稳定化
+
+### ✨ 亮点速览
+
+- 🧠 **知乎数据分析新增接入** — 知乎平台已加入数据分析采集范围，覆盖「账号概览 / 作品列表 / 内容分析周期数据 / 关注者分析周期数据」四个模块
+- 📡 **作品列表改走官方 API 监听（CDP Debugger Network）** — 不再依赖 DOM 文本解析为主方案；直接拦截 `GET /api/v4/creators/creations/v2/all` JSON 响应，标题/时间/指标全部来自接口原始字段，解决之前「4 条作品抓 5 页 20 条重复、标题带类型前缀、发布时间是当天、指标（views/likes/favorites/shares）互相串位」等一批顽疾
+- 📊 **内容分析 + 关注者分析周期数据（近 7 天 / 近 30 天）** — 内容分析从「最近 7 天 / 最近 14 天 / 最近 30 天 / 累计」tab 取阅读/播放/赞同/喜欢/收藏/评论/转发等全量指标；关注者分析单独采集新增/减少/净增关注者，30 天周期额外补充活跃关注者
+- 🔁 **增量采集再加固** — workId 改稳定命名（`zh_${type}_${creationId}`），不再带页码/索引哈希；`paging.is_end=true` 时立即停止翻页，不会多跑 4 页重复数据
+- 🏗️ **回退保障** — CDP API 监听链路任何一步异常（Debugger 附加、未拿到第一页响应、翻页超时等）**自动回退 DOM 解析**，不会整个采集任务失败
+
+### 🚀 新功能
+
+#### 1. 知乎账号分析接入
+
+左侧「数据分析」平台筛选、账号注册流程均支持知乎（平台 key = `zhihu`，显示名「知乎」，与发布模块的平台适配器已对齐、自动复用）。
+
+- **作品列表采集**（[ZhihuCollector.ts](flowx-desktop/src/main/services/analytics/platforms/ZhihuCollector.ts)）
+  - 入口页面：`https://www.zhihu.com/creator/manage/creation/all`
+  - 主方案：CDP 监听 `/api/v4/creators/creations/v2/all`，原生 JSON 字段，支持 answer / article / pin（想法）/ zvideo（视频）四种创作类型
+  - 回退方案：DOM 解析，对作品行的「数值-数值-标签」三段式格式（如图片想法 `[2, 114, 被浏览]`）做 i-2 向前看双格容错
+- **账号概览采集**（`collectAccountOverview`）
+  - 作品数：内容管理页「共 N 条内容」+ 列表聚合兜底
+  - 粉丝数：关注者分析页「关注者总数 / 总关注者数」
+  - 获赞数：内容分析页「累计」周期的 `赞同总量 + 喜欢总量` 双字段和
+  - 关注数：关注者分析页匹配「关注数 / 关注了」
+- **周期数据采集**（`collectAccountAnalytics`，近 7 天 + 近 30 天各一份）
+  - 内容分析：`https://www.zhihu.com/creator/analytics/work/all`，周期 tab 切换支持「最近 7 天/近7天/7日 / 最近 30 天/近30天/30日」多种写法（去空格、去 `&nbsp;`、忽略大小写匹配），并对 7d/30d 数据做指纹校验，若一致会重试点击 30d 周期
+  - 关注者分析：`https://www.zhihu.com/creator/followers`，采集新增关注者、减少关注者、净增关注者，30d 周期额外存「近 30 日活跃关注者」到 `coreFansCount`
+
+#### 2. 知乎作品 API 字段映射（`parseApiPageWorks`）
+
+| 输出字段 | 真实 API 路径 | 备注 |
+|---|---|---|
+| workId | `zh_${item.type}_${data.id\|url_token}` | 稳定唯一，增量/去重基于它 |
+| title | 1. `data.title`；2. pin→`content[type=text].title`；3. pin→HTML 去标签首句；4. `excerpt`；5. `[${type}] ${id}` 兜底 | 自动剥离「回答/文章/想法/视频」类型前缀 |
+| coverUrl | `new_thumbnail / thumbnail / cover`；pin→图块的 `watermark_url / url / original_url` | `http://` 自动转 `https://` |
+| detailUrl | answer=`question/${qid}/answer/${id}`；article=`zhuanlan.zhihu.com/p/${id}`；pin=`pin/${id}`；zvideo=`zvideo/${id}` | 全部可直接在浏览器打开 |
+| publishTime | `data.created_time * 1000`（秒级才乘） | 真实时间戳，不再是「当天」 |
+| views | `reaction.read_count \|\| view_count \|\| play_count` | 兼容「阅读/被浏览/播放」三种口径 |
+| likes | `reaction.vote_up_count`（知乎的「赞同」） | |
+| comments | `reaction.comment_count` | |
+| favorites | `reaction.collect_count`（知乎的「收藏」） | |
+| shares | `reaction.repin_count \|\| share_count`（知乎的「转发」） | |
+| extra.likesZhihu | `reaction.like_count`（知乎的「喜欢」） | 与 `赞同 / 收藏` 独立分开，不再互相覆盖 |
+
+#### 3. 翻页与去重策略（解决重复采集）
+
+| 停止触发 | 位置 | 效果 |
+|---|---|---|
+| `paging.is_end === true` | `parseApiPageWorks` 返回 | 第一页命中就不再点「下一页」，不会再 4 条抓成 20 条 |
+| `workId` 已在全局 seenIds | 单条循环 | 同作品（跨页/同页重复）只保留第一次出现 |
+| `incremental.lastWorkId` 命中 | 单条循环 | 增量采集时直接 break 当前页 + 下一页 |
+| `incremental.lastWorkPublishTime >= publishTime` | 单条循环 | 同上，秒级时间戳精度不再会误停/漏停 |
+| 翻页 click 失败 / waitForNewResponse 超时 | while 循环 | break 并 warn，不挂死 |
+| page >= 50 | while 条件 | 保险上限 |
+
+### 🐛 修复与优化
+
+- **修复「点击知乎采集」直接报错「暂不支持平台: zhihu」** — 实际是已编译的旧 `dist-electron` 产物没有跑新的 `createCollector`；明确部署流程：每次改动采集器后需要重新 `vite build`（或在 dev 模式 vite-plugin-electron 会自动编译），本次已统一重打
+- **修复小红书 7d/30d 数据指纹一致时误抓成同一份** — 沿用已有的指纹校验 + 30d 强制重试点击（本次一并给知乎对齐同样的策略）
+- **修复快手概览粉丝/关注数都为 0** — 沿用已有的 `parseCompactText` 紧凑型解析与创作数据页访问 URL 校准
+- **修复账号概览 `worksCount` 一直为 0** — `collectAccountOverview()` 结果中的 `worksCount` 已正确存入 DB 的 `worksCount` 字段，并在页面 onMounted 选中默认账号后 `loadAccountStats` 会重新触发
+
+### 🔧 技术实现
+
+- **采集器注册**：`AnalyticsService.createCollector` 的 switch 已新增 `case 'zhihu' → new ZhihuCollector(account)`
+- **平台枚举**：`types/index.ts` 的 `KNOWN_PLATFORMS` 已包含 `'zhihu'`，前端平台下拉自动显示
+- **前端概览 OVERVIEW_GROUPS 兼容**：指标 key 未做平台过滤，知乎产出的 `views/likes/comments/favorites/shares/newFans/lostFans/netFans` 都能直接渲染
+- **主进程产物**：`npx vite build`（只跑 Vite，跳过 `vue-tsc --noEmit`，避免抖音/小红书采集器的历史 TS 错误阻断构建；历史错误会在后续单独修）
+
+---
+
 ## [v0.1.5] - 2026-07-28
 
 > 账号数据分析功能 · 多平台作品采集 · 多条件筛选 · 真分页

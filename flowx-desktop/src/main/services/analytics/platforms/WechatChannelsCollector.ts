@@ -1,6 +1,6 @@
 import { logger } from '../../../utils/logger';
 import { BaseCollector } from '../BaseCollector';
-import type { AccountCredential } from '../../../../types';
+import type { AccountCredential, AccountAnalyticsPeriodData } from '../../../../types';
 import { sleep } from '../../platforms/shared';
 
 export class WechatChannelsCollector extends BaseCollector {
@@ -192,7 +192,15 @@ export class WechatChannelsCollector extends BaseCollector {
     };
   }
 
-  async collectWorksList(limit: number = 20): Promise<Array<{
+  async collectAccountAnalytics(): Promise<AccountAnalyticsPeriodData[]> {
+    // TODO: 微信视频号数据中心分析暂未实现
+    return [];
+  }
+
+  async collectWorksList(limit: number = 20, incremental?: {
+    lastWorkId?: string;
+    lastWorkPublishTime?: number;
+  }): Promise<Array<{
     workId: string;
     title: string;
     coverUrl?: string;
@@ -220,7 +228,7 @@ export class WechatChannelsCollector extends BaseCollector {
 
     try {
       log('info', 'collect-video', '开始采集视频列表');
-      const videoWorks = await this.collectVideoWorks(videoLimit);
+      const videoWorks = await this.collectVideoWorks(videoLimit, incremental);
       log('info', 'video-count', `采集到 ${videoWorks.length} 条视频作品`);
       for (const w of videoWorks) {
         if (!seenIds.has(w.workId)) {
@@ -234,7 +242,7 @@ export class WechatChannelsCollector extends BaseCollector {
 
     try {
       log('info', 'collect-image', '开始采集图文列表');
-      const imageWorks = await this.collectImageWorks(imageLimit);
+      const imageWorks = await this.collectImageWorks(imageLimit, incremental);
       log('info', 'image-count', `采集到 ${imageWorks.length} 条图文作品`);
       for (const w of imageWorks) {
         if (!seenIds.has(w.workId)) {
@@ -283,7 +291,10 @@ export class WechatChannelsCollector extends BaseCollector {
     return result;
   }
 
-  private async collectVideoWorks(limit: number): Promise<any[]> {
+  private async collectVideoWorks(limit: number, incremental?: {
+    lastWorkId?: string;
+    lastWorkPublishTime?: number;
+  }): Promise<any[]> {
     const log = this.makeLog('channels-video');
 
     try {
@@ -305,12 +316,12 @@ export class WechatChannelsCollector extends BaseCollector {
       log('warn', 'wait-timeout', '等待视频加载超时，继续尝试提取');
     }
 
-    let works = await this.extractWorksPage('video');
+    let works = await this.extractWorksPage('video', incremental);
 
-    if (works.length < limit) {
+    if (works.length < limit && !(incremental && works.length > 0 && this.checkIncrementalStop(works, incremental))) {
       try {
         await this.scrollDown(Math.ceil(limit / 10));
-        const moreWorks = await this.extractWorksPage('video');
+        const moreWorks = await this.extractWorksPage('video', incremental);
         if (moreWorks.length > works.length) {
           works = moreWorks;
         }
@@ -322,7 +333,10 @@ export class WechatChannelsCollector extends BaseCollector {
     return works.slice(0, limit);
   }
 
-  private async collectImageWorks(limit: number): Promise<any[]> {
+  private async collectImageWorks(limit: number, incremental?: {
+    lastWorkId?: string;
+    lastWorkPublishTime?: number;
+  }): Promise<any[]> {
     const log = this.makeLog('channels-image');
 
     try {
@@ -357,12 +371,12 @@ export class WechatChannelsCollector extends BaseCollector {
       log('warn', 'wait-timeout', '等待图文加载超时，继续尝试提取');
     }
 
-    let works = await this.extractWorksPage('image');
+    let works = await this.extractWorksPage('image', incremental);
 
-    if (works.length < limit) {
+    if (works.length < limit && !(incremental && works.length > 0 && this.checkIncrementalStop(works, incremental))) {
       try {
         await this.scrollDown(Math.ceil(limit / 10));
-        const moreWorks = await this.extractWorksPage('image');
+        const moreWorks = await this.extractWorksPage('image', incremental);
         if (moreWorks.length > works.length) {
           works = moreWorks;
         }
@@ -424,7 +438,10 @@ export class WechatChannelsCollector extends BaseCollector {
     return false;
   }
 
-  private async extractWorksPage(type: 'video' | 'image' = 'video'): Promise<Array<{
+  private async extractWorksPage(type: 'video' | 'image' = 'video', incremental?: {
+    lastWorkId?: string;
+    lastWorkPublishTime?: number;
+  }): Promise<Array<{
     workId: string;
     title: string;
     coverUrl?: string;
@@ -462,7 +479,7 @@ export class WechatChannelsCollector extends BaseCollector {
         logger.warn('[WechatChannelsCollector] 主文档提取结果为空', { type });
       }
 
-      return data.map(w => ({
+      const works = data.map(w => ({
         workId: w.workId,
         title: w.title,
         coverUrl: w.coverUrl || undefined,
@@ -476,10 +493,48 @@ export class WechatChannelsCollector extends BaseCollector {
         favorites: w.favorites,
         shares: w.shares,
       }));
+
+      if (incremental && (incremental.lastWorkId || incremental.lastWorkPublishTime)) {
+        const filtered: typeof works = [];
+        const log = this.makeLog('channels-incremental');
+        for (const w of works) {
+          if (incremental.lastWorkId && w.workId === incremental.lastWorkId) {
+            log('info', 'stop', `遇到已采集的最后作品ID: ${w.workId}，增量停止`);
+            break;
+          }
+          if (incremental.lastWorkPublishTime && w.publishTime && w.publishTime <= incremental.lastWorkPublishTime) {
+            log('info', 'stop', `遇到已采集的发布时间: ${new Date(w.publishTime).toISOString()}，增量停止`);
+            break;
+          }
+          filtered.push(w);
+        }
+        return filtered;
+      }
+
+      return works;
     } catch (e) {
       logger.error('[WechatChannelsCollector] 提取作品列表失败', { type, error: (e as Error).message });
       return [];
     }
+  }
+
+  private checkIncrementalStop(works: any[], incremental: {
+    lastWorkId?: string;
+    lastWorkPublishTime?: number;
+  }): boolean {
+    if (!works || works.length === 0) return false;
+    const lastWork = works[works.length - 1];
+    if (incremental.lastWorkId) {
+      for (const w of works) {
+        if (w.workId === incremental.lastWorkId) return true;
+      }
+    }
+    if (incremental.lastWorkPublishTime) {
+      for (const w of works) {
+        if (w.publishTime && w.publishTime <= incremental.lastWorkPublishTime) return true;
+      }
+    }
+    return false;
   }
 
   private buildExtractionScript(type: string, contentType: string): string {

@@ -9,6 +9,7 @@ import type {
   WorksQueryParams,
   PagedResult,
   CollectProgress,
+  AccountAnalyticsPeriodData,
 } from '../../types';
 
 type SortByField = 'publishTime' | 'views' | 'likes' | 'comments' | 'favorites' | 'completionRate' | 'interactionRate';
@@ -20,7 +21,7 @@ export const useAnalyticsStore = defineStore('analytics', {
     works: [] as (WorkItem & { metrics?: WorkMetrics })[],
     worksTotal: 0,
     worksPage: 1,
-    worksPageSize: 20,
+    worksPageSize: 10,
     filterAccountIds: [] as string[],
     filterPlatformAccountIds: [] as string[],
     filterPlatform: '' as string,
@@ -34,10 +35,16 @@ export const useAnalyticsStore = defineStore('analytics', {
     queueStatus: { queued: 0, running: 0, completed: 0 },
     error: '' as string,
     selectedAccountId: '' as string,
+    accountAnalyticsList: [] as AccountAnalyticsPeriodData[],
+    latestAccountAnalytics: null as AccountAnalyticsPeriodData | null,
   }),
   getters: {
     totalPages: (s) => Math.ceil(s.worksTotal / s.worksPageSize) || 1,
     isCollecting: (s) => !!s.currentProgress && s.currentProgress.status === 'running',
+    latestAccountStats: (s) => {
+      if (!s.accountStats || s.accountStats.length === 0) return null;
+      return s.accountStats[s.accountStats.length - 1];
+    },
   },
   actions: {
     async loadConfig() {
@@ -135,6 +142,9 @@ export const useAnalyticsStore = defineStore('analytics', {
             } else {
               if (progress.status === 'completed') {
                 this.loadWorks();
+                if (this.selectedAccountId) {
+                  this.loadAccountStats(this.selectedAccountId);
+                }
               }
             }
           }
@@ -185,6 +195,22 @@ export const useAnalyticsStore = defineStore('analytics', {
     setPage(page: number) {
       this.worksPage = page;
       this.loadWorks();
+    },
+
+    async loadAccountAnalytics(accountId: string, limit?: number) {
+      try {
+        this.accountAnalyticsList = await electronApi.analytics.getAccountAnalytics(accountId, limit);
+      } catch (e) {
+        this.error = e instanceof Error ? e.message : String(e);
+      }
+    },
+
+    async loadLatestAccountAnalytics(accountId: string, period?: 'yesterday' | '7d' | '30d') {
+      try {
+        this.latestAccountAnalytics = await electronApi.analytics.getLatestAccountAnalytics(accountId, period);
+      } catch (e) {
+        this.error = e instanceof Error ? e.message : String(e);
+      }
     },
 
     async clearData(accountId: string) {

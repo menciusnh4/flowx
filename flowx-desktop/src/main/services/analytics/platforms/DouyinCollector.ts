@@ -1,9 +1,10 @@
 import { BaseCollector } from '../BaseCollector';
-import type { AccountCredential } from '../../../../types';
+import type { AccountCredential, AccountAnalyticsPeriodData, AnalyticsMetricValue, PeerCompare } from '../../../../types';
 import { sleep } from '../../platforms/shared';
 
 const DOUYIN_CREATOR_HOME = 'https://creator.douyin.com/creator-micro/home';
 const DOUYIN_CONTENT_MANAGE = 'https://creator.douyin.com/creator-micro/content/manage';
+const DOUYIN_DATA_CENTER = 'https://creator.douyin.com/creator-micro/data-center/operation';
 
 function parseNumber(text: string | null | undefined): number {
   if (!text) return 0;
@@ -198,7 +199,449 @@ export class DouyinCollector extends BaseCollector {
     return data;
   }
 
-  async collectWorksList(limit: number = 50): Promise<Array<{
+  async collectAccountAnalytics(): Promise<AccountAnalyticsPeriodData[]> {
+    const log = this.makeLog('douyin-analytics');
+
+    if (!this.win) {
+      await this.initWindow();
+    }
+    if (!this.win) throw new Error('窗口初始化失败');
+
+    log('info', 'goto', '跳转到数据中心运营页');
+    await this.goto(DOUYIN_DATA_CENTER, 3000);
+    await this.waitForContent(800, 20000);
+
+    log('info', 'peer-compare', '开始提取账号诊断 peerCompare 数据');
+    const peerCompare = await this.safeEval<PeerCompare[]>(`
+      function _parseNum(text) {
+        try {
+          var clean = (text || '').trim().replace(/[,\\s]/g, '');
+          var pm = clean.match(/^(\\d+(?:\\.\\d+)?)([万wWkK千%])?$/);
+          if (!pm) return 0;
+          var n = parseFloat(pm[1]);
+          if (pm[2]) {
+            if (/[万wW]/.test(pm[2])) n *= 10000;
+            else if (/[千kK]/.test(pm[2])) n *= 1000;
+          }
+          return Math.round(n);
+        } catch (e) { return 0; }
+      }
+
+      function _parsePct(text) {
+        if (!text) return -1;
+        var t = (text || '').trim();
+        var m = t.match(/(\\d+(?:\\.\\d+)?)\\s*%/);
+        if (!m) return -1;
+        return Math.round(parseFloat(m[1]));
+      }
+
+      var results = [];
+      var keywords = ['投稿活跃度', '视频播放量', '视频完播率', '互动指数', '粉丝净增量'];
+
+      var allDivs = document.querySelectorAll('div');
+      for (var i = 0; i < allDivs.length; i++) {
+        var div = allDivs[i];
+        var text = (div.innerText || div.textContent || '').trim();
+        if (!text) continue;
+
+        for (var ki = 0; ki < keywords.length; ki++) {
+          var kw = keywords[ki];
+          if (text.indexOf(kw) >= 0 && text.length < 300) {
+            var already = false;
+            for (var ri = 0; ri < results.length; ri++) {
+              if (results[ri].dimension === kw) { already = true; break; }
+            }
+            if (already) continue;
+
+            var lines = text.split(/\\n/).map(function(s){ return s.trim(); }).filter(Boolean);
+            var mine = 0;
+            var peer = 0;
+            var beatPct = -1;
+
+            for (var li = 0; li < lines.length; li++) {
+              var line = lines[li];
+              if (line.indexOf(kw) >= 0) continue;
+
+              if (line.indexOf('低于') >= 0 || line.indexOf('超过') >= 0) {
+                var bp = _parsePct(line);
+                if (bp >= 0) {
+                  if (line.indexOf('低于') >= 0) {
+                    beatPct = Math.max(0, 100 - bp);
+                  } else {
+                    beatPct = bp;
+                  }
+                }
+                continue;
+              }
+
+              if (/同类|作者|平均/.test(line)) {
+                var pv = _parseNum(line);
+                if (pv > 0 && peer === 0) peer = pv;
+                continue;
+              }
+
+              var nv = _parseNum(line);
+              if (nv > 0 && mine === 0) mine = nv;
+            }
+
+            if (mine > 0 || peer > 0 || beatPct >= 0) {
+              results.push({
+                dimension: kw,
+                mine: mine,
+                peer: peer || undefined,
+                beatPct: beatPct
+              });
+            }
+          }
+        }
+
+        if (results.length >= keywords.length) break;
+      }
+
+      if (results.length === 0) {
+        var bodyText = (document.body.innerText || '').trim();
+        for (var ki2 = 0; ki2 < keywords.length; ki2++) {
+          var kw2 = keywords[ki2];
+          var idx = bodyText.indexOf(kw2);
+          if (idx < 0) continue;
+          var snippet = bodyText.slice(Math.max(0, idx - 100), idx + 200);
+          var lines2 = snippet.split(/\\n/).map(function(s){ return s.trim(); }).filter(Boolean);
+
+          var mine2 = 0;
+          var peer2 = 0;
+          var beatPct2 = -1;
+
+          for (var li2 = 0; li2 < lines2.length; li2++) {
+            var line2 = lines2[li2];
+            if (line2.indexOf(kw2) >= 0) continue;
+
+            if (line2.indexOf('低于') >= 0 || line2.indexOf('超过') >= 0) {
+              var bp2 = _parsePct(line2);
+              if (bp2 >= 0) {
+                if (line2.indexOf('低于') >= 0) beatPct2 = Math.max(0, 100 - bp2);
+                else beatPct2 = bp2;
+              }
+              continue;
+            }
+
+            if (/同类|作者|平均/.test(line2)) {
+              var pv2 = _parseNum(line2);
+              if (pv2 > 0 && peer2 === 0) peer2 = pv2;
+              continue;
+            }
+
+            var nv2 = _parseNum(line2);
+            if (nv2 > 0 && mine2 === 0) mine2 = nv2;
+          }
+
+          if (mine2 > 0 || peer2 > 0 || beatPct2 >= 0) {
+            var already2 = false;
+            for (var ri2 = 0; ri2 < results.length; ri2++) {
+              if (results[ri2].dimension === kw2) { already2 = true; break; }
+            }
+            if (!already2) {
+              results.push({
+                dimension: kw2,
+                mine: mine2,
+                peer: peer2 || undefined,
+                beatPct: beatPct2
+              });
+            }
+          }
+        }
+      }
+
+      return results;
+    `, 'extract-peer-compare');
+
+    log('info', 'peer-compare-done', `账号诊断提取完成，共 ${peerCompare.length} 个维度`, { count: peerCompare.length, dimensions: peerCompare.map(p => ({ dimension: p.dimension, mine: p.mine, beatPct: p.beatPct })) });
+
+    const periods: Array<{ key: 'yesterday' | '7d' | '30d'; label: string }> = [
+      { key: 'yesterday', label: '昨日' },
+      { key: '7d', label: '近7天' },
+      { key: '30d', label: '近30天' },
+    ];
+
+    const resultList: AccountAnalyticsPeriodData[] = [];
+    const collectedAt = Date.now();
+
+    for (const period of periods) {
+      log('info', 'period-click', `切换周期: ${period.label}`);
+      try {
+        await this.safeEval(`
+          (function() {
+            var clicked = false;
+            var candidates = document.querySelectorAll('div, button, li, span, a');
+            for (var i = 0; i < candidates.length; i++) {
+              var el = candidates[i];
+              var text = (el.innerText || el.textContent || '').trim();
+              if (text === '${period.label}' && !clicked) {
+                var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+                if (rect && rect.width > 0 && rect.height > 0) {
+                  el.click();
+                  clicked = true;
+                }
+              }
+            }
+            if (!clicked) {
+              var allText = (document.body.innerText || '').trim();
+              var idx = allText.indexOf('${period.label}');
+              if (idx >= 0) {
+                var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+                var node;
+                while (node = walker.nextNode()) {
+                  var nt = (node.innerText || node.textContent || '').trim();
+                  if (nt === '${period.label}' && !clicked) {
+                    try { node.click(); clicked = true; } catch(e) {}
+                  }
+                }
+              }
+            }
+            return clicked;
+          })();
+        `, `click-period-${period.key}`);
+      } catch (e) {
+        log('warn', 'period-click-fail', `切换周期失败: ${period.label}`, { error: (e as Error).message });
+      }
+
+      await sleep(2000);
+
+      log('info', 'extract-period', `提取 ${period.label} 数据表现卡片`);
+      const periodData = await this.safeEval<{
+        views?: AnalyticsMetricValue;
+        profileViews?: AnalyticsMetricValue;
+        likes?: AnalyticsMetricValue;
+        shares?: AnalyticsMetricValue;
+        comments?: AnalyticsMetricValue;
+        coverClickRate?: AnalyticsMetricValue;
+        netFans?: AnalyticsMetricValue;
+        lostFans?: AnalyticsMetricValue;
+        extra: Record<string, any>;
+      }>(`
+        function _parseNum(text) {
+          try {
+            var clean = (text || '').trim().replace(/[,\\s]/g, '');
+            var pm = clean.match(/^(-?\\d+(?:\\.\\d+)?)([万wWkK千%])?$/);
+            if (!pm) return 0;
+            var n = parseFloat(pm[1]);
+            if (pm[2]) {
+              if (/[万wW]/.test(pm[2])) n *= 10000;
+              else if (/[千kK]/.test(pm[2])) n *= 1000;
+            }
+            return Math.round(n);
+          } catch (e) { return 0; }
+        }
+
+        function _parseChangePct(text) {
+          if (!text) return null;
+          var t = (text || '').trim();
+          var m = t.match(/([+-]?\\d+(?:\\.\\d+)?)\\s*%/);
+          if (!m) return null;
+          return parseFloat(m[1]);
+        }
+
+        function _makeMetric(text, unit) {
+          if (!text) return undefined;
+          var lines = text.split(/\\n/).map(function(s){ return s.trim(); }).filter(Boolean);
+          if (lines.length === 0) return undefined;
+
+          var value = 0;
+          var changePct = null;
+          var foundValue = false;
+
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            if (/环比|昨日|前日|上周|上月/.test(line)) {
+              var cp = _parseChangePct(line);
+              if (cp !== null) changePct = cp;
+              continue;
+            }
+            if (/^[+-]/.test(line) && line.indexOf('%') >= 0) {
+              var cp2 = _parseChangePct(line);
+              if (cp2 !== null) changePct = cp2;
+              continue;
+            }
+            if (!foundValue) {
+              var nv = _parseNum(line);
+              if (nv !== 0 || /[\\d]/.test(line)) {
+                value = nv;
+                foundValue = true;
+              }
+            }
+          }
+
+          if (!foundValue && lines.length > 0) {
+            value = _parseNum(lines[lines.length - 1]);
+          }
+
+          return {
+            value: value,
+            changePct: changePct,
+            unit: unit || undefined
+          };
+        }
+
+        var result = {
+          views: undefined,
+          profileViews: undefined,
+          likes: undefined,
+          shares: undefined,
+          comments: undefined,
+          coverClickRate: undefined,
+          netFans: undefined,
+          lostFans: undefined,
+          extra: {}
+        };
+
+        var labelMap = {
+          '播放量': 'views',
+          '播放': 'views',
+          '主页访问': 'profileViews',
+          '主页访客': 'profileViews',
+          '作品点赞': 'likes',
+          '点赞': 'likes',
+          '作品分享': 'shares',
+          '分享': 'shares',
+          '作品评论': 'comments',
+          '评论': 'comments',
+          '封面点击率': 'coverClickRate',
+          '净增粉丝': 'netFans',
+          '净增关注': 'netFans',
+          '取关粉丝': 'lostFans',
+          '取消关注': 'lostFans',
+          '总粉丝量': 'fansTotal',
+          '粉丝总数': 'fansTotal',
+          '总粉丝': 'fansTotal'
+        };
+
+        var metricUnitMap = {
+          'coverClickRate': '%'
+        };
+
+        var cardSelectors = [
+          '[class*="card"]',
+          '[class*="Card"]',
+          '[class*="metric"]',
+          '[class*="Metric"]',
+          '[class*="stat"]',
+          '[class*="Stat"]',
+          '[class*="item"]',
+          '[class*="Item"]'
+        ];
+
+        var candidates = [];
+        for (var si = 0; si < cardSelectors.length; si++) {
+          try {
+            var found = document.querySelectorAll(cardSelectors[si]);
+            for (var fi = 0; fi < found.length; fi++) {
+              if (candidates.indexOf(found[fi]) === -1) {
+                candidates.push(found[fi]);
+              }
+            }
+          } catch (e) {}
+        }
+
+        for (var ci = 0; ci < candidates.length; ci++) {
+          var card = candidates[ci];
+          var text = (card.innerText || card.textContent || '').trim();
+          if (!text || text.length < 4 || text.length > 300) continue;
+
+          var matchedLabel = null;
+          var matchedField = null;
+          var labels = Object.keys(labelMap);
+          for (var li = 0; li < labels.length; li++) {
+            if (text.indexOf(labels[li]) >= 0) {
+              matchedLabel = labels[li];
+              matchedField = labelMap[labels[li]];
+              break;
+            }
+          }
+          if (!matchedLabel) continue;
+
+          var lines = text.split(/\\n/).map(function(s){ return s.trim(); }).filter(Boolean);
+          var labelLineIdx = -1;
+          for (var lli = 0; lli < lines.length; lli++) {
+            if (lines[lli].indexOf(matchedLabel) >= 0) {
+              labelLineIdx = lli;
+              break;
+            }
+          }
+          if (labelLineIdx < 0) continue;
+
+          var cardText = lines.slice(labelLineIdx).join('\\n');
+          var unit = metricUnitMap[matchedField] || undefined;
+          var metric = _makeMetric(cardText, unit);
+
+          if (matchedField === 'fansTotal') {
+            if (metric) result.extra.fansTotal = metric.value;
+          } else {
+            if (metric) result[matchedField] = metric;
+          }
+        }
+
+        var bodyText = (document.body.innerText || '').trim();
+        var bodyLines = bodyText.split(/\\n/).map(function(s){ return s.trim(); }).filter(Boolean);
+        for (var bli = 0; bli < bodyLines.length; bli++) {
+          var bl = bodyLines[bli];
+          var labels2 = Object.keys(labelMap);
+          for (var li2 = 0; li2 < labels2.length; li2++) {
+            if (bl === labels2[li2] || bl.indexOf(labels2[li2] + '\\n') === 0 || bl.indexOf(labels2[li2] + ' ') === 0) {
+              var field2 = labelMap[labels2[li2]];
+              if (field2 === 'fansTotal' && result.extra.fansTotal) continue;
+              if (field2 !== 'fansTotal' && result[field2]) continue;
+
+              var snippetLines = [];
+              for (var sj = 0; sj < 5 && bli + sj < bodyLines.length; sj++) {
+                snippetLines.push(bodyLines[bli + sj]);
+              }
+              var snippetText = snippetLines.join('\\n');
+              var unit2 = metricUnitMap[field2] || undefined;
+              var metric2 = _makeMetric(snippetText, unit2);
+
+              if (field2 === 'fansTotal') {
+                if (metric2) result.extra.fansTotal = metric2.value;
+              } else {
+                if (metric2) result[field2] = metric2;
+              }
+            }
+          }
+        }
+
+        return result;
+      `, `extract-period-${period.key}`);
+
+      log('info', 'period-extracted', `${period.label} 数据提取完成`, periodData);
+
+      const id = `${this.account.id}_${period.key}_${collectedAt}`;
+      const periodRecord: AccountAnalyticsPeriodData = {
+        id,
+        accountId: this.account.id,
+        platform: 'douyin',
+        period: period.key,
+        peerCompare: period.key === 'yesterday' ? peerCompare : undefined,
+        views: periodData.views,
+        profileViews: periodData.profileViews,
+        likes: periodData.likes,
+        shares: periodData.shares,
+        comments: periodData.comments,
+        coverClickRate: periodData.coverClickRate,
+        netFans: periodData.netFans,
+        lostFans: periodData.lostFans,
+        extra: Object.keys(periodData.extra).length > 0 ? periodData.extra : undefined,
+        collectedAt,
+      };
+
+      resultList.push(periodRecord);
+    }
+
+    log('info', 'done', '账号周期分析采集完成', { count: resultList.length });
+    return resultList;
+  }
+
+  async collectWorksList(limit: number = 50, incremental?: {
+    lastWorkId?: string;
+    lastWorkPublishTime?: number;
+  }): Promise<Array<{
     workId: string;
     title: string;
     coverUrl?: string;
@@ -235,9 +678,12 @@ export class DouyinCollector extends BaseCollector {
 
       const allWorks: Array<any> = [];
       const seenIds = new Set<string>();
+      let hitIncrementalStop = false;
 
-      const firstPageCount = this.parseAndAddWorks(firstPageData, allWorks, seenIds, log);
-      log('info', 'page-works', `第 1 页提取到 ${firstPageCount} 条作品（CDP 监听方式）`);
+      const firstPageResult = this.parseAndAddWorks(firstPageData, allWorks, seenIds, log, incremental);
+      const firstPageCount = firstPageResult.added;
+      hitIncrementalStop = firstPageResult.hitStop;
+      log('info', 'page-works', `第 1 页提取到 ${firstPageCount} 条作品（CDP 监听方式）${hitIncrementalStop ? '，增量停止' : ''}`);
 
       let hasMore = firstPageData?.has_more ?? false;
       let page = 1;
@@ -247,7 +693,7 @@ export class DouyinCollector extends BaseCollector {
         lastFirstAwemeId = allWorks[0].extra.awemeId as string;
       }
 
-      while (hasMore && allWorks.length < limit && page < maxPages) {
+      while (hasMore && allWorks.length < limit && page < maxPages && !hitIncrementalStop) {
         const beforeCount = this.getResponseCount();
         
         const scrolled = await this.scrollToBottom();
@@ -261,7 +707,8 @@ export class DouyinCollector extends BaseCollector {
           
           const pageWorks: Array<any> = [];
           const pageSeen = new Set<string>();
-          const added = this.parseAndAddWorks(nextPageData, pageWorks, pageSeen, log);
+          const pageResult = this.parseAndAddWorks(nextPageData, pageWorks, pageSeen, log);
+          const added = pageResult.added;
           
           let currentFirstAwemeId = '';
           if (pageWorks.length > 0 && pageWorks[0].extra?.awemeId) {
@@ -276,13 +723,15 @@ export class DouyinCollector extends BaseCollector {
             lastFirstAwemeId = currentFirstAwemeId;
           }
 
-          this.parseAndAddWorks(nextPageData, allWorks, seenIds, log);
+          const mainResult = this.parseAndAddWorks(nextPageData, allWorks, seenIds, log, incremental);
+          hitIncrementalStop = mainResult.hitStop;
           page++;
-          log('info', 'page-works', `第 ${page} 页提取到 ${added} 条作品（CDP 监听方式），累计 ${allWorks.length} 条`);
+          log('info', 'page-works', `第 ${page} 页提取到 ${mainResult.added} 条作品（CDP 监听方式），累计 ${allWorks.length} 条${hitIncrementalStop ? '，增量停止' : ''}`);
           
           hasMore = nextPageData?.has_more ?? false;
           
-          if (added === 0) break;
+          if (mainResult.added === 0 && !hitIncrementalStop) break;
+          if (hitIncrementalStop) break;
         } catch (e) {
           log('warn', 'page-timeout', '等待新数据超时，停止加载');
           break;
@@ -305,7 +754,7 @@ export class DouyinCollector extends BaseCollector {
     }
 
     log('info', 'fallback', '回退到 DOM 解析方式');
-    return this.collectWorksFallback(limit, log);
+    return this.collectWorksFallback(limit, log, incremental);
   }
 
   private getResponseCount(): number {
@@ -347,14 +796,20 @@ export class DouyinCollector extends BaseCollector {
     }
   }
 
-  private parseAndAddWorks(resp: any, allWorks: Array<any>, seenIds: Set<string>, log: ReturnType<typeof this.makeLog>): number {
+  private parseAndAddWorks(
+    resp: any,
+    allWorks: Array<any>,
+    seenIds: Set<string>,
+    log: ReturnType<typeof this.makeLog>,
+    incremental?: { lastWorkId?: string; lastWorkPublishTime?: number },
+  ): { added: number; hitStop: boolean } {
     if (!resp) {
       log('warn', 'parse-empty', '响应为空');
-      return 0;
+      return { added: 0, hitStop: false };
     }
     if (resp.status_code !== 0) {
       log('warn', 'parse-not-success', `响应不成功: status_code=${resp.status_code}`);
-      return 0;
+      return { added: 0, hitStop: false };
     }
     
     let items: any[] = [];
@@ -376,19 +831,37 @@ export class DouyinCollector extends BaseCollector {
     
     if (!Array.isArray(items) || items.length === 0) {
       log('info', 'parse-empty-list', '列表为空');
-      return 0;
+      return { added: 0, hitStop: false };
     }
 
     let count = 0;
+    let hitStop = false;
     for (const item of items) {
       const awemeId = item.aweme_id || item.id || item.work_id || item.awemeId || '';
       if (!awemeId) continue;
-      if (seenIds.has(awemeId)) continue;
-      seenIds.add(awemeId);
+
+      const workId = `dy_${awemeId}`;
+
+      if (incremental?.lastWorkId && workId === incremental.lastWorkId) {
+        log('info', 'incremental-stop', `遇到已采集的最后作品ID: ${workId}，增量停止`);
+        hitStop = true;
+        break;
+      }
+
+      const publishTimeRaw = item.create_time || item.publish_time || item.ctime || Date.now();
+      const publishTime = typeof publishTimeRaw === 'number' ? publishTimeRaw * (publishTimeRaw < 1e12 ? 1000 : 1) : Date.now();
+
+      if (incremental?.lastWorkPublishTime && publishTime <= incremental.lastWorkPublishTime) {
+        log('info', 'incremental-stop', `遇到已采集的发布时间: ${new Date(publishTime).toISOString()}，增量停止`);
+        hitStop = true;
+        break;
+      }
+
+      if (seenIds.has(workId)) continue;
+      seenIds.add(workId);
 
       const title = item.desc || item.title || item.caption || '';
       const coverUrl = item.cover || item.cover_url || item.thumb_url || (item.video && item.video.cover) || '';
-      const publishTime = item.create_time || item.publish_time || item.ctime || Date.now();
       const detailUrl = awemeId ? `https://www.douyin.com/video/${awemeId}` : '';
       const duration = item.duration || (item.video && item.video.duration) || 0;
       
@@ -404,10 +877,10 @@ export class DouyinCollector extends BaseCollector {
       if (item.article_url || item.is_article) contentType = 'article';
 
       allWorks.push({
-        workId: `dy_${awemeId}`,
+        workId,
         title,
         coverUrl,
-        publishTime: typeof publishTime === 'number' ? publishTime * (publishTime < 1e12 ? 1000 : 1) : Date.now(),
+        publishTime,
         detailUrl,
         duration: typeof duration === 'number' ? Math.floor(duration / 1000) : 0,
         contentType,
@@ -423,10 +896,14 @@ export class DouyinCollector extends BaseCollector {
       count++;
     }
 
-    return count;
+    return { added: count, hitStop };
   }
 
-  private async collectWorksFallback(limit: number, log: ReturnType<typeof this.makeLog>): Promise<Array<any>> {
+  private async collectWorksFallback(
+    limit: number,
+    log: ReturnType<typeof this.makeLog>,
+    incremental?: { lastWorkId?: string; lastWorkPublishTime?: number },
+  ): Promise<Array<any>> {
     const cardsReady = await this.waitForWorksCards(30000);
     if (!cardsReady) {
       log('warn', 'cards-not-ready', '未检测到作品卡片，继续尝试采集');
@@ -701,12 +1178,25 @@ export class DouyinCollector extends BaseCollector {
         break;
       }
 
+      let hitIncrementalStop = false;
       for (const w of pageWorks) {
+        if (incremental?.lastWorkId && w.workId === incremental.lastWorkId) {
+          log('info', 'incremental-stop', `[DOM回退] 遇到已采集的最后作品ID: ${w.workId}，增量停止`);
+          hitIncrementalStop = true;
+          break;
+        }
+        if (incremental?.lastWorkPublishTime && w.publishTime && w.publishTime <= incremental.lastWorkPublishTime) {
+          log('info', 'incremental-stop', `[DOM回退] 遇到已采集的发布时间: ${new Date(w.publishTime).toISOString()}，增量停止`);
+          hitIncrementalStop = true;
+          break;
+        }
         if (!seenIds.has(w.workId)) {
           seenIds.add(w.workId);
           works.push(w);
         }
       }
+
+      if (hitIncrementalStop) break;
 
       if (works.length === lastCount) {
         stableScrolls++;

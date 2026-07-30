@@ -38,6 +38,7 @@ import type {
   WorksQueryParams,
   CollectProgress,
   CollectTaskResult,
+  AccountAnalyticsPeriodData,
 } from '../types';
 
 // Preload 脚本：通过 contextBridge 暴露安全 API
@@ -471,6 +472,10 @@ contextBridge.exposeInMainWorld('electron', {
       invoke('analytics:getWorkMetrics', workId),
     getAccountStats: (accountId: string, days?: number): Promise<AccountStatsSnapshot[]> =>
       invoke('analytics:getAccountStats', accountId, days),
+    getAccountAnalytics: (accountId: string, limit?: number): Promise<AccountAnalyticsPeriodData[]> =>
+      invoke('analytics:getAccountAnalytics', accountId, limit),
+    getLatestAccountAnalytics: (accountId: string, period?: 'yesterday' | '7d' | '30d'): Promise<AccountAnalyticsPeriodData | null> =>
+      invoke('analytics:getLatestAccountAnalytics', accountId, period),
 
     getBenchmarks: (ownerAccountId?: string): Promise<BenchmarkAccount[]> =>
       invoke('analytics:getBenchmarks', ownerAccountId),
