@@ -85,6 +85,19 @@ class AnalyticsServiceImpl {
       throw new Error(`账号不存在: ${accountId}`);
     }
 
+    // 入队前同步 dry-run 一次创建采集器。
+    // 目的：未接入的平台在「点击采集」时就能同步抛出错误，
+    // 让前端在调用 startCollect 的 try/catch 中立刻拿到明确提示，
+    // 而不是先弹"采集任务已启动"成功消息，等异步 task 执行失败后只在进度条里留下红色失败状态。
+    try {
+      this.createCollector(account.platform, account);
+    } catch (e) {
+      logger.info(`[AnalyticsService] 平台 ${account.platform} 未接入数据分析采集，已拒绝入队: ${
+        e instanceof Error ? e.message : String(e)
+      }`);
+      throw e;
+    }
+
     const taskId = `collect_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     const task: CollectTask = {
