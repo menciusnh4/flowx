@@ -66,7 +66,14 @@ flowx-desktop/
 │   │   │       ├── shared.ts         # 核心：窗口/导航/CDP/evalJS/填写/按钮点击
 │   │   │       ├── douyin.ts         # 抖音
 │   │   │       ├── xiaohongshu.ts    # 小红书
-│   │   │       └── kuaishou.ts       # 快手
+│   │   │       ├── kuaishou.ts       # 快手
+│   │   │       ├── zhihu.ts          # 知乎
+│   │   │       ├── wechat_channels.ts # 微信视频号
+│   │   │       ├── wechat_official.ts # 微信公众号（仅账号管理）
+│   │   │       ├── toutiao.ts        # 今日头条（仅账号管理）
+│   │   │       ├── x.ts              # X/Twitter（仅账号管理）
+│   │   │       ├── bilibili.ts       # B站（哔哩哔哩，仅账号管理）
+│   │   │       └── weibo.ts          # 微博（仅账号管理）
 │   │   ├── ipc/
 │   │   │   ├── index.ts              # IPC 注册（safeInvoke 封装）
 │   │   │   ├── account.ts            # 账号通道
@@ -119,10 +126,13 @@ flowx-desktop/
 
 ### ✅ 账号管理
 
-- 抖音 / 小红书 / 快手 平台扫码授权
+- 抖音 / 小红书 / 快手 / 微信视频号 / 知乎 / 微信公众号 / 今日头条 / X（Twitter）/ B站（哔哩哔哩）/ 微博平台扫码授权
 - 每个账号独立 session partition（`persist:account_{id}`）
 - cookies 使用 `safeStorage` 加密存储（操作系统级密钥）
 - 从页面 DOM 提取昵称、头像、粉丝数、关注数、获赞数
+- X（Twitter）平台支持 `window.__INITIAL_STATE__` 优先提取 + `SideNav_AccountSwitcher_Button` / `UserAvatar-Container-<handle>` 多数据源兜底
+- B站（哔哩哔哩）基于 `SESSDATA` cookie 登录态 + `DedeUserID` 读取原生 UID，启用 28 种类引号字符严格净化，防止异常字符污染昵称/头像 URL
+- 微博基于 `SUB` cookie 登录态 + `me.weibo.com` 创作中心支持「微博号（自定义）」和纯数字 UID 双 ID 提取，自有 CDN 域名强制升级 https
 - 支持刷新 token、编辑备注、删除账号
 - 支持点击"打开创作中心"直接跳到对应平台后台
 
@@ -270,7 +280,7 @@ Vue 响应式更新 → 进度面板刷新
 ## 后续扩展
 
 - ✍️ 内容创作模块（草稿管理 / 内容模板）
-- 🌐 更多平台（B 站、微信公众号、今日头条等）
+- 🌐 更多平台发布功能（B 站视频投稿 / 微博图文微博 / 头条文章 / 微信公众号文章）
 - 🔗 更多网站内容提取适配规则
 - ⚡ 提取结果缓存 / 预提取优化
 - 🔄 自动更新（electron-updater，需要配置私有发布地址）
@@ -299,6 +309,8 @@ Vue 响应式更新 → 进度面板刷新
 - **文章发布 Markdown 编辑器**：[`docs/文章发布Markdown编辑器优化方案.md`](./docs/文章发布Markdown编辑器优化方案.md)（Markdown 编辑 / 分栏预览 / 平台文件上传）
 - **微信视频号图文技术文档**：[`docs/微信视频图文技术文档.md`](./docs/微信视频图文技术文档.md)（微前端 iframe / CDP 物理点击）
 - **知乎视频发布技术文档**：[`docs/知乎视频发布技术文档.md`](./docs/知乎视频发布技术文档.md)（Draft.js / 视频标记 Modal / React 受控组件）
+- **B站平台接入技术文档**：[`docs/B站平台接入技术文档.md`](./docs/B站平台接入技术文档.md)（账号管理完整接入，SESSDATA + DedeUserID，发布功能占位）
+- **微博平台接入技术文档**：[`docs/微博平台接入技术文档.md`](./docs/微博平台接入技术文档.md)（账号管理完整接入，SUB + me.weibo.com 创作中心，发布功能占位）
 - **抖音发布稳定性修复方案**：[`docs/抖音发布稳定性修复方案.md`](./docs/抖音发布稳定性修复方案.md)
 - **platforms/ 目录**：[`src/main/services/platforms/`](./src/main/services/platforms/)（多平台独立实现 + shared.ts 共享工具）
 - **PlatformDispatcher.ts**：[`src/main/services/platforms/PlatformDispatcher.ts`](./src/main/services/platforms/PlatformDispatcher.ts)（工厂方法分发器）

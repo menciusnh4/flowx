@@ -1391,7 +1391,8 @@ function platformName(p?: string): string {
   const map: Record<string, string> = {
     douyin: '抖音', kuaishou: '快手', xiaohongshu: '小红书',
     bilibili: '哔哩哔哩', wechat_channels: '微信视频号', video: '视频号',
-    zhihu: '知乎', toutiao: '今日头条',
+    zhihu: '知乎', toutiao: '今日头条', weibo: '微博',
+    wechat_official: '微信公众号', x: 'X',
   }
   return map[p] || p
 }
@@ -1401,6 +1402,15 @@ function platformName(p?: string): string {
 function setType(t: 'video' | 'image' | 'article') {
   contentType.value = t
   notifyChange()
+}
+
+function iconOf(platform?: string): string {
+  const map: Record<string, string> = {
+    douyin: '🎵', kuaishou: '⚡', xiaohongshu: '📕', bilibili: '📺', wechat_channels: '🎬',
+    zhihu: '💡', toutiao: '📰', weibo: '🔵',
+    wechat_official: '💬', x: '𝕏',
+  }
+  return map[platform ?? ''] || '🔘'
 }
 
 </script>

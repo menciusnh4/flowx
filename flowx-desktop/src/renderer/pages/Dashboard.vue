@@ -80,6 +80,7 @@ import iconWechatOfficial from '../assets/wechat_official.svg';
 import iconWeibo from '../assets/weibo.png';
 import iconZhihu from '../assets/zhihu.png';
 import iconToutiao from '../assets/toutiao.png';
+import iconX from '../assets/x.svg';
 
 const PLATFORM_ICONS: Record<string, string> = {
   xiaohongshu: iconXiaohongshu,
@@ -91,6 +92,7 @@ const PLATFORM_ICONS: Record<string, string> = {
   weibo: iconWeibo,
   zhihu: iconZhihu,
   toutiao: iconToutiao,
+  x: iconX,
 };
 
 function getPlatformIcon(p: string): string {
