@@ -7,6 +7,7 @@ afterPack: scripts/afterPack.js
 files:
   - dist/**/*
   - dist-electron/**/*
+  - src/main/resources/**/*
   - node_modules/**/*
   - "!node_modules/*/{test,__tests__,tests,powered-test,example,examples}"
   - "!node_modules/*.d.ts"
