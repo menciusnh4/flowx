@@ -41,4 +41,5 @@ import './toutiao';
 import './wechat_official';
 import './x';
 import './bilibili';
+import './weibo';
 // 👇 新增平台：在这里加一行 import './<platformKey>';

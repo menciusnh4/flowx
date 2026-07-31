@@ -195,21 +195,23 @@
     </el-dialog>
 
     <!-- 选择平台授权对话框 -->
-    <el-dialog v-model="authVisible" title="选择平台授权" width="460px">
+    <el-dialog v-model="authVisible" title="选择平台授权" width="600px">
       <el-radio-group v-model="authPlatform" class="platform-radio-group">
-        <el-space direction="vertical" style="width:100%">
-          <el-radio v-for="p in accountStore.platforms" :key="p.key" :value="p.key" class="platform-radio">
-            <div class="platform-option">
-              <div class="platform-icon-wrap">
-                <img v-if="getPlatformIcon(p.key)" :src="getPlatformIcon(p.key)" class="platform-icon" />
+        <el-row :gutter="12" style="width:100%; margin:0;">
+          <el-col :span="12" v-for="p in accountStore.platforms" :key="p.key">
+            <el-radio :value="p.key" class="platform-radio">
+              <div class="platform-option">
+                <div class="platform-icon-wrap">
+                  <img v-if="getPlatformIcon(p.key)" :src="getPlatformIcon(p.key)" class="platform-icon" />
+                </div>
+                <span class="platform-name">{{ p.name }}</span>
+                <span class="platform-count">
+                  已授权 {{ accountStore.byPlatform(p.key).length }}
+                </span>
               </div>
-              <span class="platform-name">{{ p.name }}</span>
-              <span class="platform-count">
-                已授权 {{ accountStore.byPlatform(p.key).length }} 个账号
-              </span>
-            </div>
-          </el-radio>
-        </el-space>
+            </el-radio>
+          </el-col>
+        </el-row>
       </el-radio-group>
       <div style="margin-top: 20px; border-top: 1px solid var(--el-border-color-lighter); padding-top: 16px;">
         <span style="font-size:13px; font-weight:500; display:block; margin-bottom:8px; color: #606266">绑定浏览器环境（隔离指纹与代理 IP）</span>
@@ -851,11 +853,13 @@ onMounted(async () => {
 
 /* 授权对话框 - 平台选项统一样式 */
 .platform-radio-group {
-  width: 280px;
+  width: 100%;
+  display: block;
 }
 .platform-radio {
   width: 100%;
   margin-right: 0;
+  margin-bottom: 8px;
 }
 .platform-radio :deep(.el-radio__label) {
   padding-left: 8px;
