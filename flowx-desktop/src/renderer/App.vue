@@ -3,10 +3,12 @@
     <!-- ============ 左侧竖栏导航 ============ -->
     <aside class="sidebar" :class="{ collapsed }">
       <div class="sidebar-logo">
-        <div class="logo-mark">F</div>
-        <div class="logo-text">
-          <span class="name">FlowX</span>
-          <small>多平台内容发布助手</small>
+        <img class="logo-icon-img" :src="logoIcon" width="50" height="50" alt="FlowX Logo" />
+        <div class="logo-text-wrapper">
+          <div class="logo-main">
+            <span class="logo-text">FlowX</span>
+          </div>
+          <div class="logo-sub">多平台内容<br/>发布助手</div>
         </div>
       </div>
 
@@ -175,6 +177,7 @@ import { useWorkspaceStore } from './stores/workspace';
 import WorkspaceTabBar from './components/WorkspaceTabBar.vue';
 import WorkspaceView from './components/WorkspaceView.vue';
 import WindowResizeFrame from './components/WindowResizeFrame.vue';
+import logoIcon from './assets/icon.png';
 
 const route = useRoute();
 const router = useRouter();
@@ -350,3 +353,42 @@ onMounted(async () => {
 
 // 不再自动保存/恢复任务选项卡状态（用户要求完全去掉自动恢复）
 </script>
+<style scoped>
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 10px;
+  margin-bottom: 32px;
+  user-select: none;
+}
+
+.logo-icon-img {
+  flex-shrink: 0;
+}
+
+.logo-text-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.logo-main {
+  display: flex;
+  align-items: baseline;
+}
+
+.logo-sub {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.logo-text {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: #1e293b;
+}
+</style>

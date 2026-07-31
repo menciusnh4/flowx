@@ -9,6 +9,25 @@ const fs = require('fs');
 
 exports.default = async function afterPack(context) {
   const { electronPlatformName, appOutDir, packager } = context;
+
+  // 处理 macOS 平台：无开发者证书时，自动赋予 Ad-hoc 本地签名
+  if (electronPlatformName === 'darwin') {
+    const appName = packager.appInfo.productFilename + '.app';
+    const appPath = path.join(appOutDir, appName);
+    console.log('\n========================================');
+    console.log('[afterPack] macOS 自动处理: 清除隔离标志 & 赋予 Ad-hoc 签名');
+    console.log('[afterPack] App 路径:', appPath);
+    console.log('========================================\n');
+    try {
+      const { execSync } = require('child_process');
+      execSync(`xattr -cr "${appPath}"`);
+      execSync(`codesign --force --deep --sign - "${appPath}"`);
+      console.log('[afterPack] ✅ macOS Ad-hoc 本地签名成功!');
+    } catch (err) {
+      console.warn('[afterPack] ⚠️ macOS 本地签名失败:', err.message);
+    }
+    return;
+  }
   
   // 只处理Windows平台
   if (electronPlatformName !== 'win32') {
