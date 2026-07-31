@@ -7,7 +7,7 @@ async function generateIcons() {
   const pngToIco = (await import('png-to-ico')).default;
   
   const BUILD_DIR = path.join(__dirname, '..', 'build');
-  const SOURCE = path.join(BUILD_DIR, 'icon-source.jpg');
+  const SOURCE = path.join(__dirname, '..', 'src', 'renderer', 'assets', 'logo2.png');
 
   console.log('=== FlowX 图标生成工具 ===\n');
 
@@ -24,15 +24,43 @@ async function generateIcons() {
   const left = Math.floor(((metadata.width || 1024) - size) / 2);
   const top = Math.floor(((metadata.height || 1024) - size) / 2);
 
-  // ========== 按照electron-builder官方推荐 ==========
-  // 1. 生成 1024x1024 icon.png (主源文件)
-  console.log('\n🔨 生成 icon.png (1024x1024)...');
-  await sharp(SOURCE)
+  // ========== 按照 macOS 官方设计规范 (Apple Icon Design Guidelines) ==========
+  // macOS Dock 标准图标规范：
+  // 1024x1024 画布，图标主体为 824x824 居中（四周留出约 100px 透明边距），圆角半径约 185px
+  console.log('\n🔨 生成符合 macOS 规范的 icon.png (1024x1024，主体824x824)...');
+  const targetSize = 824;
+  const margin = Math.floor((1024 - targetSize) / 2); // 100px 边距
+  const cornerRadius = 185;
+
+  const roundedMask = Buffer.from(
+    `<svg><rect x="0" y="0" width="${targetSize}" height="${targetSize}" rx="${cornerRadius}" ry="${cornerRadius}" /></svg>`
+  );
+
+  const resizedLogoBuf = await sharp(SOURCE)
     .extract({ left, top, width: size, height: size })
-    .resize(1024, 1024, { fit: 'cover', kernel: sharp.kernel.lanczos3 })
+    .resize(targetSize, targetSize, { fit: 'cover', kernel: sharp.kernel.lanczos3 })
+    .composite([{
+      input: roundedMask,
+      blend: 'dest-in'
+    }])
+    .toBuffer();
+
+  await sharp({
+    create: {
+      width: 1024,
+      height: 1024,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 }
+    }
+  })
+    .composite([{
+      input: resizedLogoBuf,
+      top: margin,
+      left: margin
+    }])
     .png()
     .toFile(path.join(BUILD_DIR, 'icon.png'));
-  console.log('  ✅ icon.png 已生成');
+  console.log('  ✅ icon.png 已生成 (符合 macOS 视觉比例规范)');
 
   // 2. 生成各尺寸PNG用于构建icon.ico
   console.log('\n🔨 生成各尺寸PNG用于icon.ico...');
