@@ -57,7 +57,11 @@ const meta: PlatformMeta = {
     content: 100000, // 头条文章正文
   },
   nicknameSelectors: [
-    // 微博创作中心 DOM 结构（预估，实际需根据页面调整）
+    // 【路径 A：创作中心 me.weibo.com】新版头像旁昵称容器（用户确认过的 DOM）
+    'div[class*="_name_"]',
+    '._name_v0oim_18',
+    // 【路径 B：登录后 weibo.com 首页】个人 tab 的 title/aria-label（属性会在提取脚本中兜底读取，不在此 querySelector）
+    // 创作中心 / 公开中心兼容老版
     '.user-info .name',
     '.username',
     '.nick-name',
@@ -68,10 +72,15 @@ const meta: PlatformMeta = {
     '.header .name',
     '.topbar-user .name',
     '.WD_header_name',
-    '.nameBox',
+    '.nameBox .name',
+    '.nameBox .userName',
   ],
   avatarSelectors: [
-    // 头像相关选择器
+    // 【创作中心】新版 woo-avatar 组件（用户确认的 DOM：<img class="woo-avatar-img">）
+    'img.woo-avatar-img',
+    // 【登录后 weibo.com 首页】个人 tab 内嵌头像 <img class="_icon_1z046_35 _avatar_1z046_57">
+    'img[class*="_avatar_"]',
+    // 老版通用
     'img[class*="avatar"]',
     'img[class*="head"]',
     'a[href*="weibo.com/u/"] img',
@@ -79,25 +88,120 @@ const meta: PlatformMeta = {
     '.avatar img',
     'a.avatar img',
     '.user-info img',
-    '[class*="avatar"] img',
     'img.avatar',
     '.header img',
     '.topbar-user img',
     '.account-info img',
     '.user-card img',
-    '.head_pic',
+    '.head_pic img',
     '.W_face_radius img',
+    'img.head_pic',
   ],
   loginKeywords: ['创作中心', '内容管理', '数据中心', '粉丝', '发微博', '发布', '收益管理', '退出登录', '我的主页'],
 };
 
 // ========================= 登录检测 =========================
 
+/**
+ * 结构级登录判定脚本（在页面 DOM 中执行）。
+ * 目标：用「用户确认过的真实 DOM 结构」替代脆弱的 bodyText 关键词匹配。
+ * 微博有两套常见登录后页面：
+ *   A. 登录后 weibo.com 公开首页：顶栏 woo-tab-nav 中最后一个 a._alink_* 的 href="/u/{UID}" +
+ *      title/aria-label = 昵称 + 子 img._avatar_*（用户自己的头像）
+ *   B. me.weibo.com 创作中心：左侧/顶栏 woo-avatar 组件 = img.woo-avatar-img（src 以 // 开头）
+ *      + 旁边的 div._name_*（昵称）
+ *
+ * 另外，访客态的结构判定：页面有指向 passport/login/sso 的「登录/注册」按钮，
+ *                          且 没有结构A 且 没有结构B。
+ */
+const PROBE_DOM_LOGIN_SCRIPT = `
+(function() {
+  var r = {
+    // 结构 A：登录后 weibo.com 公开首页（个人 tab）
+    personalTab: { ok: false, href: '', title: '', ariaLabel: '', avatarSrc: '' },
+    // 结构 B：me.weibo.com 创作中心（woo-avatar + 昵称）
+    creatorAvatar: { ok: false, avatarSrc: '', nickname: '' },
+    // 结构 V：访客态（有登录入口，没有登录后结构）
+    visitorSign: false,
+    // 兼容老版：页面上出现「退出登录」按钮
+    hasLogoutButton: false,
+    // 调试：URL 路径
+    host: location.hostname,
+    path: location.pathname,
+  };
+  try {
+    // ------------- 结构 A：woo-tab-nav 里的个人 tab（登录后公开首页）-------------
+    // 选择所有 a._alink_*（首页顶栏 5 个 tab 的容器），找 href="/u/数字" 的那个
+    try {
+      var links = document.querySelectorAll('a[href^="/u/"][class*="_alink_"]');
+      for (var i = 0; i < links.length; i++) {
+        var a = links[i];
+        var href = a.getAttribute('href') || '';
+        if (!/^\\/u\\/[0-9]{5,12}$/.test(href)) continue;
+        // 看它子节点有没有带 _avatar_* class 的 img（登录后首页个人 tab 的头像）
+        var imgEl = a.querySelector('img');
+        var hasAvatarCls = !!(imgEl && (imgEl.className || '').indexOf('_avatar_') !== -1);
+        var title = (a.getAttribute('title') || '').trim();
+        var aria = (a.getAttribute('aria-label') || '').trim();
+        var src = imgEl ? (imgEl.src || imgEl.getAttribute('src') || '') : '';
+        if ((title || aria || hasAvatarCls)) {
+          r.personalTab.ok = true;
+          r.personalTab.href = href;
+          r.personalTab.title = title;
+          r.personalTab.ariaLabel = aria;
+          r.personalTab.avatarSrc = src;
+          break;
+        }
+      }
+    } catch(_e1) { /* ignore */ }
+
+    // ------------- 结构 B：创作中心 woo-avatar + 昵称 -------------
+    try {
+      // 用户确认：<img class="woo-avatar-img"> 旁边 <div class="_name_v0oim_18">昵称</div>
+      var avatarImg = document.querySelector('img.woo-avatar-img');
+      var nameEl = document.querySelector('div[class*="_name_"]');
+      var nickname = (nameEl && (nameEl.innerText || nameEl.textContent || '') || '').trim();
+      var aSrc = avatarImg ? (avatarImg.src || avatarImg.getAttribute('src') || '') : '';
+      if ((avatarImg && aSrc) || nickname) {
+        r.creatorAvatar.ok = !!(avatarImg && aSrc) || !!nickname;
+        r.creatorAvatar.avatarSrc = aSrc;
+        r.creatorAvatar.nickname = nickname;
+      }
+    } catch(_e2) { /* ignore */ }
+
+    // ------------- 结构 V：访客态（有登录/注册按钮，指向 passport/login/sso）-------------
+    try {
+      var btns = document.querySelectorAll('a[href], button');
+      var hasLoginEntry = false;
+      for (var j = 0; j < btns.length; j++) {
+        var b = btns[j];
+        var txt = ((b.innerText || b.textContent || '') + (b.getAttribute('aria-label') || '') + (b.getAttribute('title') || '')).trim();
+        if (!txt) continue;
+        if (txt.indexOf('登录') === -1 && txt.indexOf('注册') === -1) continue;
+        // <a href="*passport*" / *login* / *sso.weibo.com* /> 结构判定为真访客登录入口
+        var h = b.tagName === 'A' ? (b.getAttribute('href') || '') : '';
+        if (h && (/passport\\.weibo\\.com|login|sso\\.weibo\\.com|signin/i.test(h))) {
+          hasLoginEntry = true;
+          break;
+        }
+      }
+      r.visitorSign = hasLoginEntry && !r.personalTab.ok && !r.creatorAvatar.ok;
+    } catch(_e3) { /* ignore */ }
+
+    // ------------- 老版兼容：是否存在「退出登录」按钮 -------------
+    try {
+      var bodyText = (document.body && (document.body.innerText || '')) || '';
+      r.hasLogoutButton = bodyText.indexOf('退出登录') !== -1;
+    } catch(_e4) { /* ignore */ }
+  } catch(_e) {}
+  return r;
+})();`;
+
 async function detectLoggedIn(win: BrowserWindow): Promise<LoginCheckResult> {
   try {
     const currentUrl = win.webContents.getURL();
 
-    // 1. 优先通过 cookie 判断：微博登录后必有 SUB cookie（核心登录凭证）
+    // 1. Cookie 扫描（仅记录，不再单独作为登录判定依据——访客态 SUB 残留会误判）
     const cookies = await win.webContents.session.cookies.get({});
     const subCookie = cookies.find((c) => c.name === 'SUB' && c.value);
     const subP = cookies.find((c) => c.name === 'SUBP' && c.value);
@@ -108,60 +212,82 @@ async function detectLoggedIn(win: BrowserWindow): Promise<LoginCheckResult> {
     if (subP) matchedKeywords.push('SUBP-cookie');
     if (wbSess) matchedKeywords.push('WEIBO-session-cookie');
 
-    // 2. 在登录页肯定未登录
+    // 2. 绝对未登录：登录域 / 登录路径
     const isLoginPage = currentUrl.includes('/login') ||
                         currentUrl.includes('/signin') ||
                         currentUrl.includes('passport.weibo.com') ||
                         currentUrl.includes('sso.weibo.com');
+    if (isLoginPage) matchedKeywords.push('is-login-page');
 
-    // 3. 已进入创作中心或个人主页页面
+    // 3. 结构级探测
+    let struct: any = {};
+    try {
+      struct = await win.webContents.executeJavaScript(PROBE_DOM_LOGIN_SCRIPT);
+    } catch {
+      struct = {};
+    }
+    const personalTab: any = struct.personalTab || {};
+    const creatorAvatar: any = struct.creatorAvatar || {};
+    const visitorSign = !!struct.visitorSign;
+    const hasLogoutButton = !!struct.hasLogoutButton;
+
+    if (personalTab && personalTab.ok) {
+      matchedKeywords.push('struct-personalTabOK');
+      if (personalTab.title) matchedKeywords.push('pt-title:' + personalTab.title.slice(0, 12));
+    }
+    if (creatorAvatar && creatorAvatar.ok) matchedKeywords.push('struct-creatorAvatarOK');
+    if (visitorSign) matchedKeywords.push('struct-visitorSign');
+    if (hasLogoutButton) matchedKeywords.push('struct-logoutBtn');
+
+    // 4. inBackend：在 me.weibo.com / weibo.com/u/xxx / weibo.com/p/xxx 且不在登录页
     const inBackend = (currentUrl.includes('me.weibo.com') ||
                        currentUrl.includes('weibo.com/u/') ||
                        currentUrl.includes('weibo.com/p/')) &&
-                      !isLoginPage;
+                      !isLoginPage &&
+                      !visitorSign;
     if (inBackend) matchedKeywords.push('in-weibo-backend');
 
-    // 4. DOM 辅助检测
+    // 5. 老版 dom 辅助（仅当结构没有判断时兜底，避免漏网之鱼）
     let domLoggedIn = false;
-    try {
-      domLoggedIn = await win.webContents.executeJavaScript(`
-        (function() {
-          try {
-            // 微博已登录标志：用户昵称元素、退出按钮、创作中心侧边栏菜单
-            var nameEl = document.querySelector('.user-info .name') ||
-                        document.querySelector('.username') ||
-                        document.querySelector('[class*="user-name"]') ||
-                        document.querySelector('[class*="nickname"]') ||
-                        document.querySelector('[class*="screen-name"]') ||
-                        document.querySelector('.screen-name') ||
-                        document.querySelector('.WD_header_name');
-            var bodyText = document.body ? (document.body.innerText || '') : '';
-            var hasLogout = bodyText.indexOf('退出登录') !== -1 ||
-                           bodyText.indexOf('退出') !== -1;
-            var hasSidebar = bodyText.indexOf('内容管理') !== -1 ||
-                            bodyText.indexOf('数据中心') !== -1 ||
-                            bodyText.indexOf('创作中心') !== -1 ||
-                            bodyText.indexOf('发微博') !== -1 ||
-                            bodyText.indexOf('我的主页') !== -1;
-            return !!(nameEl || (hasLogout && hasSidebar));
-          } catch(e) {
-            return false;
-          }
-        })()
-      `);
-      if (domLoggedIn) matchedKeywords.push('dom-profile');
-    } catch {
-      // ignore
+    if (!personalTab.ok && !creatorAvatar.ok && !visitorSign && !isLoginPage) {
+      try {
+        domLoggedIn = await win.webContents.executeJavaScript(`
+          (function() {
+            try {
+              var bodyText = (document.body && (document.body.innerText || '')) || '';
+              var hasLogout = bodyText.indexOf('退出登录') !== -1;
+              var hasSidebar = bodyText.indexOf('内容管理') !== -1 ||
+                               bodyText.indexOf('数据中心') !== -1 ||
+                               bodyText.indexOf('创作中心') !== -1 ||
+                               bodyText.indexOf('发微博') !== -1 ||
+                               bodyText.indexOf('我的主页') !== -1;
+              return !!(hasLogout && (hasSidebar || true)); // 有「退出登录」就当已登录兜底
+            } catch(e) { return false; }
+          })();
+        `);
+        if (domLoggedIn) matchedKeywords.push('dom-fallback');
+      } catch { /* ignore */ }
     }
 
-    const loggedIn = !!subCookie && !isLoginPage;
+    // ========== 核心登录判定（结构驱动，SUB 仅为辅助） ==========
+    //   - 结构 A 或 结构 B 命中 → 一定已登录（这两个结构只有登录后才会渲染）
+    //   - 否则，需要：SUB cookie 存在 AND 不在登录页 AND 不是访客态 AND (inBackend OR domLoggedIn OR hasLogoutButton)
+    //   - 访客态(struct-visitorSign=true) 直接判 false，哪怕 SUB 残留
+    const strongStructLoggedIn = !!(personalTab && personalTab.ok) || !!(creatorAvatar && creatorAvatar.ok);
+    const softLoggedIn = !!subCookie &&
+                         !isLoginPage &&
+                         !visitorSign &&
+                         (inBackend || domLoggedIn || hasLogoutButton);
+
+    const loggedIn = strongStructLoggedIn || softLoggedIn;
 
     return {
       loggedIn,
       url: currentUrl,
       title: win.webContents.getTitle(),
       matchedKeywords,
-    };
+      // 附加字段：把 probe 结果塞给上层（仅用于诊断），不影响类型
+    } as any;
   } catch (e) {
     log('error', 'detectLoggedIn', (e as Error).message);
     return {
@@ -291,7 +417,22 @@ function _normalizeUrl(u: unknown): string {
 
 async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo> {
   try {
-    log('info', 'extractPageInfo', '开始提取微博账号信息');
+    const currentUrl = win.webContents.getURL();
+    log('info', 'extractPageInfo', `开始提取微博账号信息，当前 URL: ${currentUrl}`);
+
+    // ---------- 阶段 1：复用同一套结构级 PROBE，区分「登录后首页」和「创作中心」两套 DOM ----------
+    let struct: any = {};
+    try {
+      struct = await win.webContents.executeJavaScript(PROBE_DOM_LOGIN_SCRIPT);
+    } catch (e) {
+      log('warn', 'extractPageInfo', `PROBE 脚本执行失败，降级通用 DOM 兜底: ${(e as Error).message}`);
+    }
+    const personalTab: any = struct.personalTab || { ok: false };
+    const creatorAvatar: any = struct.creatorAvatar || { ok: false };
+    log('info', 'extractPageInfo',
+      `PROBE → personalTab.ok=${!!personalTab.ok}, ` +
+      `creatorAvatar.ok=${!!creatorAvatar.ok}, ` +
+      `visitorSign=${!!struct.visitorSign}, host=${struct.host || 'n/a'}, path=${struct.path || 'n/a'}`);
 
     // 分步提取，避免单个大脚本执行失败导致全部信息丢失
     let nickname = '';
@@ -301,10 +442,36 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
     let followCount: number | null = null;
     let likeCount: number | null = null;
 
-    // 1. 先从 cookie 中获取用户 uid（微博用户主页 URL 格式 weibo.com/u/{uid}）
-    try {
-      const cookies = await win.webContents.session.cookies.get({});
-      // SUB cookie 在解析后可能含有 uid 信息，但更可靠的是直接从 DOM 或 URL 中提取
+    // ---------- 阶段 2：优先使用 PROBE 结果提取 ----------
+    if (personalTab && personalTab.ok) {
+      // 【路径 A：登录后 weibo.com 公开首页（个人 tab）】
+      // 用户确认：a._alink_1z046_65 href="/u/8322677072" title="七初七都" aria-label="七初七都"
+      //         img src="https://tvax3.sinaimg.cn/crop.xxx.jpg..." class="_icon_1z046_35 _avatar_1z046_57"
+      nickname = _cleanStr(personalTab.title || personalTab.ariaLabel || '');
+      avatar   = _normalizeUrl(personalTab.avatarSrc || '');
+      const href = personalTab.href || ''; // "/u/{uid}"
+      const uidFromHref = href.match(/\/u\/([0-9]{5,12})/);
+      if (uidFromHref && uidFromHref[1]) {
+        platformAccountId = uidFromHref[1];
+      }
+      log('info', 'extractPageInfo',
+        `✔ 采用【登录后首页 · 个人 tab】: nickname="${nickname}", ` +
+        `avatarLen=${avatar.length}, uid=${platformAccountId || '(n/a)'}`);
+    } else if (creatorAvatar && creatorAvatar.ok) {
+      // 【路径 B：me.weibo.com 创作中心】
+      // 用户确认：<img class="woo-avatar-img" src="//tvax3.sinaimg.cn/crop.xxx.jpg">
+      //         旁边 <div class="_name_v0oim_18">七初七都</div>
+      nickname = _cleanStr(creatorAvatar.nickname || '');
+      avatar   = _normalizeUrl(creatorAvatar.avatarSrc || '');
+      log('info', 'extractPageInfo',
+        `✔ 采用【创作中心 · woo-avatar】: nickname="${nickname}", avatarLen=${avatar.length}`);
+    } else {
+      log('warn', 'extractPageInfo', '⚠️ PROBE 未命中任何登录后结构，将走通用 DOM 兜底');
+    }
+
+    // ---------- 阶段 3：通用兜底 ----------
+    // 3.1 UID / platformAccountId：URL + 页面中 a[href*="weibo.com/u/"] + 微博号文本匹配
+    if (!platformAccountId) {
       const url = win.webContents.getURL();
       const uidMatch = url.match(/weibo\.com\/u\/([0-9]{5,12})/i) ||
                       url.match(/weibo\.com\/p\/[0-9.]+\/([0-9]{5,12})/i);
@@ -312,11 +479,9 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
         platformAccountId = uidMatch[1];
         log('info', 'extractPageInfo', `从 URL 提取到 UID: ${platformAccountId}`);
       }
-    } catch {
-      // ignore
     }
 
-    // 2. 提取昵称 + 头像 + 微博号 + 粉丝/关注/获赞 数（DOM 方式）
+    // 3.2 提取昵称 + 头像 + 微博号 + 粉丝/关注/获赞 数（通用 DOM 兜底）
     try {
       const domResult: any = await win.webContents.executeJavaScript(`
         (function() {
@@ -334,8 +499,10 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
             }
             var r = { nickname: '', avatar: '', platformAccountId: '', fansCount: null, followCount: null, likeCount: null };
 
-            // ===== 昵称：按优先级尝试多个选择器 =====
+            // ===== 昵称：按优先级尝试多个选择器（已包含新版：div[class*="_name_"] / ._name_v0oim_18）=====
             var nickSelectors = [
+              'div[class*="_name_"]',
+              '._name_v0oim_18',
               '.user-info .name',
               '.username',
               '.nick-name',
@@ -365,8 +532,10 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
               } catch(_) { /* ignore */ }
             }
 
-            // ===== 头像：img 的 src =====
+            // ===== 头像：img 的 src（新版 img.woo-avatar-img / img[class*="_avatar_"] 排在最前）=====
             var avatarSelectors = [
+              'img.woo-avatar-img',
+              'img[class*="_avatar_"]',
               'img[class*="avatar"]',
               'img[class*="head"]',
               'a[href*="weibo.com/u/"] img',
@@ -374,7 +543,6 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
               '.avatar img',
               'a.avatar img',
               '.user-info img',
-              '[class*="avatar"] img',
               'img.avatar',
               '.header img',
               '.topbar-user img',
@@ -387,26 +555,29 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
             for (var ai = 0; ai < avatarSelectors.length; ai++) {
               try {
                 var img = document.querySelector(avatarSelectors[ai]);
-                if (img && img.src && img.src.indexOf('http') === 0) {
-                  r.avatar = img.src;
+                var src = img ? (img.src || img.getAttribute('src') || '') : '';
+                if (src && (src.indexOf('http') === 0 || src.indexOf('//') === 0)) {
+                  r.avatar = src;
                   break;
                 }
               } catch(_) { /* ignore */ }
             }
 
             // ===== 平台账号 ID（微博号 / UID）=====
-            var bodyText = document.body ? (document.body.innerText || '') : '';
-            // 匹配 "微博号：xxx" 或 "微博号 xxx"
-            var accountM = bodyText.match(/(?:微博号|微博账号|微号)[：:\\s]*([A-Za-z0-9_\\-]{3,30})/);
-            if (accountM && accountM[1]) r.platformAccountId = accountM[1];
-            // 如果 URL 里有 uid 但之前没取到，再从页面文本中匹配
+            //   1. a[href^="/u/"] 顶栏个人 tab（登录后首页就用 PROBE 取了，这里做页面内其他 a 兜底）
+            var allUserLinks = document.querySelectorAll('a[href*="weibo.com/u/"], a[href^="/u/"]');
+            for (var li = 0; li < allUserLinks.length; li++) {
+              var href = allUserLinks[li].getAttribute('href') || '';
+              var fullHref = (allUserLinks[li] as any).href || href;
+              var lm = String(fullHref + ' ' + href).match(/weibo\\.com\\/u\\/([0-9]{5,12})/i) ||
+                       href.match(/^\\/u\\/([0-9]{5,12})$/);
+              if (lm && lm[1]) { r.platformAccountId = lm[1]; break; }
+            }
+            //   2. body 文本中「微博号：xxx」
             if (!r.platformAccountId) {
-              var links = document.querySelectorAll('a[href*="weibo.com/u/"]');
-              for (var li = 0; li < links.length; li++) {
-                var href = links[li].getAttribute('href') || '';
-                var lm = href.match(/weibo\\.com\\/u\\/([0-9]{5,12})/i);
-                if (lm && lm[1]) { r.platformAccountId = lm[1]; break; }
-              }
+              var bodyText = document.body ? (document.body.innerText || '') : '';
+              var accountM = bodyText.match(/(?:微博号|微博账号|微号)[：:\\s]*([A-Za-z0-9_\\-]{3,30})/);
+              if (accountM && accountM[1]) r.platformAccountId = accountM[1];
             }
 
             // ===== 粉丝/关注/获赞/微博数 =====
@@ -417,6 +588,7 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
               if ((/获赞|点赞|收藏|转评赞/.test(labelText)) && r.likeCount === null) { r.likeCount = numValue; return true; }
               return false;
             }
+            var bodyText2 = document.body ? (document.body.innerText || '') : '';
 
             // 方式 A：全局搜索 class 含 number 或 count 或 num 的数字元素
             try {
@@ -447,20 +619,20 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
 
             // 方式 B：body 全文正则兜底（双向格式）
             if (r.fansCount === null) {
-              var fm1 = bodyText.match(/(粉丝|粉丝数)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百亿]?)/);
-              var fm2 = bodyText.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)[^0-9]{0,5}(粉丝|粉丝数)/);
+              var fm1 = bodyText2.match(/(粉丝|粉丝数)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百亿]?)/);
+              var fm2 = bodyText2.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)[^0-9]{0,5}(粉丝|粉丝数)/);
               if (fm1 && fm1[2]) r.fansCount = _parseNumber(fm1[2]);
               else if (fm2 && fm2[1]) r.fansCount = _parseNumber(fm2[1]);
             }
             if (r.followCount === null) {
-              var fol1 = bodyText.match(/(关注|关注数)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百亿]?)/);
-              var fol2 = bodyText.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)[^0-9]{0,5}(关注|关注数)/);
+              var fol1 = bodyText2.match(/(关注|关注数)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百亿]?)/);
+              var fol2 = bodyText2.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)[^0-9]{0,5}(关注|关注数)/);
               if (fol1 && fol1[2]) r.followCount = _parseNumber(fol1[2]);
               else if (fol2 && fol2[1]) r.followCount = _parseNumber(fol2[1]);
             }
             if (r.likeCount === null) {
-              var lk1 = bodyText.match(/(获赞|点赞|点赞数|转评赞)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百亿]?)/);
-              var lk2 = bodyText.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)[^0-9]{0,5}(获赞|点赞|点赞数|转评赞)/);
+              var lk1 = bodyText2.match(/(获赞|点赞|点赞数|转评赞)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百亿]?)/);
+              var lk2 = bodyText2.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)[^0-9]{0,5}(获赞|点赞|点赞数|转评赞)/);
               if (lk1 && lk1[2]) r.likeCount = _parseNumber(lk1[2]);
               else if (lk2 && lk2[1]) r.likeCount = _parseNumber(lk2[1]);
             }
@@ -473,18 +645,18 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
       `);
 
       if (domResult) {
-        if (domResult.nickname) nickname = domResult.nickname;
-        if (domResult.avatar) avatar = domResult.avatar;
-        if (domResult.platformAccountId && !platformAccountId) platformAccountId = domResult.platformAccountId;
-        if (domResult.fansCount !== null && domResult.fansCount !== undefined) fansCount = domResult.fansCount;
-        if (domResult.followCount !== null && domResult.followCount !== undefined) followCount = domResult.followCount;
-        if (domResult.likeCount !== null && domResult.likeCount !== undefined) likeCount = domResult.likeCount;
+        if (!nickname && domResult.nickname) nickname = domResult.nickname;
+        if (!avatar   && domResult.avatar)   avatar   = domResult.avatar;
+        if (!platformAccountId && domResult.platformAccountId) platformAccountId = domResult.platformAccountId;
+        if (fansCount === null && domResult.fansCount !== null && domResult.fansCount !== undefined) fansCount = domResult.fansCount;
+        if (followCount === null && domResult.followCount !== null && domResult.followCount !== undefined) followCount = domResult.followCount;
+        if (likeCount === null && domResult.likeCount !== null && domResult.likeCount !== undefined) likeCount = domResult.likeCount;
       }
     } catch (e) {
-      log('warn', 'extractPageInfo', 'DOM 提取脚本执行失败: ' + (e as Error).message);
+      log('warn', 'extractPageInfo', '通用 DOM 兜底脚本执行失败: ' + (e as Error).message);
     }
 
-    // 最终 GUARD 守卫：清洗所有字段
+    // ---------- 阶段 4：最终 GUARD 守卫，清洗字段 ----------
     const gNick = _cleanStr(nickname);
     const gAvatar = _normalizeUrl(avatar) || '';
     const gPid = _cleanStr(platformAccountId);
@@ -516,7 +688,12 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
       likeCount: likeCount ?? undefined,
     };
     const finalAvatar = guardResult.avatar || '';
-    log('info', 'extractPageInfo', `FINAL RETURN → avatar.len=${finalAvatar.length}, avatar="${finalAvatar.substring(0, 160)}", nickname="${guardResult.nickname}", platformAccountId="${guardResult.platformAccountId || ''}", fans=${guardResult.fansCount ?? 'n/a'}, follow=${guardResult.followCount ?? 'n/a'}, like=${guardResult.likeCount ?? 'n/a'}`);
+    log('info', 'extractPageInfo',
+      `FINAL RETURN → ` +
+      `scenario=${(personalTab.ok ? 'homepage-personalTab' : (creatorAvatar.ok ? 'creator-center' : 'generic-fallback'))}, ` +
+      `avatar.len=${finalAvatar.length}, avatar="${finalAvatar.substring(0, 160)}", ` +
+      `nickname="${guardResult.nickname}", platformAccountId="${guardResult.platformAccountId || ''}", ` +
+      `fans=${guardResult.fansCount ?? 'n/a'}, follow=${guardResult.followCount ?? 'n/a'}, like=${guardResult.likeCount ?? 'n/a'}`);
     return guardResult;
   } catch (e) {
     log('error', 'extractPageInfo', (e as Error).message);
