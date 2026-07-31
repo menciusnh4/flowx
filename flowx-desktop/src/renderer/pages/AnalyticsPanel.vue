@@ -53,8 +53,9 @@
         <div class="profile-left">
           <div class="profile-avatar">
             <img
-              v-if="currentAccount.avatar"
-              :src="currentAccount.avatar"
+              v-if="normalizeAvatarUrl(currentAccount.avatar) && !avatarLoadError[currentAccount.id]"
+              :src="normalizeAvatarUrl(currentAccount.avatar)"
+              :data-account-id="currentAccount.id"
               class="avatar-lg"
               @error="onAvatarError"
             />
@@ -199,7 +200,13 @@
           >
             <div class="account-option-item">
               <div class="account-option-avatar">
-                <img v-if="acc.avatar" :src="acc.avatar" class="option-avatar-img" />
+                <img
+                  v-if="normalizeAvatarUrl(acc.avatar) && !avatarLoadError[acc.id]"
+                  :src="normalizeAvatarUrl(acc.avatar)"
+                  :data-account-id="acc.id"
+                  class="option-avatar-img"
+                  @error="onAvatarError"
+                />
                 <span v-else class="option-avatar-text">
                   {{ (acc.nickname || '?').charAt(0) }}
                 </span>
@@ -257,8 +264,9 @@
             <div class="account-cell">
               <div class="account-avatar">
                 <img
-                  v-if="getAccountInfo(row.accountId)?.avatar"
-                  :src="getAccountInfo(row.accountId)?.avatar"
+                  v-if="normalizeAvatarUrl(getAccountInfo(row.accountId)?.avatar) && !avatarLoadError[row.accountId]"
+                  :src="normalizeAvatarUrl(getAccountInfo(row.accountId)?.avatar)"
+                  :data-account-id="row.accountId"
                   class="avatar-img"
                   @error="onAvatarError"
                 />
@@ -405,6 +413,31 @@ const analyticsStore = useAnalyticsStore();
 const selectedAccountId = ref('');
 const localFilterPlatformAccountIds = ref<string[]>([]);
 const activePeriodTab = ref<'yesterday' | '7d' | '30d'>('7d');
+
+/** 按 accountId 记录头像加载失败：失败后切到文字占位，避免空白。切换账号或刷新账号列表时重置。 */
+const avatarLoadError = ref<Record<string, boolean>>({});
+
+/**
+ * 规范化头像 URL：
+ * 1. 协议相对路径 `//pic.xxx.com/yyy.jpg` 在 Electron file:// 上下文会走 file 协议，
+ *    必须显式补 `https:`，否则 404 触发 onAvatarError 后仍无法回落到占位符（v-if 仍为 true）；
+ * 2. 空串 / undefined / null 统一返回空字符串，让 v-if 明确走 placeholder 分支。
+ */
+function normalizeAvatarUrl(src: string | undefined | null): string {
+  if (!src || typeof src !== 'string') return '';
+  const s = src.trim();
+  if (s.startsWith('//')) return 'https:' + s;
+  return s;
+}
+
+/** 重置某个账号的头像加载失败标志（切换账号、账号列表刷新后调用） */
+function resetAvatarLoadError(accountId?: string) {
+  if (accountId) {
+    delete avatarLoadError.value[accountId];
+  } else {
+    avatarLoadError.value = {};
+  }
+}
 
 const OVERVIEW_GROUPS = [
   {
@@ -658,6 +691,7 @@ async function onPeriodChange(period: 'yesterday' | '7d' | '30d') {
 }
 
 function onAccountChange(accountId: string) {
+  resetAvatarLoadError(accountId);
   analyticsStore.setSelectedAccount(accountId);
   selectedAccountId.value = accountId;
   activePeriodTab.value = '7d';
@@ -711,7 +745,14 @@ async function startCollect() {
     await analyticsStore.startCollect(selectedAccountId.value, 'all');
     ElMessage.success('采集任务已启动');
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e));
+    const msg = e instanceof Error ? e.message : String(e);
+    // 未接入采集的平台：主进程在入队前同步抛出的明确提示，
+    // 用 ElMessage.warning 以非错误样式的黄色页面提示，避免用户误以为是内部故障。
+    if (msg.indexOf('暂不支持平台') !== -1 || msg.indexOf('未接入') !== -1 || msg.indexOf('不支持数据分析采集') !== -1) {
+      ElMessage.warning(msg);
+    } else {
+      ElMessage.error(msg);
+    }
   }
 }
 
@@ -755,9 +796,21 @@ function onImgError(e: Event) {
   target.style.display = 'none';
 }
 
+/**
+ * 头像加载失败回调：
+ * 不在此处直接 display:none（会导致头像空白），
+ * 而是写入 avatarLoadError[accountId] = true，
+ * 让模板里的 v-if/v-else 分支回落到「首字母占位符」。
+ * accountId 从 img 的 data-account-id 属性读取（模板里统一写了）。
+ */
 function onAvatarError(e: Event) {
-  const target = e.target as HTMLImageElement;
-  target.style.display = 'none';
+  const target = e.target as HTMLImageElement & { dataset: { accountId?: string } };
+  const accId = target?.dataset?.accountId;
+  if (accId) {
+    avatarLoadError.value[accId] = true;
+  } else {
+    target.style.display = 'none';
+  }
 }
 
 watch(
@@ -774,6 +827,7 @@ watch(
 onMounted(async () => {
   await accountStore.loadPlatforms();
   await accountStore.refreshAccounts();
+  resetAvatarLoadError();
   if (accountStore.accounts.length > 0) {
     selectedAccountId.value = accountStore.accounts[0].id;
     analyticsStore.setSelectedAccount(accountStore.accounts[0].id);
