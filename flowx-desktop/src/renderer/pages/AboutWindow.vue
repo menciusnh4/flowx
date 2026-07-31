@@ -7,17 +7,20 @@
         </div>
         <div class="about-info">
           <h2>FlowX Desktop</h2>
-          <p class="about-subtitle">多平台内容发布工具</p>
+          <p class="about-subtitle">多平台内容创作与数据洞察工具</p>
           <p class="about-version">版本：v{{ version || '0.1.0' }}</p>
         </div>
       </div>
 
       <div class="about-desc">
         <p>
-          FlowX 是一款基于 Electron 的跨平台桌面客户端，旨在帮助内容创作者高效管理多平台账号，
-          一键发布内容到多个平台，省去重复登录和重复发布的繁琐流程。
+          FlowX 是一款面向内容创作者的跨平台运营工作台，覆盖账号管理、内容采集/编辑、多平台一键发布、定时调度，
+          以及 v0.1.5 新增的运营数据洞察分析，帮助你从「采集→编辑→发布→复盘」一站式完成日常工作。
         </p>
-        <p>支持抖音、小红书、快手、微信视频号、知乎、今日头条等主流内容平台。</p>
+        <p>
+          支持抖音、小红书、快手、微信视频号、知乎、X（Twitter）、今日头条等主流内容平台，
+          并提供开放 API 与自定义站点规则能力，接入第三方系统和特定工作流更轻松。
+        </p>
       </div>
 
       <el-tabs v-model="activeTab" class="about-tabs">

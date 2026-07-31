@@ -8,6 +8,7 @@ files:
   - dist/**/*
   - dist-electron/**/*
   - node_modules/**/*
+  - CHANGELOG.md
   - "!node_modules/*/{test,__tests__,tests,powered-test,example,examples}"
   - "!node_modules/*.d.ts"
   - "!node_modules/.bin"
