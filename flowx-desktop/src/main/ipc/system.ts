@@ -2,7 +2,7 @@ import { ipcMain, shell, app, dialog, BrowserWindow, Menu, MenuItem } from 'elec
 import { safeInvoke } from './index';
 import type { SystemInfo, UpdateInfo, PublishLogQuery } from '../../types';
 import { getMainWindow } from '../windows/MainWindow';
-import { getLogsDir, getPublishLogPath, getMainLogPath, queryPublishLogs, clearPublishLogs, listLogFiles, getLogPathByDate } from '../utils/logger';
+import { getLogsDir, getPublishLogPath, getMainLogPath, queryPublishLogs, clearPublishLogs, listLogFiles, getLogPathByDate, logger } from '../utils/logger';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -91,15 +91,36 @@ export function registerSystemIpc(): void {
 
   // 读取 CHANGELOG.md 内容（用于关于对话框）
   safeInvoke('system:readChangelog', (): string => {
+    const rp = process.resourcesPath || '';
+    const candidates: string[] = [
+      path.join(app.getAppPath(), 'CHANGELOG.md'),
+      path.join(rp, 'app', 'CHANGELOG.md'),
+      path.join(rp, 'CHANGELOG.md'),
+    ];
     try {
-      const changelogPath = path.join(app.getAppPath(), 'CHANGELOG.md');
-      if (fs.existsSync(changelogPath)) {
-        return fs.readFileSync(changelogPath, 'utf-8');
-      }
-      return '';
+      const exeDir = path.dirname(app.getPath('exe'));
+      candidates.push(path.join(exeDir, 'CHANGELOG.md'));
+      candidates.push(path.join(exeDir, 'resources', 'CHANGELOG.md'));
     } catch {
-      return '';
+      // ignore
     }
+    for (let i = 0; i < candidates.length; i++) {
+      const p = candidates[i];
+      try {
+        if (p && fs.existsSync(p)) {
+          const content = fs.readFileSync(p, 'utf-8');
+          if (content && content.trim().length > 0) {
+            logger.info('[system:readChangelog] OK: ' + p);
+            return content;
+          }
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        logger.warn('[system:readChangelog] fail: ' + p + ', err: ' + msg);
+      }
+    }
+    logger.warn('[system:readChangelog] CHANGELOG.md not found in: ' + candidates.join(' | '));
+    return '';
   });
 
   // --- 日志管理 ---
