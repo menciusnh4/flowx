@@ -113,48 +113,118 @@ async function detectLoggedIn(win: BrowserWindow): Promise<LoginCheckResult> {
                         currentUrl.includes('/signin') ||
                         currentUrl.includes('passport.weibo.com') ||
                         currentUrl.includes('sso.weibo.com');
+    if (isLoginPage) matchedKeywords.push('is-login-page');
 
-    // 3. 已进入创作中心或个人主页页面
-    const inBackend = (currentUrl.includes('me.weibo.com') ||
-                       currentUrl.includes('weibo.com/u/') ||
-                       currentUrl.includes('weibo.com/p/')) &&
-                      !isLoginPage;
-    if (inBackend) matchedKeywords.push('in-weibo-backend');
-
-    // 4. DOM 辅助检测
-    let domLoggedIn = false;
+    // 2.5. 识别"访客态公开首页"：
+    //      微博未登录访问 me.weibo.com 会重定向到 weibo.com 首页，
+    //      此时可能残留旧 SUB cookie，但页面上有「登录 / 注册 / 欢迎」等访客关键词，
+    //      且没有「退出登录 / 创作中心」等登录后关键词，必须视为未登录，
+    //      否则授权流程会直接从访客首页提取无效信息（如随机推荐博主昵称）。
+    let isVisitorHomepage = false;
     try {
-      domLoggedIn = await win.webContents.executeJavaScript(`
-        (function() {
-          try {
-            // 微博已登录标志：用户昵称元素、退出按钮、创作中心侧边栏菜单
-            var nameEl = document.querySelector('.user-info .name') ||
-                        document.querySelector('.username') ||
-                        document.querySelector('[class*="user-name"]') ||
-                        document.querySelector('[class*="nickname"]') ||
-                        document.querySelector('[class*="screen-name"]') ||
-                        document.querySelector('.screen-name') ||
-                        document.querySelector('.WD_header_name');
-            var bodyText = document.body ? (document.body.innerText || '') : '';
-            var hasLogout = bodyText.indexOf('退出登录') !== -1 ||
-                           bodyText.indexOf('退出') !== -1;
-            var hasSidebar = bodyText.indexOf('内容管理') !== -1 ||
-                            bodyText.indexOf('数据中心') !== -1 ||
-                            bodyText.indexOf('创作中心') !== -1 ||
-                            bodyText.indexOf('发微博') !== -1 ||
-                            bodyText.indexOf('我的主页') !== -1;
-            return !!(nameEl || (hasLogout && hasSidebar));
-          } catch(e) {
-            return false;
-          }
-        })()
-      `);
-      if (domLoggedIn) matchedKeywords.push('dom-profile');
+      const urlParsed = new URL(currentUrl);
+      const isHomeOrRoot = (urlParsed.hostname === 'weibo.com' || urlParsed.hostname === 'www.weibo.com') &&
+                           (urlParsed.pathname === '/' || urlParsed.pathname === '/home' || urlParsed.pathname.startsWith('/home/'));
+      if (isHomeOrRoot) {
+        const visitorFlag = await win.webContents.executeJavaScript(`
+          (function() {
+            try {
+              var bodyText = (document.body && (document.body.innerText || '')) || '';
+              var hasVisitorKwd = bodyText.indexOf('登录') !== -1 ||
+                                  bodyText.indexOf('注册') !== -1 ||
+                                  bodyText.indexOf('欢迎') !== -1 ||
+                                  bodyText.indexOf('未登录') !== -1 ||
+                                  bodyText.indexOf('微博欢迎你') !== -1;
+              var hasLoggedInKwd = bodyText.indexOf('退出登录') !== -1 ||
+                                   bodyText.indexOf('我的主页') !== -1 ||
+                                   bodyText.indexOf('创作中心') !== -1 ||
+                                   bodyText.indexOf('发微博') !== -1;
+              // 首页上出现访客关键词但没有登录后关键词 → 视为访客首页
+              return hasVisitorKwd && !hasLoggedInKwd;
+            } catch(e) {
+              return false;
+            }
+          })();
+        `);
+        isVisitorHomepage = !!visitorFlag;
+        if (isVisitorHomepage) matchedKeywords.push('visitor-homepage');
+      } else if (urlParsed.hostname === 'weibo.com' || urlParsed.hostname === 'www.weibo.com') {
+        // weibo.com 非首页路径（如 /u/xxx 个人主页）若有访客关键词也不应该判登录
+        const softVisitorFlag = await win.webContents.executeJavaScript(`
+          (function() {
+            try {
+              var bodyText = (document.body && (document.body.innerText || '')) || '';
+              var hasLoginBtn = bodyText.indexOf('立即登录') !== -1 ||
+                                bodyText.indexOf('请先登录') !== -1;
+              var hasLogout = bodyText.indexOf('退出登录') !== -1;
+              return hasLoginBtn && !hasLogout;
+            } catch(e) {
+              return false;
+            }
+          })();
+        `);
+        if (softVisitorFlag) {
+          isVisitorHomepage = true;
+          matchedKeywords.push('weibo-com-visitor-path');
+        }
+      }
     } catch {
       // ignore
     }
 
-    const loggedIn = !!subCookie && !isLoginPage;
+    // 3. 已进入创作中心或个人主页页面（且不是登录页、不是访客首页）
+    const inBackend = (currentUrl.includes('me.weibo.com') ||
+                       currentUrl.includes('weibo.com/u/') ||
+                       currentUrl.includes('weibo.com/p/')) &&
+                      !isLoginPage &&
+                      !isVisitorHomepage;
+    if (inBackend) matchedKeywords.push('in-weibo-backend');
+
+    // 4. DOM 辅助检测（仅当 非访客 非登录页 时才启用，避免访客首页误命中推荐博主的昵称/头像元素）
+    let domLoggedIn = false;
+    if (!isVisitorHomepage && !isLoginPage) {
+      try {
+        domLoggedIn = await win.webContents.executeJavaScript(`
+          (function() {
+            try {
+              // 微博已登录标志：用户昵称元素、退出按钮、创作中心侧边栏菜单
+              var nameEl = document.querySelector('.user-info .name') ||
+                          document.querySelector('.username') ||
+                          document.querySelector('[class*="user-name"]') ||
+                          document.querySelector('[class*="nickname"]') ||
+                          document.querySelector('[class*="screen-name"]') ||
+                          document.querySelector('.screen-name') ||
+                          document.querySelector('.WD_header_name');
+              var bodyText = document.body ? (document.body.innerText || '') : '';
+              var hasLogout = bodyText.indexOf('退出登录') !== -1 ||
+                             bodyText.indexOf('退出') !== -1;
+              var hasSidebar = bodyText.indexOf('内容管理') !== -1 ||
+                              bodyText.indexOf('数据中心') !== -1 ||
+                              bodyText.indexOf('创作中心') !== -1 ||
+                              bodyText.indexOf('发微博') !== -1 ||
+                              bodyText.indexOf('我的主页') !== -1;
+              return !!(nameEl || (hasLogout && hasSidebar));
+            } catch(e) {
+              return false;
+            }
+          })()
+        `);
+        if (domLoggedIn) matchedKeywords.push('dom-profile');
+      } catch {
+        // ignore
+      }
+    }
+
+    // 核心逻辑：
+    //   loggedIn = 有 SUB cookie  AND  不在登录页  AND  不在访客首页
+    //              AND（进入了创作中心 / 个人主页域  OR  DOM 辅助检测已登录）
+    //  说明：即使 SUB 存在，若页面仍停留在 weibo.com 访客首页 / 公开首页（登录后跳转默认到首页），
+    //        这里也会返回 loggedIn=false，授权流程会再次导航到 me.weibo.com（策略 homeUrl），
+    //        保证 extractPageInfo 一定在创作中心域执行，避免提取错信息。
+    const loggedIn = !!subCookie &&
+                     !isLoginPage &&
+                     !isVisitorHomepage &&
+                     (inBackend || domLoggedIn);
 
     return {
       loggedIn,
@@ -291,7 +361,15 @@ function _normalizeUrl(u: unknown): string {
 
 async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo> {
   try {
-    log('info', 'extractPageInfo', '开始提取微博账号信息');
+    const currentUrl = win.webContents.getURL();
+    log('info', 'extractPageInfo', `开始提取微博账号信息，当前 URL: ${currentUrl}`);
+    // 诊断：如果当前 URL 不在创作中心域，则打一条 warning（理论上在新的 detectLoggedIn 严格条件下
+    // 这里只会在 me.weibo.com / weibo.com/u/ / weibo.com/p/ 被调用，用于后续排错）
+    if (!currentUrl.includes('me.weibo.com') &&
+        !currentUrl.includes('weibo.com/u/') &&
+        !currentUrl.includes('weibo.com/p/')) {
+      log('warn', 'extractPageInfo', `⚠️ 当前不在创作中心域，提取结果可能不准确，URL=${currentUrl}`);
+    }
 
     // 分步提取，避免单个大脚本执行失败导致全部信息丢失
     let nickname = '';
