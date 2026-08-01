@@ -568,7 +568,7 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
             var allUserLinks = document.querySelectorAll('a[href*="weibo.com/u/"], a[href^="/u/"]');
             for (var li = 0; li < allUserLinks.length; li++) {
               var href = allUserLinks[li].getAttribute('href') || '';
-              var fullHref = (allUserLinks[li] as any).href || href;
+              var fullHref = String(allUserLinks[li].href || href);
               var lm = String(fullHref + ' ' + href).match(/weibo\\.com\\/u\\/([0-9]{5,12})/i) ||
                        href.match(/^\\/u\\/([0-9]{5,12})$/);
               if (lm && lm[1]) { r.platformAccountId = lm[1]; break; }

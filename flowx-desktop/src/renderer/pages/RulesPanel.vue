@@ -2,6 +2,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { electronApi } from '../utils/electron'
+import { useWorkspaceStore } from '../stores/workspace'
 import SiteRuleEditor from '../components/SiteRuleEditor.vue'
 import type { CustomSiteRule, PagedResult } from '../../types'
 import ListPager from '../components/ListPager.vue'
@@ -94,6 +95,16 @@ function getTypeTags(types: string[]): string {
 onMounted(() => {
   loadRules()
 })
+
+const workspaceStore = useWorkspaceStore()
+
+// 切换到提取规则 tab 时自动刷新（浏览器新增规则不走当前组件，必须重拉）
+watch(
+  () => workspaceStore.activeId,
+  (newId) => {
+    if (newId === 'sys:/settings/rules') loadRules()
+  },
+)
 
 // ============ 服务端分页（筛选下推主进程，列表走 queryRules） ============
 /** 加载某一页（服务端分页）；越界页码回退到末页，避免删除/刷新后空白 */

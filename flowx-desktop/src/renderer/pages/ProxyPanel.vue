@@ -213,6 +213,7 @@ async function handleSave() {
       ElMessage.success('代理 IP 添加成功');
     }
     dialogVisible.value = false;
+    await loadList(currentPage.value, pageSize.value);
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : String(err));
   } finally {
@@ -236,6 +237,7 @@ async function handleDelete(id: string) {
       // 删除测试结果缓存
       delete testResults.value[id];
       ElMessage.success('代理 IP 已成功删除');
+      await loadList(currentPage.value, pageSize.value);
     } else {
       ElMessage.error('代理 IP 删除失败');
     }

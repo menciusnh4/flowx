@@ -95,9 +95,9 @@
               </el-tooltip>
             </div>
           </div>
-          <div class="hr-time">
-            <div class="hr-time-main">创建：{{ fmt(row.createdAt) }}</div>
-            <div v-if="row.request?.scheduledAt" class="hr-time-sched">定时：{{ fmt(row.request.scheduledAt) }}</div>
+          <div class="hr-time cell-time">
+            <div>创建：{{ fmt(row.createdAt) }}</div>
+            <div v-if="row.request?.scheduledAt">定时：{{ fmt(row.request.scheduledAt) }}</div>
           </div>
           <div class="hr-actions">
             <div class="hact">
@@ -476,12 +476,14 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { RefreshRight, Refresh, Edit, Plus, Promotion, Search } from '@element-plus/icons-vue';
 import { usePublishStore } from '../stores/publish';
 import { useAccountStore } from '../stores/account';
+import { useWorkspaceStore } from '../stores/workspace';
 import { electronApi } from '../utils/electron';
 import ListPager from '../components/ListPager.vue';
 import type { PublishTask, PlatformType, PublishStatus, PublishLogEntry, PublishItemProgress, PublishRequest, ContentType, PublishQueryFilter } from '../../types';
 
 const publishStore = usePublishStore();
 const accountStore = useAccountStore();
+const workspaceStore = useWorkspaceStore();
 
 const detailVisible = ref(false);
 const detailData = ref<{ task: PublishTask | null; logs: PublishLogEntry[] } | null>(null);
@@ -904,6 +906,16 @@ onMounted(async () => {
   await accountStore.refreshAccounts();
   await publishStore.loadHistoryPaged(1, undefined, currentFilter.value);
 });
+
+// 切换到发布历史 tab 时自动刷新（发布完成后切过来应看到最新数据）
+watch(
+  () => workspaceStore.activeId,
+  (newId) => {
+    if (newId === 'sys:/publish/history') {
+      publishStore.loadHistoryPaged(publishStore.historyPage, publishStore.historyPageSize, currentFilter.value);
+    }
+  },
+)
 </script>
 
 <style scoped>

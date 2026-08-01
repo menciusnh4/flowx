@@ -155,16 +155,24 @@ interface ExtensionMapping {
   suggestion?: string;
 }
 
-/** 解析 compliance 资源目录：dev 与打包(asar) 均指向 src/main/resources/compliance */
+/** 解析 compliance 资源目录：依次尝试 dev / asar 内部 / extraResources(asar 外) 三种布局 */
 function resolveComplianceDir(): string {
-  try {
-    const byApp = path.join(app.getAppPath(), 'src/main/resources/compliance');
-    if (fs.existsSync(byApp)) return byApp;
-  } catch {
-    /* app 未就绪时回退 */
+  const candidates = [
+    // 1) dev 模式与 asar 内部打包路径
+    path.join(app.getAppPath(), 'src/main/resources/compliance'),
+    // 2) 打包后 extraResources 落盘路径（asar 外，真实文件夹 resources/compliance）
+    path.join(process.resourcesPath, 'compliance'),
+    // 3) 基于当前模块位置回退（dist-electron/main/services/compliance → ../../resources/compliance）
+    path.join(__dirname, '../../resources/compliance'),
+  ];
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c)) return c;
+    } catch {
+      /* 该路径不可访问，尝试下一个候选 */
+    }
   }
-  // 回退：基于当前模块位置（dist-electron/main/services/compliance → ../../resources/compliance）
-  return path.join(__dirname, '../../resources/compliance');
+  return candidates[0];
 }
 
 let extTermsCache: RawTerm[] | null = null;

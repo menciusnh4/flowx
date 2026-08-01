@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, watch, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useDraftStore } from '../stores/draft'
@@ -21,6 +21,16 @@ onMounted(async () => {
     loading.value = false
   }
 })
+
+// 切换到草稿箱 tab 时自动刷新（Browser/Publish 保存草稿后不走 store，必须重拉）
+watch(
+  () => workspaceStore.activeId,
+  (newId) => {
+    if (newId === 'sys:/drafts') {
+      draftStore.loadDrafts()
+    }
+  },
+)
 
 const filteredDrafts = computed(() => {
   if (activeTab.value === 'all') return draftStore.drafts

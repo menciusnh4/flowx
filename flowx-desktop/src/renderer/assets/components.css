@@ -126,9 +126,8 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 11px;
   color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
 }
 
 /* 代理端口列：等宽品牌色小令牌，强调「连接端口」这一关键技术值，与 host 灰字区分层级 */

@@ -7,6 +7,7 @@ import { useAccountStore } from '../stores/account'
 import { useDraftStore } from '../stores/draft'
 import { useWorkspaceStore } from '../stores/workspace'
 import { electronApi } from '../utils/electron'
+import { getPlatformIcon } from '../utils/platformIcons'
 import type { PublishRequest, PlatformType, PublishDraft } from '../../types'
 import PublishForm from '../components/PublishForm.vue'
 
@@ -228,7 +229,10 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
           <el-table :data="t.items" size="small" style="margin-top: 10px;">
             <el-table-column label="账号" min-width="200">
               <template #default="{ row }">
-                <span>{{ iconOf(platformFromAccountId(row.accountId)) }} {{ nicknameOf(row.accountId) }}</span>
+                <span class="task-account-cell">
+                  <img v-if="getPlatformIcon(platformFromAccountId(row.accountId))" :src="getPlatformIcon(platformFromAccountId(row.accountId))" class="task-plat-icon" />
+                  {{ nicknameOf(row.accountId) }}
+                </span>
               </template>
             </el-table-column>
             <el-table-column label="平台" width="120">
@@ -391,6 +395,8 @@ function platformFromAccountId(accountId: string): PlatformType | undefined {
 .log-data { color: #6b7280; margin-left: 4px; word-break: break-all; }
 .empty { padding: 20px 0; }
 .task-meta { display: flex; gap: 20px; color: var(--slate); font-size: 13px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+.task-account-cell { display: inline-flex; align-items: center; gap: 6px; }
+.task-plat-icon { width: 18px; height: 18px; flex-shrink: 0; }
 
 /* 测试结果 */
 .test-results {

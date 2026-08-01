@@ -1831,6 +1831,9 @@ onBeforeUnmount(() => {
   gap: 10px;
   min-width: 0;
 }
+.list-row .lr-id {
+  padding-left: 48px;
+}
 .lr-idtext {
   min-width: 0;
 }
@@ -1882,9 +1885,6 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
     row-gap: 10px;
     padding: 14px 16px;
-  }
-  .list-row .lr-id {
-    padding-left: 0;
   }
   .list-row .lr-actions {
     justify-self: start;

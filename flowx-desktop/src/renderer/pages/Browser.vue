@@ -6,6 +6,7 @@ import { electronApi } from '../utils/electron'
 import { useEnvStore } from '../stores/env'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useUiStore } from '../stores/ui'
+import { useDraftStore } from '../stores/draft'
 import PublishForm from '../components/PublishForm.vue'
 import BrowserRulePanel from '../components/BrowserRulePanel.vue'
 import type { BrowserEnvironment, PublishRequest, BrowserBookmark, BrowserHistoryItem, ExtractedContent, CustomSiteRule, PickerFieldType, PickerResult, PublishContentType } from '../../types'
@@ -28,6 +29,7 @@ const route = useRoute()
 const envStore = useEnvStore()
 const props = defineProps<{ url?: string }>()
 const uiStore = useUiStore()
+const draftStore = useDraftStore()
 
 // 发布表单 ref
 const publishFormRef = ref<InstanceType<typeof PublishForm> | null>(null)
@@ -1297,7 +1299,7 @@ async function saveToDraft() {
   }
 
   try {
-    await electronApi.draft.create({
+    await draftStore.createDraft({
       title: finalTitle,
       contentType: formData.contentType || 'article',
       formData: {

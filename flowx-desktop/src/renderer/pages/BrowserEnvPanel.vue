@@ -230,6 +230,7 @@ async function handleSave() {
       ElMessage.success('环境配置添加成功');
     }
     dialogVisible.value = false;
+    await loadList(currentPage.value, pageSize.value);
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : String(err));
   } finally {
@@ -251,6 +252,7 @@ async function handleDelete(id: string) {
     const ok = await envStore.deleteEnvironment(id);
     if (ok) {
       ElMessage.success('环境配置已成功删除');
+      await loadList(currentPage.value, pageSize.value);
     } else {
       ElMessage.error('环境配置删除失败');
     }

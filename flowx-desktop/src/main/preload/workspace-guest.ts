@@ -86,6 +86,53 @@ function detectLogin(): boolean {
       return kw >= 2 || hasLogout || hasAccountInfo;
     }
 
+    // 2.3) X（Twitter）：data-testid 属性体系，与通用 class 选择器完全不兼容
+    const isX = href.indexOf('x.com') !== -1 || href.indexOf('twitter.com') !== -1;
+    if (isX) {
+      // X 已登录标志（对齐 x.ts detectLoggedIn DOM 部分）：
+      //   - 左侧导航 Home 链接
+      //   - 发帖/推文按钮
+      //   - 个人资料链接 + (退出|Log out|登出) 文本
+      const hasNav = !!document.querySelector('[data-testid="AppTabBar_Home_Link"]') ||
+                     !!document.querySelector('a[href="/home"]');
+      const hasComposeBtn = !!document.querySelector('[data-testid="SideNav_NewTweet_Button"]') ||
+                            !!document.querySelector('[data-testid="tweetTextarea_0"]') ||
+                            !!document.querySelector('div[contenteditable="true"][data-testid*="tweetText"]');
+      const hasProfileLink = !!document.querySelector('[data-testid="AppTabBar_Profile_Link"]') ||
+                             !!document.querySelector('a[href*="/following"]') ||
+                             !!document.querySelector('a[href*="/followers"]');
+      const hasLogoutText = txt.indexOf('Log out') !== -1 ||
+                            txt.indexOf('退出') !== -1 ||
+                            txt.indexOf('登出') !== -1;
+      return !!(hasNav || hasComposeBtn || (hasProfileLink && hasLogoutText));
+    }
+
+    // 2.5) 抖音/快手/小红书专属检测
+    const isDouyin = href.indexOf('douyin.com') !== -1;
+    const isKuaishou = href.indexOf('kuaishou.com') !== -1;
+    const isXiaohongshu = href.indexOf('xiaohongshu.com') !== -1;
+
+    if (isDouyin || isKuaishou || isXiaohongshu) {
+      let platKws: string[] = [];
+      let accountSel = '';
+      if (isDouyin) {
+        platKws = ['创作中心', '内容管理', '发布', '作品', '数据', '粉丝'];
+        accountSel = '.name, [class*="name-"]';
+      } else if (isKuaishou) {
+        platKws = ['创作中心', '发布作品', '作品管理', '粉丝', '数据分析', '个人中心', '发布视频'];
+        accountSel = '.user-name, [class*="user-name"], .nickname, [class*="nickname"], [class*="username"], [class*="user-name"]';
+      } else {
+        platKws = ['创作中心', '数据中心', '作品管理', '发布笔记', '发布视频', '粉丝', '数据分析'];
+        accountSel = '[class*="account"], [class*="account-name"], .account-name, [class*="nickname"], [class*="user-name"], .user-name, meta[name*="creator"], meta[property*="creator"]';
+      }
+      let kw = 0;
+      for (let i = 0; i < platKws.length; i++) {
+        if (txt.indexOf(platKws[i]) !== -1) kw++;
+      }
+      const hasAccountEl = !!document.querySelector(accountSel);
+      return kw >= 3 || hasAccountEl;
+    }
+
     // 3) 通用强信号：页面含「退出」字样（已登录专属）
     if (txt.indexOf('退出') !== -1) return true;
 

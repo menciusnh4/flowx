@@ -7,7 +7,6 @@ afterPack: scripts/afterPack.js
 files:
   - dist/**/*
   - dist-electron/**/*
-  - src/main/resources/**/*
   - node_modules/**/*
   - CHANGELOG.md
   - "!node_modules/*/{test,__tests__,tests,powered-test,example,examples}"
@@ -24,6 +23,8 @@ files:
 extraResources:
   - from: build/icon.png
     to: icon.png
+  - from: src/main/resources/compliance
+    to: compliance
 win:
   icon: build/icon.ico
   target:

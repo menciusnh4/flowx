@@ -394,6 +394,20 @@ body {
   pointer-events: none;
   transition: opacity var(--t), transform var(--t);
 }
+/* 折叠态隐藏副标题 + 整个文字区域（"多平台内容发布助手" 溢出修复） */
+.sidebar.collapsed .sidebar-logo .logo-text-wrapper {
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transition: opacity var(--t);
+}
+/* 折叠态 Logo 图标缩小适配 64px 栏宽 */
+.sidebar.collapsed .sidebar-logo .logo-icon-img {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+}
 
 /* 导航项：仅图标居中，隐藏文字与箭头 */
 .sidebar.collapsed .nav-item {
