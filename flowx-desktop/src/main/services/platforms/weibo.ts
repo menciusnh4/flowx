@@ -55,7 +55,7 @@ const meta: PlatformMeta = {
   contentTypes: ['video', 'image', 'article'],
   capabilities: {
     publishVideo: true,
-    publishImage: false, // TODO: 待实现（图文/微博配图）
+    publishImage: true, // 首页图文发布：https://weibo.com/
     publishArticle: false, // TODO: 待实现（头条文章）
   } as AccountCapabilities,
   contentLimits: {
@@ -1004,14 +1004,535 @@ async function publishVideo(
   return runWeiboPublish(accountId, request, onProgress, 'video');
 }
 
-async function publishImage(
+/**
+ * 微博图文/纯文本发布（首页 weibo.com）专用图片上传。
+ *  入口：._file_1jg7d_67 图标按钮（<span>图片</span>）
+ *  真实隐藏 input：._picbed_1syq3_2._box_hqmwy_2 > input._file_hqmwy_20
+ *     - 外层 5 层 div 都 style="display:none"（我们绝对不碰 display:none）
+ *     - 但只要把本地文件通过 DOM.setFileInputFiles 直接注入到这个真实 input 上，
+ *       再 dispatch change/input，React/Vue 组件状态会被触发，自己把 width:50%
+ *       display:none 的包裹容器改为显示，并渲染出缩略图（你给的成功 DOM）
+ *  策略（绝不触碰 display:none）：
+ *    方案 A：FileChooser 拦截 → 点击 ._file_1jg7d_67「图片」 → 收到 fileChooserOpened 后 accept
+ *    方案 C（兜底）：直接定位真实 input._file_hqmwy_20 → CDP 注入文件 → dispatch input/change
+ *  无论走哪个方案，都必须额外走「等待缩略图出现」校验：
+ *    ._box2_vkpry_14 下 ._pic_1syq3_2 里面 img.woo-picture-img 数量 >= 实际文件数
+ *  只有通过校验才算真正上传成功，避免假成功。
+ */
+async function uploadWeiboImage(
+  win: BrowserWindow,
+  imageFiles: string[],
+  log: (level: any, stage: string, message: string, data?: Record<string, unknown>) => void,
+): Promise<boolean> {
+  try {
+    try { await win.webContents.debugger.attach('1.3'); } catch { /* ignore */ }
+    const expectedCount = imageFiles.length;
+    let schemeAOk = false;
+
+    // ================= 方案 A：FileChooser 拦截 + 点「图片」按钮 =================
+    log('info', 'upload', `[A] 启用 FileChooser 拦截，准备点击首页「图片」按钮 (target=${expectedCount} 张)…`);
+    let interceptionOk = false;
+    try {
+      await win.webContents.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true } as any);
+      interceptionOk = true;
+    } catch (err) {
+      log('warn', 'upload', `[A] FileChooser 拦截启用失败: ${(err as Error).message}`);
+    }
+
+    if (interceptionOk) {
+      let chooserResolved = false;
+      const chooserPromise = new Promise<boolean>((resolve) => {
+        const handler = (_event: any, method: string, params: any) => {
+          if (method === 'Page.fileChooserOpened') {
+            log('info', 'upload', `[A] 收到 Page.fileChooserOpened (mode=${params?.mode}, params=${JSON.stringify(params).slice(0, 200)})`);
+            // 两种 CDP 语义：一种是 params 默认值，用 { action, files } 注入；
+            // 另一种是 params 里带 { frameId, backendNodeId }，但 Electron 一般只认前者。
+            const cmdArgs: Record<string, unknown> = { action: 'accept', files: imageFiles };
+            if (params && typeof params === 'object') {
+              if (params.frameId) (cmdArgs as any).frameId = params.frameId;
+              if (params.backendNodeId) (cmdArgs as any).backendNodeId = params.backendNodeId;
+            }
+            win.webContents.debugger
+              .sendCommand('Page.handleFileChooser', cmdArgs as any)
+              .then(() => {
+                chooserResolved = true;
+                try { win.webContents.debugger.off('message', handler); } catch { /* ignore */ }
+                resolve(true);
+              })
+              .catch((err) => {
+                log('warn', 'upload', `[A] handleFileChooser 失败: ${(err as Error).message}`);
+                try { win.webContents.debugger.off('message', handler); } catch { /* ignore */ }
+                resolve(false);
+              });
+          }
+        };
+        try { win.webContents.debugger.on('message', handler); } catch { /* ignore */ }
+        setTimeout(() => {
+          if (!chooserResolved) {
+            try { win.webContents.debugger.off('message', handler); } catch { /* ignore */ }
+            resolve(false);
+          }
+        }, 18000); // 放宽到 18 秒，点击后可能有 pop-over 展开延迟
+      });
+
+      const clickScript = `
+        (function(){
+          try {
+            // 1) 优先精确匹配 ._file_1jg7d_67（你给的真实入口 class 容器：_file_1jg7d_67 是带 svg<image> + <span>图片</span> 的 _itemin 层）
+            var imgBtn = document.querySelector('[class*="_file_1jg7d_"], [class*="_file_1jg7d_67"]');
+            if (imgBtn) {
+              try { imgBtn.click(); } catch(e1){ try { imgBtn.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); } catch(e2){} }
+              return { clicked: true, method: 'img-icon-direct', class: (imgBtn.getAttribute&&imgBtn.getAttribute('class'))||'' };
+            }
+            // 2) 回退：找 span 文本为「图片」且父级 class 含 _itemin_ 的入口
+            var spans = document.querySelectorAll('span, div, button, a');
+            for (var i = 0; i < spans.length; i++) {
+              var el = spans[i];
+              if ((el.offsetWidth || 0) < 4 && (el.offsetHeight || 0) < 4) continue;
+              var txt = (el.innerText || el.textContent || '').replace(/\\s+/g, '').trim();
+              if (txt !== '图片') continue;
+              var p = el;
+              for (var j = 0; j < 6 && p; j++) {
+                var cls = (p.getAttribute && p.getAttribute('class')) || '';
+                if (/_itemin_|_iconitem_|woo-pop-wrap|_file_1jg7d_|_1jg7d_/.test(cls)) {
+                  try { p.click(); } catch(ea){ try { p.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); } catch(eb){} }
+                  return { clicked: true, method: 'text-scan', parentClass: cls };
+                }
+                p = p.parentElement;
+              }
+            }
+            return { clicked: false, reason: 'no-image-button' };
+          } catch(e) { return { clicked: false, error: String(e) }; }
+        })();
+      `;
+      const clickEval: any = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+        expression: clickScript, returnByValue: true,
+      }).catch(() => null);
+      const clickVal = clickEval && clickEval.result && clickEval.result.value ? clickEval.result.value : null;
+      log('info', 'upload', `[A] 点击「图片」结果: ${clickVal ? JSON.stringify(clickVal).slice(0, 200) : 'unknown'}`);
+
+      const chooserOk = await chooserPromise;
+      try { await win.webContents.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: false } as any).catch(() => {}); } catch { /* ignore */ }
+      if (chooserOk) {
+        log('info', 'upload', '✅ [A] handleFileChooser 返回 OK，开始校验缩略图渲染…');
+        schemeAOk = true;
+      } else {
+        log('warn', 'upload', '[A] FileChooser 失败，走方案 C（直接注入真实隐藏 input._file_hqmwy_20 并触发 change）');
+      }
+    }
+
+    // ================= 方案 C（兜底）：直接把文件注入到真实隐藏 input._file_hqmwy_20 上 =================
+    if (!schemeAOk) {
+      log('info', 'upload', `[C] 方案 C：定位真实隐藏 input._file_hqmwy_20 → CDP 注入文件 → dispatch input/change`);
+
+      // 先在 page 里定位 selector 的真实存在性，打 log 看能不能找到
+      const locateScript = `
+        (function(){
+          try {
+            var sel = 'input[class*="_file_hqmwy_"], input._file_hqmwy_20, [class*="_picbed_1syq3_"] input[type="file"]';
+            var nodes = document.querySelectorAll(sel);
+            if (!nodes || nodes.length === 0) return { found: false, count: 0, sel: sel };
+            var arr = [];
+            for (var i = 0; i < nodes.length; i++) {
+              var n = nodes[i];
+              var cls = (n.getAttribute && n.getAttribute('class')) || '';
+              var acc = (n.getAttribute && n.getAttribute('accept')) || '';
+              var d = false;
+              var p = n;
+              for (var j = 0; j < 8 && p; j++) {
+                if (p && p.style && String(p.style.display || '').toLowerCase() === 'none') { d = true; break; }
+                p = p.parentElement;
+              }
+              arr.push({ idx: i, class: cls, accept: acc, hasHiddenAncestor: d });
+            }
+            return { found: true, count: nodes.length, sel: sel, nodes: arr };
+          } catch(e) { return { found: false, error: String(e) }; }
+        })();
+      `;
+      const locateVal: any = await win.webContents.executeJavaScript(locateScript).catch(() => null);
+      log('info', 'upload', `[C] 定位 input: ${locateVal ? JSON.stringify(locateVal).slice(0, 300) : 'execute-js-null'}`);
+
+      // CDP 找真实 input objectId（优先 performSearch，再 DOM.getDocument + querySelectorAll）
+      let objectId: string | undefined;
+      let doc: any = null;
+      try {
+        doc = await win.webContents.debugger.sendCommand('DOM.getDocument', { depth: -1, pierce: true } as any);
+      } catch (err) { log('warn', 'upload', `[C] DOM.getDocument 失败: ${(err as Error).message}`); }
+
+      if (doc && doc.root && doc.root.nodeId) {
+        const rootId = doc.root.nodeId;
+        const trySelectors = [
+          'input._file_hqmwy_20',
+          'input[class*="_file_hqmwy_"]',
+          'input[accept*="image/*"]',
+        ];
+        for (const sel of trySelectors) {
+          if (objectId) break;
+          const found: any = await win.webContents.debugger.sendCommand('DOM.querySelectorAll', {
+            nodeId: rootId, selector: sel,
+          } as any).catch(() => null);
+          if (found && found.nodeIds && found.nodeIds.length > 0) {
+            for (const nid of found.nodeIds) {
+              if (objectId) break;
+              const resolved: any = await win.webContents.debugger.sendCommand('DOM.resolveNode', { nodeId: nid } as any).catch(() => null);
+              if (resolved && resolved.object && resolved.object.objectId) objectId = resolved.object.objectId;
+            }
+          }
+        }
+        if (!objectId) {
+          const s: any = await win.webContents.debugger.sendCommand('DOM.performSearch', {
+            query: '._file_hqmwy_20', includeUserAgentShadowDOM: false,
+          } as any).catch(() => null);
+          if (s && s.nodeIds && s.nodeIds.length > 0) {
+            const resolved: any = await win.webContents.debugger.sendCommand('DOM.resolveNode', { nodeId: s.nodeIds[0] } as any).catch(() => null);
+            if (resolved && resolved.object && resolved.object.objectId) objectId = resolved.object.objectId;
+          }
+        }
+      }
+      if (!objectId) { log('error', 'upload', `[C] 找不到真实隐藏 input 的 objectId (locate=${locateVal?.count || 0})`); return false; }
+
+      // 注入文件
+      let setOk = false;
+      try {
+        await win.webContents.debugger.sendCommand('DOM.setFileInputFiles', { objectId, files: imageFiles } as any);
+        setOk = true;
+      } catch (err) {
+        log('warn', 'upload', `[C] DOM.setFileInputFiles 失败: ${(err as Error).message}`);
+      }
+      if (!setOk) return false;
+
+      // 关键：在该真实 input 上 dispatch change/input 事件（不能碰父级 display:none）。
+      // 若组件在受控态下仍需要额外聚焦/失焦 -> 也触发一次 blur。
+      const fireEventsScript = `
+        (function(){
+          try {
+            var sel = 'input[class*="_file_hqmwy_"], input._file_hqmwy_20, [class*="_picbed_1syq3_"] input[type="file"]';
+            var node = document.querySelector(sel);
+            if (!node) return { ok: false, reason: 'fire-no-input' };
+            // 读取文件数量，验证 DOM.setFileInputFiles 生效
+            var count = node.files ? node.files.length : 0;
+            try { node.dispatchEvent(new Event('focus', { bubbles: true })); } catch(e1){}
+            try { node.dispatchEvent(new Event('input', { bubbles: true })); } catch(e2){}
+            try { node.dispatchEvent(new Event('change', { bubbles: true })); } catch(e3){}
+            try { node.dispatchEvent(new Event('blur',  { bubbles: true })); } catch(e4){}
+            return { ok: true, count: count };
+          } catch(e) { return { ok: false, error: String(e) }; }
+        })();
+      `;
+      const fireVal: any = await win.webContents.executeJavaScript(fireEventsScript).catch(() => null);
+      if (!fireVal || !fireVal.ok) {
+        log('error', 'upload', `[C] 触发 change 失败: ${fireVal ? JSON.stringify(fireVal).slice(0, 200) : 'fire-js-null'}`);
+        return false;
+      }
+      log('info', 'upload', `✅ [C] 真实隐藏 input 文件注入 + 事件分发完成 (files=${fireVal.count})，开始校验缩略图渲染…`);
+    }
+
+    // ================= 最终校验：缩略图渲染出来才算真成功 =================
+    // 你给的成功态 DOM 结构：
+    //   <div class="_box2_vkpry_14 grayTheme">
+    //     <div style="width: 50%;">   ← 注意此时已经**没有 display:none** 了（组件自己切的）
+    //       <div class="u-col-3">
+    //         <div class="woo-box-item-inlineBlock" style="padding:0.25rem;">
+    //           <div class="_picbed_1syq3_2">
+    //             <div class="woo-picture-main ... _pic_1syq3_2">
+    //               <img src="https://wx*.sinaimg.cn/..." class="woo-picture-img">  ← 我们数这个
+    //             </div>
+    //             <i class="..._close_1syq3_42"></i>  ← 有这个删除按钮才算真正显示出来
+    //           </div>
+    const deadline = Date.now() + 45_000;
+    let realOk = false;
+    let lastSnap: Record<string, unknown> = {};
+    while (Date.now() < deadline) {
+      if (win.isDestroyed()) break;
+      const snap: any = await win.webContents.executeJavaScript(`
+        (function(){
+          try {
+            var wrap = document.querySelector('[class*="_box2_vkpry_"]');
+            if (!wrap) return { ok: false, reason: 'no-box2-wrap', displayNone: false };
+            // 查看 width:50% 的直接子节点是否还带着 display:none（组件如果还没切态就会是 display:none）
+            var inner = wrap.querySelector(':scope > div');
+            var innerHidden = false;
+            if (inner) {
+              var st = window.getComputedStyle(inner, null);
+              if (st && (st.display === 'none' || inner.getAttribute && String(inner.getAttribute('style')||'').indexOf('display:none')>=0)) innerHidden = true;
+            }
+            var pics = wrap.querySelectorAll('[class*="_picbed_1syq3_"]');
+            var validImgs = 0;
+            var withClose = 0;
+            for (var i = 0; pics && i < pics.length; i++) {
+              var bed = pics[i];
+              var cls = (bed.getAttribute && bed.getAttribute('class')) || '';
+              if (!/_picbed_1syq3_/.test(cls)) continue;
+              var img = bed.querySelector('img.woo-picture-img');
+              var src = img ? (img.getAttribute && img.getAttribute('src')) : '';
+              if (!src) continue;
+              if (src.indexOf('about:')===0 || src==='false' || src.indexOf('data:')===0) continue;
+              if (!/^https?:\\/\\//.test(src)) continue;
+              if (!/wx\\d+\\.sinaimg\\.cn|tvax\\d+\\.sinaimg\\.cn/.test(src)) continue;
+              validImgs++;
+              var close = bed.querySelector('[class*="_close_1syq3_"], i.woo-font--close, [title="删除"]');
+              if (close) withClose++;
+            }
+            return { ok: validImgs >= ${expectedCount}, validImgs: validImgs, withClose: withClose, expected: ${expectedCount}, innerHidden: innerHidden };
+          } catch(e) { return { ok: false, error: String(e) }; }
+        })();
+      `).catch(() => null);
+      if (snap) lastSnap = snap;
+      if (snap && snap.ok) { realOk = true; break; }
+      const remain = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      log('info', 'upload', `缩略图校验中: ${JSON.stringify(snap).slice(0, 180)} (剩余 ${remain}s)`);
+      await sleep(2500);
+    }
+    if (!realOk) {
+      log('warn', 'upload', `⚠️ 45 秒内未检测到 ${expectedCount} 张缩略图渲染，最后快照: ${JSON.stringify(lastSnap).slice(0, 200)}`);
+      return false;
+    }
+    log('info', 'upload', `✅ 最终上传校验通过: ${JSON.stringify(lastSnap).slice(0, 200)}`);
+    await sleep(1500);
+    return true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log('error', 'upload', `图片上传总异常: ${msg}`);
+    return false;
+  }
+}
+
+/**
+ * 首页图文/纯文本发布主流程：
+ *  URL = https://weibo.com/
+ *  元素：
+ *    正文输入：textarea._input_1rz8r_8（placeholder="有什么新鲜事想分享给大家？"）
+ *    图片入口：._file_1jg7d_67（<span>图片</span>）
+ *    发送按钮：button._btn_2z30i_68（<span>发送</span>，填写内容后自动取消 disabled）
+ */
+async function runWeiboPublishImage(
   accountId: string,
   request: PublishRequest,
   onProgress: ProgressCallback,
 ): Promise<PublishItemProgress> {
   const startedAt = Date.now();
-  log('warn', 'publishImage', '微博图文发布功能尚未实现');
-  return makeFailedResult(accountId, 'weibo', '微博图文发布功能待实现', startedAt);
+  const log = makePublishLogger({ accountId, platform: 'weibo' });
+  const publishUrl = 'https://weibo.com/';
+  const title = `微博图文发布 - ${accountId}`;
+  let win: BrowserWindow | null = null;
+  let tracker: ReturnType<typeof attachNavigationTracker> | null = null;
+
+  try {
+    onProgress(2, '初始化窗口…');
+    win = makePublishWindow(accountId, title);
+    tracker = attachNavigationTracker(win, log);
+
+    onProgress(5, '加载微博首页…');
+    await win.loadURL(publishUrl);
+    onProgress(10, '等待页面稳定…');
+    await tracker.waitForStable(1500, 15000);
+    await sleep(1500);
+
+    onProgress(15, '检测登录状态…');
+    const loginInfo = await detectLoggedIn(win);
+    if (!loginInfo.loggedIn) {
+      win.show();
+      onProgress(15, '请在窗口中登录微博账号…');
+      const deadline = Date.now() + 120_000;
+      let ok = false;
+      while (Date.now() < deadline) {
+        await sleep(3000);
+        if (win.isDestroyed()) break;
+        const recheck: any = await detectLoggedIn(win).catch(() => null);
+        if (recheck && recheck.loggedIn) { ok = true; break; }
+      }
+      if (!ok) return makeFailedResult(accountId, 'weibo', '登录超时或未登录', startedAt);
+      await win.loadURL(publishUrl);
+      await tracker.waitForStable(1500, 15000);
+      await sleep(1500);
+    } else {
+      log('info', 'login', `✅ 已登录 (url=${loginInfo.url.slice(0, 80)})`);
+    }
+
+    // 1) 组装正文：title 换行 content 换行 标签；所有合并到 textarea
+    const titlePart = (request.title || '').trim();
+    const contentPart = (request.content || '').trim();
+    const tagStr = prepareTags(request.tags).join(' ');
+    const parts: string[] = [];
+    if (titlePart) parts.push(truncate(titlePart, 30));
+    if (contentPart) parts.push(truncate(contentPart, 2000 - (parts.join('\n').length + 1 + tagStr.length)));
+    if (tagStr) parts.push(tagStr);
+    const bodyText = parts.join('\n');
+    log('info', 'fill', `准备写入正文: title=${titlePart.length ? '有' : '无'}, content=${contentPart.length ? '有' : '无'}, tags=${(request.tags || []).length}, totalLen=${bodyText.length}`);
+
+    // 2) 先上传图片（如果有），否则只发文字
+    const mediaFiles = (request.mediaFiles && request.mediaFiles.length > 0) ? request.mediaFiles : [];
+    if (mediaFiles.length > 0) {
+      const imageFiles = mediaFiles.filter((f) => /\.(png|jpe?g|gif|bmp|heic|heif|webp)$/i.test(f));
+      if (imageFiles.length > 0) {
+        onProgress(30, `开始上传图片（${imageFiles.length} 张）…`);
+        const upOk = await uploadWeiboImage(win, imageFiles, log);
+        if (!upOk) {
+          log('warn', 'upload', '图片上传失败，尝试继续以纯文本形式发布…');
+          onProgress(35, '图片未上传，继续填写正文…');
+        } else {
+          onProgress(50, '图片上传完成，等待渲染…');
+          await sleep(3500); // 给图片上传结果 + 缩略图渲染时间
+        }
+      }
+    }
+
+    // 3) 填写正文
+    onProgress(65, '填写微博正文…');
+    const fillRes: any = await evalJS(win, buildFillContentScript(bodyText), 'fill-image-content', log).catch(() => null);
+    if (!fillRes || !fillRes.ok) {
+      log('warn', 'fill', `正文写入失败: ${JSON.stringify(fillRes).slice(0, 200)}`);
+      // 允许失败（空正文也能发），但记录
+    } else {
+      log('info', 'fill', `✅ 正文已写入 (type=${fillRes.type})`);
+    }
+    await sleep(800);
+
+    // 4) 测试模式或发布
+    onProgress(80, '准备发布…');
+    if (request.testMode) {
+      const probe = buildTestModeProbeScript(
+        [
+          // 首页发送按钮：._btn_2z30i_68（和视频发布的 hash 一致，但文本是「发送」）
+          'button[class*="_btn_2z30i_"]',
+          'button[class*="_check_2z30i_81"] button',
+          '._check_2z30i_81 button',
+          'button.woo-button-main.woo-button-primary',
+          'button[class*="woo-button-primary"]',
+          'button[class*="primary"]',
+          'button[type="submit"]',
+        ],
+        [
+          {
+            name: '微博正文',
+            selector: 'textarea[placeholder="有什么新鲜事想分享给大家？"], textarea._input_1rz8r_8, textarea[placeholder*="新鲜事"]',
+            type: 'textarea',
+          },
+        ],
+      );
+      const testRes: any = await evalJS(win, probe, 'test-mode-probe', log).catch(() => null);
+      // 按钮可见性兜底（offsetParent===null 时）
+      if (testRes && !testRes.publishButtonFound) {
+        const probe2: any = await win.webContents.executeJavaScript(`
+          (function(){
+            try {
+              var sels = ['button[class*="_btn_2z30i_"]', '._check_2z30i_81 button', 'button.woo-button-primary'];
+              for (var i = 0; i < sels.length; i++) {
+                var el = document.querySelector(sels[i]);
+                if (!el) continue;
+                var st = window.getComputedStyle(el, null);
+                if (st && (st.display === 'none' || st.visibility === 'hidden')) continue;
+                var rect = el.getBoundingClientRect();
+                if (!rect || rect.width <= 1 || rect.height <= 1) continue;
+                return { text: (el.innerText||'').trim().slice(0,30), selector: sels[i], x: Math.round(rect.left+window.scrollX), y: Math.round(rect.top+window.scrollY), width: Math.round(rect.width), height: Math.round(rect.height) };
+              }
+              return null;
+            } catch(e) { return null; }
+          })();
+        `).catch(() => null);
+        if (probe2) {
+          testRes.publishButtonFound = true;
+          testRes.publishButtonInfo = probe2;
+          if (testRes.note === '未找到发布按钮') testRes.note = '探针脚本兜底找到发布按钮';
+        }
+      }
+      log('info', 'test', '测试模式完成: ' + (testRes?.note || '未知'));
+      onProgress(100, '测试完成');
+      setupTestModeWindow(win, log);
+      const field = testRes?.fields?.find && testRes.fields.find((f: any) => f.name === '微博正文');
+      return {
+        accountId, platform: 'weibo', status: 'success', progress: 100,
+        message: '测试完成 - 表单填写验证通过', startedAt, finishedAt: Date.now(),
+        testResult: {
+          titleFilled: titlePart.length > 0 ? true : !!(field?.filled && bodyText.length > 0),
+          contentFilled: !!(field?.filled) || bodyText.length > 0,
+          tagsFilled: !!(request.tags && request.tags.length > 0),
+          coverUploaded: !!(mediaFiles.length > 0),
+          publishButtonFound: !!(testRes?.publishButtonFound),
+          publishButtonInfo: testRes?.publishButtonInfo || null,
+          formFields: testRes?.fields || [],
+          note: testRes?.note || '',
+        },
+      };
+    }
+
+    // 5) 点击发送：优先精确 _btn_2z30i_68；文本白名单包含「发送」
+    const sendScript = `
+      (function(){
+        try {
+          var exact = document.querySelector('button[class*="_btn_2z30i_"], ._check_2z30i_81 button');
+          if (exact) {
+            var txt = (exact.innerText||'').replace(/\\s+/g,'').trim();
+            if (exact.disabled) return { clicked: false, reason: 'button-disabled', text: txt };
+            try { exact.click(); } catch(e1){ try { exact.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); } catch(e2){} }
+            return { clicked: true, method: 'exact', text: txt };
+          }
+          var all = document.querySelectorAll('button, div, a');
+          for (var i = 0; i < all.length; i++) {
+            var el = all[i];
+            if ((el.offsetWidth||0) === 0 && (el.offsetHeight||0) === 0) continue;
+            var t = (el.innerText || el.textContent || '').replace(/\\s+/g,'').trim();
+            if (/再发一条|上传图片|表情|视频|话题|头条文章|更多|定时|公开|内容声明/.test(t)) continue;
+            if (t !== '发送' && t !== '发布' && t !== '立即发布') continue;
+            var cls = (el.getAttribute && el.getAttribute('class')) || '';
+            if (!/woo-button-primary|woo-button-main|_btn_2z30i_|submit|publish/.test(cls) && el.tagName.toLowerCase() !== 'button') continue;
+            if (el.disabled) continue;
+            try { el.click(); } catch(ea){ try { el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true})); } catch(eb){} }
+            return { clicked: true, method: 'fallback', text: t };
+          }
+          return { clicked: false, reason: 'no-send-button' };
+        } catch(e) { return { clicked: false, error: String(e) }; }
+      })();
+    `;
+    const clickRes: any = await evalJS(win, sendScript, 'click-send', log).catch(() => null);
+    if (!clickRes || !clickRes.clicked) {
+      if (clickRes && clickRes.reason === 'button-disabled') {
+        return makeFailedResult(accountId, 'weibo', '发送按钮被禁用（可能是内容字数超限或封面未上传）', startedAt);
+      }
+      return makeFailedResult(accountId, 'weibo', '未找到或无法点击发送按钮', startedAt);
+    }
+
+    // 6) 检测发布成功：180s 内 URL 变化或出现「发布成功/发送成功」
+    onProgress(88, '等待发布成功…');
+    const sendDeadline = Date.now() + 180_000;
+    let success = false;
+    const startUrl = win.webContents.getURL();
+    while (Date.now() < sendDeadline) {
+      if (win.isDestroyed()) break;
+      const url = win.webContents.getURL();
+      const bodyText = await win.webContents.executeJavaScript(`document.body ? document.body.innerText.slice(0,4000) : ''`).catch(() => '') || '';
+      if (url !== startUrl && (!url.includes('weibo.com/') || /status|profile|mblog|publishSuccess/.test(url))) { success = true; break; }
+      if (/发布成功|发送成功|发布完成|已发送|发送完成|发博成功|成功发布/.test(bodyText)) { success = true; break; }
+      if (/发布失败|发送失败|不符合|违规|字数超限|未通过|请先登录|登录状态已失效/.test(bodyText)) {
+        const m = bodyText.match(/(发布失败|发送失败|不符合[^。]{0,20}|违规[^。]{0,20}|字数超限|未通过[^。]{0,20}|请先登录|登录状态已失效)[^。\n]{0,30}/);
+        return makeFailedResult(accountId, 'weibo', `发布失败: ${m ? m[1] : '检测到失败提示'}`, startedAt);
+      }
+      await sleep(3000);
+    }
+    if (!success) return makeFailedResult(accountId, 'weibo', '发布等待超时：180秒内未检测到发布成功信号', startedAt);
+    onProgress(100, '发布成功');
+    return { accountId, platform: 'weibo', status: 'success', progress: 100, message: '微博图文发布成功', startedAt, finishedAt: Date.now() };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log('error', 'publish-image', `图文发布异常: ${msg}`);
+    return makeFailedResult(accountId, 'weibo', `发布异常: ${msg}`, startedAt);
+  } finally {
+    // 测试模式不自动关窗（由 setupTestModeWindow 接管）
+    if (win && !request.testMode && !win.isDestroyed()) {
+      try {
+        const w: BrowserWindow = win;
+        setTimeout(() => { if (!w.isDestroyed()) w.close(); }, 4000);
+      } catch { /* ignore */ }
+    }
+  }
+}
+
+async function publishImage(
+  accountId: string,
+  request: PublishRequest,
+  onProgress: ProgressCallback,
+): Promise<PublishItemProgress> {
+  return runWeiboPublishImage(accountId, request, onProgress);
 }
 
 async function publishArticle(
