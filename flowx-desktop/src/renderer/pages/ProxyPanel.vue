@@ -2,7 +2,12 @@
   <div>
     <div class="panel">
       <div class="panel-header">
-        <h2 class="section-title">代理 IP 设置</h2>
+        <div class="panel-header-left">
+          <h2 class="section-title">代理 IP 设置</h2>
+          <p class="section-desc">
+            管理全局代理 IP 池，支持 HTTP/HTTPS/SOCKS5 协议，提供给浏览器环境与发布任务统一使用。
+          </p>
+        </div>
         <el-button type="primary" @click="openAddDialog">
           <el-icon><Plus /></el-icon>&nbsp;添加代理 IP
         </el-button>
@@ -323,10 +328,20 @@ function formatTime(ts: number): string {
 <style scoped>
 .panel-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   border-bottom: 1px solid var(--el-border-color-light);
   padding-bottom: 12px;
+}
+
+.panel-header-left :deep(.section-title) {
+  margin-bottom: 0;
+}
+
+.section-desc {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--muted);
 }
 .empty-hint {
   text-align: center;

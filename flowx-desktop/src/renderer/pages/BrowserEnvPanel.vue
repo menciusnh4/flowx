@@ -2,7 +2,12 @@
   <div>
     <div class="panel">
       <div class="panel-header">
-        <h2 class="section-title">环境配置</h2>
+        <div class="panel-header-left">
+          <h2 class="section-title">环境配置</h2>
+          <p class="section-desc">
+            管理浏览器指纹环境（User-Agent），可绑定代理 IP 并分配给各平台创作中心。
+          </p>
+        </div>
         <el-button type="primary" @click="openAddDialog">
           <el-icon><Plus /></el-icon>&nbsp;添加环境配置
         </el-button>
@@ -306,10 +311,20 @@ function formatTime(ts: number): string {
 <style scoped>
 .panel-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   border-bottom: 1px solid var(--el-border-color-light);
   padding-bottom: 12px;
+}
+
+.panel-header-left :deep(.section-title) {
+  margin-bottom: 0;
+}
+
+.section-desc {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--muted);
 }
 .empty-hint {
   text-align: center;
