@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
+import Sortable from 'sortablejs';
 import { useWorkspaceStore, ROUTE_META, SYSTEM_ROUTES, type WorkspaceTab } from '../stores/workspace';
 import { useGlobalSearch } from '../composables/useGlobalSearch';
 import { electronApi } from '../utils/electron';
@@ -257,107 +258,30 @@ function addRoute(route: string) {
   nextTick(updateOverflow);
 }
 
-// ========== 拖拽排序（Chrome 标签挤压风格：mousedown 实时重排 + CSS transition） ==========
-const dlDragging = ref(false);       // 是否正在拖拽
-const dlTabId = ref<string | null>(null);  // 被拖拽 tab 的 id
-const dlStartX = ref(0);             // mousedown 的 clientX
-const dlOffsetX = ref(0);            // 当前偏移量（用于视觉反馈）
-const dlLastMoveId = ref<string | null>(null); // 上一次移动到的目标 id，防抖
+// ========== 拖拽排序：SortableJS（Chrome 标签挤压同款） ==========
+let sortable: Sortable | null = null;
 
-/** mousedown 记录起始位置，在 document 上监听 move/up */
-function onDlMouseDown(e: MouseEvent, tabId: string) {
-  // 关闭按钮 / 右键不触发拖拽
-  const target = e.target as HTMLElement;
-  if (target.closest('.ws-close')) return;
-  if (e.button !== 0) return; // 仅左键
-
-  dlStartX.value = e.clientX;
-  dlTabId.value = tabId;
-  dlOffsetX.value = 0;
-
-  document.addEventListener('mousemove', onDlMouseMove);
-  document.addEventListener('mouseup', onDlMouseUp);
+function initSortable() {
+  const el = trackRef.value;
+  if (!el) return;
+  sortable = new Sortable(el, {
+    animation: 200,
+    easing: 'cubic-bezier(0.2, 0, 0, 1)',
+    ghostClass: 'ws-tab-ghost',
+    chosenClass: 'ws-tab-chosen',
+    filter: '.ws-close',     // 关闭按钮不触发拖拽
+    preventOnFilter: false,  // 允许关闭按钮的 click 事件正常触发
+    onEnd(evt) {
+      if (evt.oldIndex !== undefined && evt.newIndex !== undefined && evt.oldIndex !== evt.newIndex) {
+        store.moveTab(evt.oldIndex, evt.newIndex);
+      }
+    },
+  });
 }
 
-function onDlMouseMove(e: MouseEvent) {
-  if (!dlTabId.value) return;
-  const dx = e.clientX - dlStartX.value;
-  dlOffsetX.value = dx;
-
-  // 移动超过 5px 才开始拖拽（避免误触 click）
-  if (!dlDragging.value && Math.abs(dx) < 5) return;
-  dlDragging.value = true;
-
-  // 节流
-  const now = Date.now();
-  if ((onDlMouseMove as any)._lastMove && now - (onDlMouseMove as any)._lastMove < 80) return;
-  (onDlMouseMove as any)._lastMove = now;
-
-  const track = trackRef.value;
-  if (!track) return;
-
-  const curIdx = store.tabs.findIndex(t => t.id === dlTabId.value);
-  if (curIdx === -1) return;
-
-  // 按 tabs 数组顺序遍历（非 DOM 顺序：被拖标签的 translateX 会导致 DOM rect 偏移）
-  // 跳过被拖标签自身，只用其他标签的 rect 判断插入位置
-  let targetIdx = curIdx;
-  for (let i = 0; i < store.tabs.length; i++) {
-    if (i === curIdx) continue;
-    const tabId = store.tabs[i].id;
-    const el = track.querySelector<HTMLElement>(`.ws-tab[data-id="${CSS.escape(tabId)}"]`);
-    if (!el) continue;
-    const rect = el.getBoundingClientRect();
-    if (e.clientX < rect.left + rect.width / 2) { targetIdx = i; break; }
-    targetIdx = i + 1;
-  }
-  // 修正：targetIdx 是基于完整数组的插入位置，移除 curIdx 后需调整
-  if (targetIdx > curIdx) targetIdx--;
-
-  if (targetIdx !== curIdx && store.tabs[targetIdx]?.id !== dlLastMoveId.value) {
-    dlLastMoveId.value = store.tabs[targetIdx]?.id ?? null;
-
-    // FLIP First：记录所有 tab 当前位置（仅非拖拽标签）
-    const prevRects: Record<string, DOMRect> = {};
-    track.querySelectorAll<HTMLElement>('.ws-tab').forEach(el => {
-      const id = el.getAttribute('data-id');
-      if (id && id !== dlTabId.value) prevRects[id] = el.getBoundingClientRect();
-    });
-
-    store.moveTab(curIdx, targetIdx);
-
-    // FLIP Last + Invert + Play（仅非拖拽标签，被拖标签单独控制）
-    nextTick(() => {
-      const newTabEls = track.querySelectorAll<HTMLElement>('.ws-tab');
-      newTabEls.forEach(el => {
-        const id = el.getAttribute('data-id');
-        if (!id || !prevRects[id] || id === dlTabId.value) return;
-        const prev = prevRects[id];
-        const curr = el.getBoundingClientRect();
-        const dxx = prev.left - curr.left;
-        if (Math.abs(dxx) > 0.5) {
-          el.style.transition = 'none';
-          el.style.transform = `translateX(${dxx}px)`;
-          el.offsetHeight; // force reflow
-          el.style.transition = 'transform 0.18s var(--ease)';
-          el.style.transform = '';
-        }
-      });
-    });
-
-    dlStartX.value = e.clientX;
-    dlOffsetX.value = 0;
-  }
-}
-
-function onDlMouseUp() {
-  document.removeEventListener('mousemove', onDlMouseMove);
-  document.removeEventListener('mouseup', onDlMouseUp);
-  (onDlMouseMove as any)._lastMove = 0;
-  dlDragging.value = false;
-  dlTabId.value = null;
-  dlOffsetX.value = 0;
-  dlLastMoveId.value = null;
+function destroySortable() {
+  sortable?.destroy();
+  sortable = null;
 }
 
 // 横向滚动条上/下鼠标滚轮改为横向滚动，贴合浏览器 tab 习惯
@@ -375,8 +299,10 @@ onMounted(() => {
   window.addEventListener('resize', updateOverflow);
   window.addEventListener('resize', updateAnchor);
   window.addEventListener('click', onDocPointer);
+  nextTick(initSortable);
 });
 onBeforeUnmount(() => {
+  destroySortable();
   window.removeEventListener('resize', updateOverflow);
   window.removeEventListener('resize', updateAnchor);
   window.removeEventListener('click', onDocPointer);
@@ -425,11 +351,7 @@ watch(
           :data-id="t.id"
           :class="{
             active: t.id === activeId,
-            'dl-dragging': dlDragging && dlTabId === t.id,
-            'dl-active': dlDragging && dlTabId !== t.id,
           }"
-          :style="dlDragging && dlTabId === t.id ? { transform: `translateX(${dlOffsetX}px)` } : {}"
-          @mousedown="onDlMouseDown($event, t.id)"
           @click="activate(t.id)"
           @contextmenu.prevent="openTabCtxMenu($event, t.id)"
           :title="t.title"
@@ -604,8 +526,7 @@ watch(
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
-    transform 0.18s var(--ease);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
   position: relative;
   flex-shrink: 0;
 }
@@ -682,17 +603,15 @@ watch(
   color: var(--danger);
 }
 
-/* 拖拽排序：Chrome 标签挤压风格 */
-.ws-tab.dl-dragging {
-  z-index: 10;
+/* SortableJS 拖拽：Chrome 标签挤压同款 */
+.ws-tab-ghost {
+  opacity: 0.3;
+  background: var(--brand-grad-soft);
+}
+.ws-tab-chosen {
   opacity: 0.95;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
   background: var(--brand-grad-soft);
-  transition: none; /* 手动控制 transform，不与 TransitionGroup FLIP 冲突 */
-}
-/* 拖拽期间所有 tab 开 transition → 挤压动画 */
-.ws-tab.dl-active {
-  transition: transform 0.18s var(--ease);
 }
 .ws-add {
   width: 28px;
