@@ -283,12 +283,21 @@ function onDragOver(e: DragEvent, index: number) {
   dropBeforeIndex.value = before ? index : index + 1;
 }
 
-function onDrop(index: number) {
+function onDrop(e: DragEvent, _index: number) {
+  e.preventDefault();
   if (dragIndex.value === null || dropBeforeIndex.value === null) return;
   const from = dragIndex.value;
   let to = dropBeforeIndex.value;
   if (to > from) to--; // splice 移除 from 后数组缩短，插入位置需前移
   if (from !== to) store.moveTab(from, to);
+  dragIndex.value = null;
+  dropBeforeIndex.value = null;
+}
+
+/** 容器级兜底：松手在 tab 间隙时仍能完成 drop */
+function onTrackDrop(e: DragEvent) {
+  e.preventDefault();
+  // 清理拖拽状态（dropBeforeIndex 可能有上一帧的脏值，不做排序）
   dragIndex.value = null;
   dropBeforeIndex.value = null;
 }
@@ -349,7 +358,7 @@ watch(
         aria-label="向左滚动任务选项卡"
       >‹</button>
 
-      <div class="ws-tabs" ref="trackRef" @scroll="updateOverflow" @wheel.prevent="onWheel">
+      <div class="ws-tabs" ref="trackRef" @scroll="updateOverflow" @wheel.prevent="onWheel" @dragover.prevent @drop="onTrackDrop">
         <div
           v-for="(t, index) in tabs"
           :key="t.id"
@@ -364,7 +373,7 @@ watch(
           @dragstart="onDragStart($event, index)"
           @dragend="onDragEnd"
           @dragover="onDragOver($event, index)"
-          @drop="onDrop(index)"
+          @drop="onDrop($event, index)"
           @click="activate(t.id)"
           @contextmenu.prevent="openTabCtxMenu($event, t.id)"
           :title="t.title"
