@@ -242,6 +242,14 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.activeId = active ? active.id : valid[0].id;
     },
 
+    /** 拖拽重排：将 fromIndex 位置的 tab 移动到 toIndex */
+    moveTab(fromIndex: number, toIndex: number) {
+      if (fromIndex === toIndex) return;
+      if (fromIndex < 0 || toIndex < 0 || fromIndex >= this.tabs.length || toIndex >= this.tabs.length) return;
+      const moved = this.tabs.splice(fromIndex, 1)[0];
+      this.tabs.splice(toIndex, 0, moved);
+    },
+
     /** 顶栏弹层显示时调用（+1），通知 Browser.vue 隐藏 WebContentsView 原生层。
      *  原生控件层级永远高于 HTML DOM，z-index 无法解决，只能临时移出视口。 */
     pushTopbarOverlay(): void {

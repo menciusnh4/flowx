@@ -257,6 +257,42 @@ function addRoute(route: string) {
   nextTick(updateOverflow);
 }
 
+// ========== 拖拽排序 ==========
+const dragIndex = ref<number | null>(null);
+const dropBeforeIndex = ref<number | null>(null);
+
+function onDragStart(e: DragEvent, index: number) {
+  dragIndex.value = index;
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', ''); // Firefox 要求 setData
+  }
+}
+
+function onDragEnd() {
+  dragIndex.value = null;
+  dropBeforeIndex.value = null;
+}
+
+function onDragOver(e: DragEvent, index: number) {
+  e.preventDefault();
+  if (dragIndex.value === null) return;
+  const el = e.currentTarget as HTMLElement;
+  const rect = el.getBoundingClientRect();
+  const before = e.clientX < rect.left + rect.width / 2;
+  dropBeforeIndex.value = before ? index : index + 1;
+}
+
+function onDrop(index: number) {
+  if (dragIndex.value === null || dropBeforeIndex.value === null) return;
+  const from = dragIndex.value;
+  let to = dropBeforeIndex.value;
+  if (to > from) to--; // splice 移除 from 后数组缩短，插入位置需前移
+  if (from !== to) store.moveTab(from, to);
+  dragIndex.value = null;
+  dropBeforeIndex.value = null;
+}
+
 // 横向滚动条上/下鼠标滚轮改为横向滚动，贴合浏览器 tab 习惯
 function onWheel(e: WheelEvent) {
   const el = e.currentTarget as HTMLElement;
@@ -315,11 +351,20 @@ watch(
 
       <div class="ws-tabs" ref="trackRef" @scroll="updateOverflow" @wheel.prevent="onWheel">
         <div
-          v-for="t in tabs"
+          v-for="(t, index) in tabs"
           :key="t.id"
           class="ws-tab"
           :data-id="t.id"
-          :class="{ active: t.id === activeId }"
+          :class="{
+            active: t.id === activeId,
+            dragging: dragIndex === index,
+            'drag-over': dropBeforeIndex === index,
+          }"
+          draggable="true"
+          @dragstart="onDragStart($event, index)"
+          @dragend="onDragEnd"
+          @dragover="onDragOver($event, index)"
+          @drop="onDrop(index)"
           @click="activate(t.id)"
           @contextmenu.prevent="openTabCtxMenu($event, t.id)"
           :title="t.title"
@@ -563,6 +608,15 @@ watch(
 .ws-close:hover {
   background: rgba(244, 63, 94, 0.14);
   color: var(--danger);
+}
+
+/* 拖拽排序 */
+.ws-tab.dragging {
+  opacity: 0.35;
+  background: var(--brand-grad-soft);
+}
+.ws-tab.drag-over {
+  box-shadow: -2px 0 0 var(--brand-indigo) inset;
 }
 .ws-add {
   width: 28px;
