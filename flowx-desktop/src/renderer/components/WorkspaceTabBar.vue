@@ -295,18 +295,23 @@ function onDlMouseMove(e: MouseEvent) {
 
   const track = trackRef.value;
   if (!track) return;
-  const tabEls = track.querySelectorAll<HTMLElement>('.ws-tab');
-  if (tabEls.length === 0) return;
 
   const curIdx = store.tabs.findIndex(t => t.id === dlTabId.value);
   if (curIdx === -1) return;
 
+  // 按 tabs 数组顺序遍历（非 DOM 顺序：被拖标签的 translateX 会导致 DOM rect 偏移）
+  // 跳过被拖标签自身，只用其他标签的 rect 判断插入位置
   let targetIdx = curIdx;
-  for (let i = 0; i < tabEls.length; i++) {
-    const rect = tabEls[i].getBoundingClientRect();
+  for (let i = 0; i < store.tabs.length; i++) {
+    if (i === curIdx) continue;
+    const tabId = store.tabs[i].id;
+    const el = track.querySelector<HTMLElement>(`.ws-tab[data-id="${CSS.escape(tabId)}"]`);
+    if (!el) continue;
+    const rect = el.getBoundingClientRect();
     if (e.clientX < rect.left + rect.width / 2) { targetIdx = i; break; }
     targetIdx = i + 1;
   }
+  // 修正：targetIdx 是基于完整数组的插入位置，移除 curIdx 后需调整
   if (targetIdx > curIdx) targetIdx--;
 
   if (targetIdx !== curIdx && store.tabs[targetIdx]?.id !== dlLastMoveId.value) {
@@ -314,7 +319,7 @@ function onDlMouseMove(e: MouseEvent) {
 
     // FLIP First：记录所有 tab 当前位置（仅非拖拽标签）
     const prevRects: Record<string, DOMRect> = {};
-    tabEls.forEach(el => {
+    track.querySelectorAll<HTMLElement>('.ws-tab').forEach(el => {
       const id = el.getAttribute('data-id');
       if (id && id !== dlTabId.value) prevRects[id] = el.getBoundingClientRect();
     });
