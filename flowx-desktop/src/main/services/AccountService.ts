@@ -671,6 +671,43 @@ export class AccountService {
             );
           }
 
+          // 5.4 URL 守门：若当前窗口仍在登录相关页面（/login /newlogin /signin /passport /visitor /sso），
+          //     即使平台 detectLoggedIn 有误判，也拒绝保存（应对用户没扫码直接关窗口的场景）
+          try {
+            const urlNow = authWin.isDestroyed() ? '' : authWin.webContents.getURL();
+            const isStillLoginPage =
+              !!urlNow &&
+              (/\/(login|newlogin|signin|visitor|sso)\b/i.test(urlNow) ||
+                /passport\./i.test(urlNow) ||
+                /weibo\.com\/(visitor|newlogin)\b/i.test(urlNow));
+            if (isStillLoginPage) {
+              // 对「点击右上角保存按钮」的场景，URL 仍在登录页但其他信号正常时允许放行？
+              // 统一：所有平台，当前仍在登录页时，**只有平台 detectLoggedIn 返回的是强结构命中（非 SUB-cookie 弱命中）才允许继续**
+              // 简单做法：对微博，仅当「有昵称 或 有真实头像（非空壳） 或 粉丝数>0+关注数>0 双字段」才允许
+              // 其他宽松条件一律 throw，避免误保存访客态
+              const statsHitCount =
+                (typeof fansCount === 'number' ? 1 : 0) +
+                (typeof followCount === 'number' ? 1 : 0) +
+                (typeof likeCount === 'number' ? 1 : 0);
+              const haveRealNick = !!nickname.trim();
+              const haveGoodAvatar = !!avatar && avatar.length >= 40;
+              const statsSufficient =
+                ((typeof fansCount === 'number' && fansCount > 0 ? 1 : 0) +
+                 (typeof followCount === 'number' && followCount > 0 ? 1 : 0) +
+                 (typeof likeCount === 'number' && likeCount > 0 ? 1 : 0)) >= 2;
+              if (!(haveRealNick || (haveGoodAvatar && statsHitCount >= 2) || statsSufficient)) {
+                throw new Error(
+                  `当前页面仍停留在登录页（${urlNow.slice(0, 80)}），且未提取到可靠账号数据。\n` +
+                  `请完成扫码登录后进入创作者中心/个人主页，再点击"保存账号"按钮或关闭窗口。`,
+                );
+              }
+            }
+          } catch (_urlCheckErr) {
+            // 异常本身已经是 Error 的话就直接抛；否则包装成 Error
+            if (_urlCheckErr instanceof Error) throw _urlCheckErr;
+            throw new Error(String(_urlCheckErr));
+          }
+
           const finalNick =
             nickname.trim() ||
             (realPlatformAccountId

@@ -213,19 +213,25 @@ async function detectLoggedIn(win: BrowserWindow): Promise<LoginCheckResult> {
 
     // 1. Cookie 扫描（仅记录，不再单独作为登录判定依据——访客态 SUB 残留会误判）
     const cookies = await win.webContents.session.cookies.get({});
-    const subCookie = cookies.find((c) => c.name === 'SUB' && c.value);
-    const subP = cookies.find((c) => c.name === 'SUBP' && c.value);
-    const wbSess = cookies.find((c) => c.name === 'WEIBOCN_WM' || c.name === '_2AAM');
+    // SUB 有效性校验：访客态默认值/太短/空 不算有效 SUB
+    const subCookieRaw = cookies.find((c) => c.name === 'SUB');
+    const subVal = (subCookieRaw?.value || '').trim();
+    const subCookie = subVal && subVal.length >= 20 && !/^_?v(isitor)?[_\-]*$/i.test(subVal) ? subCookieRaw : undefined;
+    const subP = cookies.find((c) => c.name === 'SUBP' && c.value && c.value.length >= 12);
+    const wbSess = cookies.find((c) => (c.name === 'WEIBOCN_WM' || c.name === '_2AAM') && c.value && c.value.length >= 10);
 
     const matchedKeywords: string[] = [];
     if (subCookie) matchedKeywords.push('SUB-cookie');
     if (subP) matchedKeywords.push('SUBP-cookie');
     if (wbSess) matchedKeywords.push('WEIBO-session-cookie');
 
-    // 2. 绝对未登录：登录域 / 登录路径
+    // 2. 绝对未登录：登录域 / 登录路径 —— 包含 /newlogin（微博新版登录页）和 visitor 访客域也必须算登录页
     const isLoginPage = currentUrl.includes('/login') ||
+                        currentUrl.includes('/newlogin') ||
                         currentUrl.includes('/signin') ||
                         currentUrl.includes('passport.weibo.com') ||
+                        currentUrl.includes('/visitor/') ||
+                        currentUrl.includes('weibo.com/visitor') ||
                         currentUrl.includes('sso.weibo.com');
     if (isLoginPage) matchedKeywords.push('is-login-page');
 
@@ -240,21 +246,26 @@ async function detectLoggedIn(win: BrowserWindow): Promise<LoginCheckResult> {
     const creatorAvatar: any = struct.creatorAvatar || {};
     const visitorSign = !!struct.visitorSign;
     const hasLogoutButton = !!struct.hasLogoutButton;
+    // URL 归属判断（用于给结构级结果加上下文字段，避免 newlogin 页面残留 woo-avatar DOM 被命中 creatorAvatarOK）
+    const inMe = currentUrl.includes('me.weibo.com');
+    const inHomepageProfile = /weibo\.com\/(u|p)\/\d/i.test(currentUrl) && !isLoginPage;
 
     if (personalTab && personalTab.ok) {
       matchedKeywords.push('struct-personalTabOK');
       if (personalTab.title) matchedKeywords.push('pt-title:' + personalTab.title.slice(0, 12));
     }
-    if (creatorAvatar && creatorAvatar.ok) matchedKeywords.push('struct-creatorAvatarOK');
+    // 结构级 creatorAvatar 必须带 URL 上下文校验：只有 me.weibo.com 或个人主页 weibo.com/u/p/N 才会渲染真实的创作中心头像
+    // 登录页 /newlogin 里即使有 woo-avatar 残留元素（空壳）也不算命中
+    const creatorAvatarOK = !!(creatorAvatar && creatorAvatar.ok) && (inMe || inHomepageProfile);
+    if (creatorAvatarOK) matchedKeywords.push('struct-creatorAvatarOK');
     if (visitorSign) matchedKeywords.push('struct-visitorSign');
     if (hasLogoutButton) matchedKeywords.push('struct-logoutBtn');
 
     // 4. inBackend：在 me.weibo.com / weibo.com/u/xxx / weibo.com/p/xxx / weibo.com/upload/* 且不在登录页
     //    说明：weibo.com/upload/channel 是视频发布页，能进入该页就说明已登录（访客态会重定向到登录页）
-    const inUploadPage = currentUrl.includes('weibo.com/upload/');
-    const inBackend = (currentUrl.includes('me.weibo.com') ||
-                       currentUrl.includes('weibo.com/u/') ||
-                       currentUrl.includes('weibo.com/p/') ||
+    const inUploadPage = currentUrl.includes('weibo.com/upload/') && !isLoginPage;
+    const inBackend = ((inMe && !isLoginPage) ||
+                       inHomepageProfile ||
                        inUploadPage) &&
                       !isLoginPage &&
                       !visitorSign;
@@ -263,7 +274,7 @@ async function detectLoggedIn(win: BrowserWindow): Promise<LoginCheckResult> {
 
     // 5. 老版 dom 辅助（仅当结构没有判断时兜底，避免漏网之鱼）
     let domLoggedIn = false;
-    if (!personalTab.ok && !creatorAvatar.ok && !visitorSign && !isLoginPage) {
+    if (!personalTab.ok && !creatorAvatarOK && !visitorSign && !isLoginPage) {
       try {
         domLoggedIn = await win.webContents.executeJavaScript(`
           (function() {
@@ -284,16 +295,17 @@ async function detectLoggedIn(win: BrowserWindow): Promise<LoginCheckResult> {
     }
 
     // ========== 核心登录判定（结构驱动，SUB 仅为辅助） ==========
-    //   - 结构 A 或 结构 B 命中 → 一定已登录（这两个结构只有登录后才会渲染）
-    //   - 否则，需要：SUB cookie 存在 AND 不在登录页 AND 不是访客态 AND (inBackend OR domLoggedIn OR hasLogoutButton)
-    //   - 访客态(struct-visitorSign=true) 直接判 false，哪怕 SUB 残留
-    const strongStructLoggedIn = !!(personalTab && personalTab.ok) || !!(creatorAvatar && creatorAvatar.ok);
+    //   - 结构 A 或 结构 B 命中（带 URL 上下文校验，避免 newlogin 残留 DOM 误判）→ 一定已登录
+    //   - 否则，需要：有效 SUB cookie 存在 AND 不在登录页 AND 不是访客态 AND (inBackend OR domLoggedIn OR hasLogoutButton)
+    //   - 访客态(struct-visitorSign=true) / 登录页 URL（含/newlogin、/visitor/、passport.weibo.com） 直接判 false，哪怕 SUB 残留
+    const strongStructLoggedIn = !!(personalTab && personalTab.ok) || creatorAvatarOK;
     const softLoggedIn = !!subCookie &&
                          !isLoginPage &&
                          !visitorSign &&
                          (inBackend || domLoggedIn || hasLogoutButton);
-
-    const loggedIn = strongStructLoggedIn || softLoggedIn;
+    // 登录页 URL 直接否决：只要当前页面还是登录页（/newlogin /passport /visitor /sso），不管 cookie 还是结构，一律不算已登录
+    //   应对场景：用户还没扫码，直接关窗口 → 防止误保存访客残留 + 跳转主页产生的错误昵称/粉丝数
+    const loggedIn = !isLoginPage && !visitorSign && (strongStructLoggedIn || softLoggedIn);
 
     return {
       loggedIn,

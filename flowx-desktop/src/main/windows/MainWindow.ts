@@ -199,6 +199,8 @@ export async function createMainWindow(): Promise<BrowserWindow> {
       // 用户已选择"最小化到托盘"并记住选择
       event.preventDefault();
       win.hide();
+      // macOS：进入托盘后台运行时隐藏 Dock 图标
+      TrayService.setDockVisible(false);
       return;
     }
 
@@ -218,6 +220,8 @@ export async function createMainWindow(): Promise<BrowserWindow> {
       if (action === 'tray') {
         // 最小化到托盘
         win.hide();
+        // macOS：进入托盘后台运行时隐藏 Dock 图标
+        TrayService.setDockVisible(false);
       } else {
         // 完全退出：标记已处理并再次触发关闭
         (win as any).__closeHandled__ = true;
@@ -227,6 +231,8 @@ export async function createMainWindow(): Promise<BrowserWindow> {
       // 出错时默认最小化到托盘
       (win as any).__closePrompting__ = false;
       win.hide();
+      // macOS：兜底也隐藏 Dock
+      TrayService.setDockVisible(false);
     }
   });
 

@@ -21,8 +21,13 @@ files:
   - "!**/{appveyor.yml,.travis.yml,circle.yml}"
   - "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
 extraResources:
+  # 托盘资源：TrayService 在运行时会从 process.resourcesPath 读取以下图标
   - from: build/icon.png
     to: icon.png
+  - from: build/icon.ico
+    to: icon.ico
+  - from: build/icon.icns
+    to: icon.icns
   - from: src/main/resources/compliance
     to: compliance
 win:
@@ -43,6 +48,8 @@ nsis:
   uninstallerIcon: build/icon.ico
   deleteAppDataOnUninstall: true
 mac:
+  # electron-builder 会自动把高分辨率 PNG 转换为 icns，
+  # 放在 .app/Contents/Resources/appIcon.icns（TrayService 在 macOS 打包下优先读取该路径）
   icon: build/icon.png
   target:
     - target: dmg
@@ -50,6 +57,9 @@ mac:
         - x64
         - arm64
   category: public.app-category.productivity
+  # macOS：硬链接加固 + 扩展安全
+  hardenedRuntime: false
+  gatekeeperAssess: false
 linux:
   icon: build/icon.png
   target: AppImage
