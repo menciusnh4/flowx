@@ -248,6 +248,16 @@ function activate(id: string) {
   // 滚动交给 scrollNonce watch 统一处理（store.activate 会自增 scrollNonce）
   store.activate(id);
 }
+
+/** 按下标签瞬间即切换其页面内容（即便随后进入拖拽也立刻切）。
+ *  放在 mousedown 而非 click：拖拽时 click 会被 SortableJS 抑制不触发，
+ *  只有 mousedown 能在「按住即拖」的瞬间切内容；且此时拖拽尚未越过阈值，
+ *  不会与 SortableJS 的拖拽 DOM 操作冲突。关闭按钮（.ws-close）除外。 */
+function onTabMouseDown(e: MouseEvent, id: string) {
+  const target = e.target as HTMLElement;
+  if (target.closest('.ws-close')) return;
+  activate(id);
+}
 async function close(id: string, e: MouseEvent) {
   e.stopPropagation();
   await requestClose(id);
@@ -267,6 +277,7 @@ function initSortable() {
   sortable = new Sortable(el, {
     animation: 200,
     easing: 'cubic-bezier(0.2, 0, 0, 1)',
+    draggable: '.ws-tab',    // 只对标签项生效（直接子元素）
     ghostClass: 'ws-tab-ghost',
     chosenClass: 'ws-tab-chosen',
     filter: '.ws-close',     // 关闭按钮不触发拖拽
@@ -343,7 +354,6 @@ watch(
       >‹</button>
 
       <div ref="trackRef" class="ws-tracks" @scroll="updateOverflow" @wheel.prevent="onWheel">
-        <div class="ws-tabs">
         <div
           v-for="(t, index) in tabs"
           :key="t.id"
@@ -353,6 +363,7 @@ watch(
             active: t.id === activeId,
           }"
           @click="activate(t.id)"
+          @mousedown="onTabMouseDown($event, t.id)"
           @contextmenu.prevent="openTabCtxMenu($event, t.id)"
           :title="t.title"
         >
@@ -368,7 +379,6 @@ watch(
             @click="close(t.id, $event)"
             title="关闭"
           >×</button>
-        </div>
         </div>
       </div>
 
@@ -471,6 +481,8 @@ watch(
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
+  align-items: center;
+  gap: 2px;
   height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
@@ -479,13 +491,6 @@ watch(
 }
 .ws-tracks::-webkit-scrollbar {
   display: none;
-}
-
-.ws-tabs {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 100%;
 }
 
 /* 溢出翻页按钮：仅溢出时出现，到头自动隐藏 */
