@@ -319,7 +319,9 @@ function onDlMouseMove(e: MouseEvent) {
   if (targetIdx !== curIdx && store.tabs[targetIdx]?.id !== dlLastMoveId.value) {
     dlLastMoveId.value = store.tabs[targetIdx]?.id ?? null;
     store.moveTab(curIdx, targetIdx);
-    dlTabId.value = store.tabs[targetIdx]?.id ?? dlTabId.value; // move 后 id 不变但索引变了，重新同步
+    // 重置偏移起点：标签在新数组位置继续跟随鼠标，消除跳跃感
+    dlStartX.value = e.clientX;
+    dlOffsetX.value = 0;
   }
 }
 
@@ -401,6 +403,7 @@ watch(
             'dl-dragging': dlDragging && dlTabId === t.id,
             'dl-active': dlDragging && dlTabId !== t.id,
           }"
+          :style="dlDragging && dlTabId === t.id ? { transform: `translateX(${dlOffsetX}px)` } : {}"
           @mousedown="onDlMouseDown($event, t.id)"
           @click="activate(t.id)"
           @contextmenu.prevent="openTabCtxMenu($event, t.id)"
@@ -666,9 +669,10 @@ watch(
 /* 拖拽排序：Chrome 标签挤压风格 */
 .ws-tab.dl-dragging {
   z-index: 10;
-  opacity: 0.9;
+  opacity: 0.95;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
   background: var(--brand-grad-soft);
+  transition: none; /* 手动控制 transform，不与 TransitionGroup FLIP 冲突 */
 }
 /* 拖拽期间所有 tab 开 transition → 挤压动画 */
 .ws-tab.dl-active {
