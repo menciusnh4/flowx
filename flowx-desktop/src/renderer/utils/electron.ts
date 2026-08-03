@@ -553,6 +553,15 @@ export const electronApi = {
     },
   },
 
+  // 托盘导航：主进程推送 workspace:navigate → 渲染层调 go() 创建/激活 tab
+  trayNavigate: {
+    onNavigate(callback: (data: { route: string }) => void): () => void {
+      const electron = (window as any).electron;
+      if (!electron?.trayNavigate?.onNavigate) return () => {};
+      return electron.trayNavigate.onNavigate((data: any) => callback(data));
+    },
+  },
+
   // 任务选项卡布局持久化（M4：存盘 / 恢复）
   // 注意：preload 暴露的命名空间是 window.electron.workspaceState.{save,load}
   //       invokeElectron 的第二个参数 pathA 必须与之匹配（namespace:method）

@@ -169,7 +169,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { electronApi } from './utils/electron';
@@ -349,6 +349,16 @@ onMounted(async () => {
   } catch {
     version.value = '0.1.0';
   }
+
+  // 监听托盘导航：主进程推送 workspace:navigate → 调 go() 创建/激活 tab
+  unsubTrayNav = electronApi.trayNavigate.onNavigate(({ route }) => {
+    go(route);
+  });
+});
+
+let unsubTrayNav: (() => void) | undefined;
+onBeforeUnmount(() => {
+  unsubTrayNav?.();
 });
 
 // 不再自动保存/恢复任务选项卡状态（用户要求完全去掉自动恢复）

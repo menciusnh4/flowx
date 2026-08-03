@@ -463,6 +463,15 @@ contextBridge.exposeInMainWorld('electron', {
     },
   },
 
+  // ========== 托盘导航（主进程推送 workspace:navigate → 渲染层调 go() 创建/激活 tab）==========
+  trayNavigate: {
+    onNavigate: (callback: (data: { route: string }) => void) => {
+      const listener = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('workspace:navigate', listener);
+      return () => { ipcRenderer.removeListener('workspace:navigate', listener); };
+    },
+  },
+
   // ========== 更新 ==========
   update: {
     check: (): Promise<UpdateInfo> => invoke('update:check'),

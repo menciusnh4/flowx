@@ -134,15 +134,16 @@ function onPagerChange(page: number, size: number) {
   <div>
     <div class="panel">
       <div class="panel-header">
-        <h2 class="section-title">提取规则管理</h2>
-        <el-button type="primary" @click="openCreate">
-          <el-icon><Plus /></el-icon>&nbsp;添加规则
-        </el-button>
+        <div class="panel-header-top">
+          <h2 class="section-title">提取规则管理</h2>
+          <el-button type="primary" @click="openCreate">
+            <el-icon><Plus /></el-icon>&nbsp;添加规则
+          </el-button>
+        </div>
+        <p class="section-desc">
+          自定义站点提取规则，优先级高于内置规则。可通过 CSS 选择器精确控制提取内容。
+        </p>
       </div>
-
-      <p class="section-desc">
-        自定义站点提取规则，优先级高于内置规则。可通过 CSS 选择器精确控制提取内容。
-      </p>
 
       <div v-loading="loading" class="data-list" style="--cols: minmax(180px,1.8fr) 120px minmax(180px,1.8fr) 120px 100px 170px 220px; margin-top: 16px">
         <header class="data-list__head">
@@ -217,6 +218,24 @@ function onPagerChange(page: number, size: number) {
 </template>
 
 <style scoped>
+.panel-header {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--el-border-color-light);
+  padding-bottom: 12px;
+}
+.panel-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.section-desc {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .rule-name {
   display: flex;
   align-items: center;

@@ -153,13 +153,9 @@
                 </button>
               </template>
 
-              <el-popconfirm title="确定删除此历史记录？" @confirm="deleteTask(row)">
-                <template #reference>
-                  <button class="icon-btn danger" type="button" title="删除">
-                    <span>🗑</span>
-                  </button>
-                </template>
-              </el-popconfirm>
+              <button class="icon-btn danger" type="button" title="删除" @click="confirmDeleteTask(row)">
+                <span>🗑</span>
+              </button>
             </div>
           </div>
         </article>
@@ -869,6 +865,13 @@ async function retryAsPublish(task: any) {
   } finally {
     retryingId.value = null;
   }
+}
+
+async function confirmDeleteTask(row: any) {
+  try {
+    await ElMessageBox.confirm('确定删除此历史记录吗？', '删除历史记录', { type: 'warning' });
+  } catch { return; }
+  await deleteTask(row);
 }
 
 async function deleteTask(task: any) {

@@ -2,7 +2,6 @@ import { Tray, Menu, app, nativeImage, BrowserWindow, dialog } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { getMainWindow, createMainWindow } from '../windows/MainWindow';
-import { createQuickPublishWindow } from '../windows/QuickPublishWindow';
 import { PublishEngine } from './PublishEngine';
 import { AccountService } from './AccountService';
 import { listPlatforms } from '../services/PlatformRegistry';
@@ -175,7 +174,20 @@ export class TrayServiceClass {
       },
       {
         label: '快速发布',
-        click: () => this.openQuickPublish(),
+        submenu: [
+          {
+            label: '发布视频',
+            click: () => this.navigateTo('/publish/video'),
+          },
+          {
+            label: '发布图文',
+            click: () => this.navigateTo('/publish/image'),
+          },
+          {
+            label: '发布文章',
+            click: () => this.navigateTo('/publish/article'),
+          },
+        ],
       },
       {
         label: '授权新账号',
@@ -262,27 +274,16 @@ export class TrayServiceClass {
     this.doNavigate(win, route);
   }
 
-  /** 执行实际的路由跳转（通过 hash 路由） */
+  /** 执行实际的路由跳转：通过 IPC 推送 workspace:navigate 到渲染进程，
+   *  由 App.vue 监听后调用 store.openSystemTab() 创建/激活 tab。
+   *  不能纯改 location.hash——当前分支用 WorkspaceView 自定义 tab 系统，
+   *  必须通过 store 才能正确建 tab 并显示页面。 */
   private doNavigate(win: BrowserWindow, route: string): void {
     try {
-      // 使用 location.hash 跳转，适配 Vue Router hash 模式
-      win.webContents.executeJavaScript(`
-        (function() {
-          if (window.location.hash !== '#' + '${route}') {
-            window.location.hash = '${route}';
-          }
-        })();
-      `).catch(() => {});
+      win.webContents.send('workspace:navigate', { route });
     } catch (e) {
-      logger.warn(`[TrayService] 导航执行失败: ${route}`, e);
+      logger.warn(`[TrayService] 导航推送失败: ${route}`, e);
     }
-  }
-
-  /** 快速发布：打开独立的一键发布窗口 */
-  openQuickPublish(): void {
-    createQuickPublishWindow().catch((e) => {
-      logger.error('[TrayService] 打开快速发布窗口失败:', e);
-    });
   }
 
   /** 账号分析：打开账号分析页 */
