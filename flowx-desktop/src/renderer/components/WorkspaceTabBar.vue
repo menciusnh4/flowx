@@ -257,49 +257,80 @@ function addRoute(route: string) {
   nextTick(updateOverflow);
 }
 
-// ========== 拖拽排序 ==========
-const dragIndex = ref<number | null>(null);
-const dropBeforeIndex = ref<number | null>(null);
+// ========== 拖拽排序（Chrome 标签挤压风格：mousedown 实时重排 + CSS transition） ==========
+const dlDragging = ref(false);       // 是否正在拖拽
+const dlTabId = ref<string | null>(null);  // 被拖拽 tab 的 id
+const dlStartX = ref(0);             // mousedown 的 clientX
+const dlOffsetX = ref(0);            // 当前偏移量（用于视觉反馈）
+const dlLastMoveId = ref<string | null>(null); // 上一次移动到的目标 id，防抖
 
-function onDragStart(e: DragEvent, index: number) {
-  dragIndex.value = index;
-  if (e.dataTransfer) {
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', ''); // Firefox 要求 setData
+/** mousedown 记录起始位置，在 document 上监听 move/up */
+function onDlMouseDown(e: MouseEvent, tabId: string) {
+  // 关闭按钮 / 右键不触发拖拽
+  const target = e.target as HTMLElement;
+  if (target.closest('.ws-close')) return;
+  if (e.button !== 0) return; // 仅左键
+
+  dlStartX.value = e.clientX;
+  dlTabId.value = tabId;
+  dlOffsetX.value = 0;
+
+  document.addEventListener('mousemove', onDlMouseMove);
+  document.addEventListener('mouseup', onDlMouseUp);
+}
+
+function onDlMouseMove(e: MouseEvent) {
+  if (!dlTabId.value) return;
+  const dx = e.clientX - dlStartX.value;
+  dlOffsetX.value = dx;
+
+  // 移动超过 5px 才开始拖拽（避免误触 click）
+  if (!dlDragging.value && Math.abs(dx) < 5) return;
+  dlDragging.value = true;
+
+  // 节流：100ms 内不重复 moveTab
+  const now = Date.now();
+  if ((onDlMouseMove as any)._lastMove && now - (onDlMouseMove as any)._lastMove < 80) return;
+  (onDlMouseMove as any)._lastMove = now;
+
+  // 计算鼠标当前位置对应的 tabs 数组索引
+  const track = trackRef.value;
+  if (!track) return;
+  const tabEls = track.querySelectorAll<HTMLElement>('.ws-tab');
+  if (tabEls.length === 0) return;
+
+  // 找到当前拖拽 tab 在 tabs 数组中的索引
+  const curIdx = store.tabs.findIndex(t => t.id === dlTabId.value);
+  if (curIdx === -1) return;
+
+  let targetIdx = curIdx;
+  // 从左到右扫描，鼠标在哪个 tab 的中点左侧就插到它前面
+  for (let i = 0; i < tabEls.length; i++) {
+    const rect = tabEls[i].getBoundingClientRect();
+    if (e.clientX < rect.left + rect.width / 2) {
+      targetIdx = i;
+      break;
+    }
+    targetIdx = i + 1;
+  }
+  // 修正：移除自身后位置前移
+  if (targetIdx > curIdx) targetIdx--;
+
+  if (targetIdx !== curIdx && store.tabs[targetIdx]?.id !== dlLastMoveId.value) {
+    dlLastMoveId.value = store.tabs[targetIdx]?.id ?? null;
+    store.moveTab(curIdx, targetIdx);
+    dlTabId.value = store.tabs[targetIdx]?.id ?? dlTabId.value; // move 后 id 不变但索引变了，重新同步
   }
 }
 
-function onDragEnd() {
-  dragIndex.value = null;
-  dropBeforeIndex.value = null;
-}
-
-function onDragOver(e: DragEvent, index: number) {
-  e.preventDefault();
-  if (dragIndex.value === null) return;
-  const el = e.currentTarget as HTMLElement;
-  const rect = el.getBoundingClientRect();
-  const before = e.clientX < rect.left + rect.width / 2;
-  dropBeforeIndex.value = before ? index : index + 1;
-}
-
-function onDrop(e: DragEvent, _index: number) {
-  e.preventDefault();
-  if (dragIndex.value === null || dropBeforeIndex.value === null) return;
-  const from = dragIndex.value;
-  let to = dropBeforeIndex.value;
-  if (to > from) to--; // splice 移除 from 后数组缩短，插入位置需前移
-  if (from !== to) store.moveTab(from, to);
-  dragIndex.value = null;
-  dropBeforeIndex.value = null;
-}
-
-/** 容器级兜底：松手在 tab 间隙时仍能完成 drop */
-function onTrackDrop(e: DragEvent) {
-  e.preventDefault();
-  // 清理拖拽状态（dropBeforeIndex 可能有上一帧的脏值，不做排序）
-  dragIndex.value = null;
-  dropBeforeIndex.value = null;
+function onDlMouseUp() {
+  document.removeEventListener('mousemove', onDlMouseMove);
+  document.removeEventListener('mouseup', onDlMouseUp);
+  (onDlMouseMove as any)._lastMove = 0;
+  dlDragging.value = false;
+  dlTabId.value = null;
+  dlOffsetX.value = 0;
+  dlLastMoveId.value = null;
 }
 
 // 横向滚动条上/下鼠标滚轮改为横向滚动，贴合浏览器 tab 习惯
@@ -358,7 +389,8 @@ watch(
         aria-label="向左滚动任务选项卡"
       >‹</button>
 
-      <div class="ws-tabs" ref="trackRef" @scroll="updateOverflow" @wheel.prevent="onWheel" @dragover.prevent @drop="onTrackDrop">
+      <div ref="trackRef" class="ws-tracks" @scroll="updateOverflow" @wheel.prevent="onWheel">
+        <TransitionGroup name="ws-mv" tag="div" class="ws-tabs">
         <div
           v-for="(t, index) in tabs"
           :key="t.id"
@@ -366,14 +398,10 @@ watch(
           :data-id="t.id"
           :class="{
             active: t.id === activeId,
-            dragging: dragIndex === index,
-            'drag-over': dropBeforeIndex === index,
+            'dl-dragging': dlDragging && dlTabId === t.id,
+            'dl-active': dlDragging && dlTabId !== t.id,
           }"
-          draggable="true"
-          @dragstart="onDragStart($event, index)"
-          @dragend="onDragEnd"
-          @dragover="onDragOver($event, index)"
-          @drop="onDrop($event, index)"
+          @mousedown="onDlMouseDown($event, t.id)"
           @click="activate(t.id)"
           @contextmenu.prevent="openTabCtxMenu($event, t.id)"
           :title="t.title"
@@ -391,6 +419,7 @@ watch(
             title="关闭"
           >×</button>
         </div>
+        </TransitionGroup>
       </div>
 
       <button
@@ -488,19 +517,33 @@ watch(
   height: 100%;
 }
 
-.ws-tabs {
+.ws-tracks {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 2px;
   height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
   scroll-behavior: smooth;
 }
-.ws-tabs::-webkit-scrollbar {
+.ws-tracks::-webkit-scrollbar {
+  display: none;
+}
+
+.ws-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 100%;
+  flex-shrink: 0;
+}
+
+/* TransitionGroup 挤压动画 — Chrome 标签拖拽同款 FLIP */
+.ws-mv-move {
+  transition: transform 0.2s var(--ease);
+}
+.ws-mv-leave-active {
   display: none;
 }
 
@@ -542,7 +585,8 @@ watch(
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    transform 0.18s var(--ease);
   position: relative;
   flex-shrink: 0;
 }
@@ -619,13 +663,16 @@ watch(
   color: var(--danger);
 }
 
-/* 拖拽排序 */
-.ws-tab.dragging {
-  opacity: 0.35;
+/* 拖拽排序：Chrome 标签挤压风格 */
+.ws-tab.dl-dragging {
+  z-index: 10;
+  opacity: 0.9;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
   background: var(--brand-grad-soft);
 }
-.ws-tab.drag-over {
-  box-shadow: -2px 0 0 var(--brand-indigo) inset;
+/* 拖拽期间所有 tab 开 transition → 挤压动画 */
+.ws-tab.dl-active {
+  transition: transform 0.18s var(--ease);
 }
 .ws-add {
   width: 28px;
