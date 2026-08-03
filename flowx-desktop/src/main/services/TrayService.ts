@@ -43,10 +43,20 @@ export class TrayServiceClass {
         return;
       }
 
-      // Windows 推荐使用 16x16 的小尺寸图标作为托盘图标
-      const trayIcon = process.platform === 'win32'
-        ? icon.resize({ width: 16, height: 16, quality: 'good' })
-        : icon;
+      // 按平台调整托盘图标尺寸：
+      //   Windows  16x16（系统托盘小图标）
+      //   macOS    18x18 pt（菜单栏推荐尺寸，@2x 时会是 36x36 px）
+      //   Linux    22x22（多数发行版托盘常规大小）
+      let trayIcon: Electron.NativeImage;
+      if (process.platform === 'win32') {
+        trayIcon = icon.resize({ width: 16, height: 16, quality: 'good' });
+      } else if (process.platform === 'darwin') {
+        trayIcon = icon.resize({ width: 18, height: 18, quality: 'good' });
+        // macOS：默认不强制模板渲染，保留彩色外观；若后续希望跟随菜单主题自动变模板
+        // 可提供专门的单色模板图标再调用 trayIcon.setTemplateImage(true)
+      } else {
+        trayIcon = icon.resize({ width: 22, height: 22, quality: 'good' });
+      }
 
       this.tray = new Tray(trayIcon);
       this.tray.setToolTip('FlowX - 多平台内容发布');
@@ -218,8 +228,34 @@ export class TrayServiceClass {
     this.tray.setToolTip(`FlowX - ${statusText}`);
   }
 
+  /** macOS Dock 图标显示控制（非 macOS 平台为空操作） */
+  setDockVisible(visible: boolean): void {
+    if (process.platform !== 'darwin') return;
+    try {
+      // app.dock 在 macOS 下可用；visible=true 显示，false 隐藏
+      if (visible) {
+        if (!app.dock.isVisible()) {
+          app.dock.show().catch((e: unknown) => {
+            const msg = e instanceof Error ? e.message : String(e);
+            logger.debug('[TrayService] Dock.show 已跳过或失败:', msg);
+          });
+        }
+      } else {
+        if (app.dock.isVisible()) {
+          app.dock.hide();
+        }
+      }
+    } catch (e) {
+      // 极少数情况 Electron 版本下 dock API 不可用，静默忽略
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.debug('[TrayService] setDockVisible 未生效:', msg);
+    }
+  }
+
   /** 显示/激活主窗口 */
   showMainWindow(): void {
+    // macOS：显示主窗口时同步恢复 Dock 图标（避免最小化到托盘后 Dock 隐藏）
+    this.setDockVisible(true);
     const win = getMainWindow();
     if (win && !win.isDestroyed()) {
       if (win.isMinimized()) {
@@ -241,6 +277,8 @@ export class TrayServiceClass {
     const win = getMainWindow();
     if (win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) {
       win.hide();
+      // macOS：用户主动切换为隐藏时，也隐藏 Dock
+      this.setDockVisible(false);
     } else {
       this.showMainWindow();
     }
@@ -388,6 +426,8 @@ export class TrayServiceClass {
   /** 完全退出应用 */
   quitApp(): void {
     logger.info('[TrayService] 从托盘菜单退出应用');
+    // macOS：退出前恢复 Dock 图标，避免退出后应用图标在 Dock 里保持隐藏态
+    this.setDockVisible(true);
     // 先销毁托盘，避免退出时托盘图标残留
     this.destroy();
     // 确保在所有平台上都退出
@@ -400,15 +440,21 @@ export class TrayServiceClass {
 
     if (app.isPackaged) {
       // 打包环境
+      // macOS 优先：electron-builder 生成的 Mac App 主程序 icns（一定存在）
+      if (process.platform === 'darwin') {
+        candidates.push(path.join(app.getAppPath(), 'Contents', 'Resources', 'appIcon.icns'));
+      }
+      // extraResources 拷入的三份图标（跨平台共用
       candidates.push(path.join(process.resourcesPath, 'icon.png'));
       candidates.push(path.join(process.resourcesPath, 'icon.ico'));
-      // Mac 的 .icns
       candidates.push(path.join(process.resourcesPath, 'icon.icns'));
     } else {
       // 开发环境
       const buildDir = path.join(__dirname, '../../build');
       candidates.push(path.join(buildDir, 'icon.png'));
       candidates.push(path.join(buildDir, 'icon.ico'));
+      // 本地如有 icns 源文件也尝试读取
+      candidates.push(path.join(buildDir, 'icon.icns'));
     }
 
     for (const p of candidates) {
