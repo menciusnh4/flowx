@@ -1,6 +1,7 @@
 import { BrowserWindow, app, net, nativeImage } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import { TrayService } from '../services/TrayService';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -162,6 +163,50 @@ export async function createMainWindow(): Promise<BrowserWindow> {
       );
     } catch {
       // ignore
+    }
+  });
+
+  // 拦截关闭事件：根据用户选择最小化到托盘或退出
+  mainWindow.on('close', async (event) => {
+    // 标记是否已经处理过关闭（防止递归触发）
+    const win = mainWindow;
+    if (!win || (win as any).__closeHandled__) return;
+
+    // 先尝试读取已保存的关闭行为
+    const savedBehavior = TrayService.getSavedCloseBehavior();
+
+    if (savedBehavior === 'tray') {
+      // 用户已选择"最小化到托盘"并记住选择
+      event.preventDefault();
+      win.hide();
+      return;
+    }
+
+    if (savedBehavior === 'quit') {
+      // 用户已选择"完全退出"并记住选择 → 不拦截，让关闭流程继续
+      return;
+    }
+
+    // 没有保存的选择，弹出对话框询问用户
+    event.preventDefault();
+    (win as any).__closePrompting__ = true;
+
+    try {
+      const action = await TrayService.showCloseDialog();
+      (win as any).__closePrompting__ = false;
+
+      if (action === 'tray') {
+        // 最小化到托盘
+        win.hide();
+      } else {
+        // 完全退出：标记已处理并再次触发关闭
+        (win as any).__closeHandled__ = true;
+        win.close();
+      }
+    } catch (e) {
+      // 出错时默认最小化到托盘
+      (win as any).__closePrompting__ = false;
+      win.hide();
     }
   });
 

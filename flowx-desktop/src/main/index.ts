@@ -11,6 +11,7 @@ import { AnalyticsService } from './services/analytics/AnalyticsService';
 import { ApiServer } from './services/ApiServer';
 import { registerNewTabProtocol } from './services/NewTabPageService';
 import { BrowserEnvService } from './services/BrowserEnvService';
+import { TrayService } from './services/TrayService';
 
 /** 账号头像自定义协议：`flowx-avatar://avatar/acc_{id}_{hash}.jpg`
  *  目的：避开 MainWindow.webSecurity=true 下 http://localhost + file:// 本地图片直接加载被浏览器安全策略拦截的问题。
@@ -194,6 +195,9 @@ async function bootstrap() {
   // 注册所有 IPC 监听
   registerAllIpc();
 
+  // 初始化系统托盘（必须在窗口创建之后，因为托盘需要引用主窗口）
+  TrayService.init();
+
   // 测试模式（FLOWX_TEST=1）：启动后 2 秒自动退出，用于冒烟测试
   if (process.env.FLOWX_TEST === '1') {
     setTimeout(() => {
@@ -202,11 +206,26 @@ async function bootstrap() {
     }, 2500);
   }
 
-  // 当所有窗口关闭时（macOS 除外）退出应用
+  // 当所有窗口关闭时
+  // - 如果有托盘且用户选择了托盘模式，则不退出，继续在后台运行
+  // - macOS 原有的 dock 行为保持不变
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-      app.quit();
+    if (process.platform === 'darwin') {
+      // macOS：不退出，点击 Dock 图标会在 activate 事件中重建窗口
+      return;
     }
+    // Windows/Linux：检查是否有托盘在运行
+    // 如果托盘已初始化，则保持应用在后台运行（用户可以通过托盘菜单"退出"来完全关闭）
+    // （TrayService 内部有 initialized 标志，但这里通过间接方式：
+    //  如果用户保存的关闭行为是 'tray'，或者托盘菜单已被初始化过，就不退出）
+    const savedBehavior = TrayService.getSavedCloseBehavior();
+    if (savedBehavior === 'tray') {
+      // 用户明确选择了"托盘模式"，保持后台运行
+      logger.info('[FlowX] 所有窗口已关闭，保持后台运行（托盘模式）');
+      return;
+    }
+    // 否则正常退出
+    app.quit();
   });
 
   app.on('activate', () => {
