@@ -288,38 +288,58 @@ function onDlMouseMove(e: MouseEvent) {
   if (!dlDragging.value && Math.abs(dx) < 5) return;
   dlDragging.value = true;
 
-  // 节流：100ms 内不重复 moveTab
+  // 节流
   const now = Date.now();
   if ((onDlMouseMove as any)._lastMove && now - (onDlMouseMove as any)._lastMove < 80) return;
   (onDlMouseMove as any)._lastMove = now;
 
-  // 计算鼠标当前位置对应的 tabs 数组索引
   const track = trackRef.value;
   if (!track) return;
   const tabEls = track.querySelectorAll<HTMLElement>('.ws-tab');
   if (tabEls.length === 0) return;
 
-  // 找到当前拖拽 tab 在 tabs 数组中的索引
   const curIdx = store.tabs.findIndex(t => t.id === dlTabId.value);
   if (curIdx === -1) return;
 
   let targetIdx = curIdx;
-  // 从左到右扫描，鼠标在哪个 tab 的中点左侧就插到它前面
   for (let i = 0; i < tabEls.length; i++) {
     const rect = tabEls[i].getBoundingClientRect();
-    if (e.clientX < rect.left + rect.width / 2) {
-      targetIdx = i;
-      break;
-    }
+    if (e.clientX < rect.left + rect.width / 2) { targetIdx = i; break; }
     targetIdx = i + 1;
   }
-  // 修正：移除自身后位置前移
   if (targetIdx > curIdx) targetIdx--;
 
   if (targetIdx !== curIdx && store.tabs[targetIdx]?.id !== dlLastMoveId.value) {
     dlLastMoveId.value = store.tabs[targetIdx]?.id ?? null;
+
+    // FLIP First：记录所有 tab 当前位置（仅非拖拽标签）
+    const prevRects: Record<string, DOMRect> = {};
+    tabEls.forEach(el => {
+      const id = el.getAttribute('data-id');
+      if (id && id !== dlTabId.value) prevRects[id] = el.getBoundingClientRect();
+    });
+
     store.moveTab(curIdx, targetIdx);
-    // 重置偏移起点：标签在新数组位置继续跟随鼠标，消除跳跃感
+
+    // FLIP Last + Invert + Play（仅非拖拽标签，被拖标签单独控制）
+    nextTick(() => {
+      const newTabEls = track.querySelectorAll<HTMLElement>('.ws-tab');
+      newTabEls.forEach(el => {
+        const id = el.getAttribute('data-id');
+        if (!id || !prevRects[id] || id === dlTabId.value) return;
+        const prev = prevRects[id];
+        const curr = el.getBoundingClientRect();
+        const dxx = prev.left - curr.left;
+        if (Math.abs(dxx) > 0.5) {
+          el.style.transition = 'none';
+          el.style.transform = `translateX(${dxx}px)`;
+          el.offsetHeight; // force reflow
+          el.style.transition = 'transform 0.18s var(--ease)';
+          el.style.transform = '';
+        }
+      });
+    });
+
     dlStartX.value = e.clientX;
     dlOffsetX.value = 0;
   }
@@ -392,7 +412,7 @@ watch(
       >‹</button>
 
       <div ref="trackRef" class="ws-tracks" @scroll="updateOverflow" @wheel.prevent="onWheel">
-        <TransitionGroup name="ws-mv" tag="div" class="ws-tabs">
+        <div class="ws-tabs">
         <div
           v-for="(t, index) in tabs"
           :key="t.id"
@@ -422,7 +442,7 @@ watch(
             title="关闭"
           >×</button>
         </div>
-        </TransitionGroup>
+        </div>
       </div>
 
       <button
@@ -539,15 +559,6 @@ watch(
   align-items: center;
   gap: 2px;
   height: 100%;
-  flex-shrink: 0;
-}
-
-/* TransitionGroup 挤压动画 — Chrome 标签拖拽同款 FLIP */
-.ws-mv-move {
-  transition: transform 0.2s var(--ease);
-}
-.ws-mv-leave-active {
-  display: none;
 }
 
 /* 溢出翻页按钮：仅溢出时出现，到头自动隐藏 */
