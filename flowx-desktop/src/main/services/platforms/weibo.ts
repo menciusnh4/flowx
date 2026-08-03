@@ -416,6 +416,13 @@ function _normalizeUrl(u: unknown): string {
         if (host && _isWeiboDomain(host) && url.indexOf('http:') === 0) {
           url = 'https:' + url.substring(5);
         }
+        // ⚠️ 2026-08-03 验证：sinaimg.cn 的 crop/avatar 类 URL 现在必须带签名才能访问（Referer + ssig/KID/Expires 缺一即 403）
+        // 因此：**不再剥除任何 query 参数**，完整保留带签名的 URL。
+        //   防盗链绕过在渲染层通过 Electron webRequest.onBeforeSendHeaders 统一注入 Referer: https://weibo.com/ 实现。
+        //   过期问题：采集的签名有效期一般几小时到一天，过期后重新采集即可（用户点击"刷新账号"触发）。
+        if (host && (_isSinaImgHost(host) || /sinaimg\.cn$/i.test(host))) {
+          // 保留原样：不剥 KID/Expires/ssig 等签名
+        }
       }
     } catch {
       // ignore
@@ -427,6 +434,24 @@ function _normalizeUrl(u: unknown): string {
     return url;
   }
   return '';
+}
+
+/** ⚠️ 2026-08-03 验证：tp1~tp4.sinaimg.cn/{uid}/180/0 永久格式已被微博废弃，全部返回 403 Forbidden
+ *  ——不要再用！微博现在对 sinaimg.cn 头像图片同时校验：
+ *     (1) URL 上的 KID=imgbed,tva & Expires=... & ssig=... 短期签名参数
+ *     (2) HTTP Referer 头必须为 weibo.com
+ *  两者缺一即 403。因此正确做法：采集阶段完整保留带签名的 crop URL，渲染层在 Electron 拦截时加上 Referer 头。
+ */
+function _weiboPermanentAvatar(_uid: string | null | undefined): string {
+  return '';
+}
+
+function _isSinaImgHost(host: string): boolean {
+  const h = host.toLowerCase();
+  if (h === 'sinaimg.cn' || h.endsWith('.sinaimg.cn')) return true;
+  // 常见微博头像节点：tva1~tva4 / tvax1~tvax4 / tp1~tp4 / wx1~wx4 / h5
+  if (/^(tva|tvax|tp|wx|h5|ss)\d*\.sinaimg\.cn$/.test(h)) return true;
+  return false;
 }
 
 async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo> {
@@ -483,6 +508,153 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
       log('warn', 'extractPageInfo', '⚠️ PROBE 未命中任何登录后结构，将走通用 DOM 兜底');
     }
 
+    // ---------- 阶段 2.5：platformAccountId (UID/微博号) 主进程级兜底 ----------
+    // 用户反馈：创作中心 me.weibo.com 完全没有数字 UID 写入 DOM，导致后续阶段3.5无法跳转个人主页
+    // 强顺序：cookies 优先（uidCandidates 直接命中 → 裸扫value中纯数字 → SUBP base64）→ 页面级多源兜底
+    log('info', 'extractPageInfo',
+      `[阶段2.5 入口] platformAccountId=(${platformAccountId || '空'}) nickname=(${nickname || '空'}) avatar.len=${avatar.length}`);
+    if (!platformAccountId) {
+      try {
+        const cookies = await win.webContents.session.cookies.get({});
+        log('info', 'extractPageInfo', `[阶段2.5] session.cookies 共 ${cookies.length} 条`);
+        // 1) 精确 uidCandidates 直接命中（和 AccountService Step4 同款）
+        const uidCandidates = ['a1', 'user_id', 'user_key', 'open_id', 'sec_user_id', 'uid', 'z_c0', 'wbind', 'wb_uid', 'weibouid', 'suda_id', 'w_muid', 'wmid'];
+        let foundPid = '';
+        for (const c of cookies) {
+          if (!c.value) continue;
+          const name = (c.name || '').toLowerCase();
+          const val = (c.value || '').trim();
+          if (uidCandidates.includes(name) && /^\d{5,12}$/.test(val)) {
+            foundPid = val;
+            log('info', 'extractPageInfo', `[阶段2.5] 🔴 uidCandidates 精确命中 cookie=${c.name} = ${val}`);
+            break;
+          }
+        }
+        // 2) 「整个 value 纯数字」的 cookie 直接命中（排除令牌类/非UID名黑名单）
+        //    常见：uid=8322677072(纯数字), DedeUserID=34567890(纯数字)
+        if (!foundPid) {
+          const NAME_BLACKLIST = /(token|csrf|xsrf|svb|srt|srf|scf|cross|cache|salt|sign|key|crypt|nonce|state|pc_token|session|sso|track|device|fingerprint|fp|gcid|suda|cid|code)/i;
+          for (const c of cookies) {
+            if (!c.value) continue;
+            const name = (c.name || '');
+            const val = (c.value || '').trim();
+            if (NAME_BLACKLIST.test(name)) continue; // 令牌类名直接跳过
+            if (/^[A-Za-z\-]/.test(val)) continue;    // 首字母开头基本是签名类，跳过
+            if (/^\d{5,12}$/.test(val)) {
+              foundPid = val;
+              log('info', 'extractPageInfo', `[阶段2.5] value全纯数字命中 cookie=${name} = ${val}`);
+              break;
+            }
+          }
+        }
+        // 3) 「片段数字」兜底（门槛最高）—— 仅 SUB/ SUBP 这类已知前缀合理的 cookie 才做片段抽
+        //    ⚠️ 严禁对所有 cookie 做片段裸扫！之前 PC_TOKEN=945d126441 → 片段 126441 被误当 UID
+        if (!foundPid) {
+          const FRAGMENT_OK = /^(SUB|SUBP|SUHB|SUDAPROD|SSOLoginState|WEIBOCN|_2AAM|SINA Visitor)$/i;
+          for (const c of cookies) {
+            if (!c.value) continue;
+            const name = (c.name || '');
+            const val = (c.value || '');
+            if (!FRAGMENT_OK.test(name) && !(name.toLowerCase() === 'subp')) continue;
+            const m = val.match(/(^|[^\d])(\d{8,12})([^\d]|$)/); // UID 至少 8 位（极少人6位数）
+            if (m && m[2]) {
+              foundPid = m[2];
+              log('info', 'extractPageInfo', `[阶段2.5] 片段数字命中(仅SUB系列) cookie=${name} 片段=${foundPid} (raw.len=${val.length})`);
+              break;
+            }
+          }
+        }
+        // 4) SUBP base64 decode 最后兜底
+        if (!foundPid) {
+          const subp = cookies.find((c) => (c.name || '').toLowerCase() === 'subp' && c.value && c.value.length > 10);
+          if (subp && subp.value) {
+            try {
+              const decoded = Buffer.from(subp.value, 'base64').toString('latin1');
+              const dm = decoded.match(/(\d{8,12})/);
+              if (dm && dm[1]) {
+                foundPid = dm[1];
+                log('info', 'extractPageInfo', `[阶段2.5] SUBP decode 命中UID=${dm[1]} (decoded.len=${decoded.length})`);
+              }
+            } catch (_) { /* ignore */ }
+          }
+        }
+        if (foundPid) platformAccountId = foundPid;
+      } catch (cookieErr) {
+        log('warn', 'extractPageInfo', `[阶段2.5] cookies 读取异常: ${(cookieErr as Error).message}`);
+      }
+    }
+    log('info', 'extractPageInfo', `[阶段2.5] cookies完成后 platformAccountId=(${platformAccountId || '空'}) → 进入页面级脚本`);
+    // 页面级兜底脚本：__INITIAL_STATE__/storage/innerHTML（必须纯 JS，绝不能写 TS 的 window as any）
+    if (!platformAccountId) {
+      try {
+        const p: any = await win.webContents.executeJavaScript(`
+          (function() {
+            try {
+              function _pick(s) {
+                if (!s) return null;
+                var m = String(s).match(/(?:\\/u\\/|uid["'\\s:=]+|userid["'\\s:=]+)(\\d{5,12})/i);
+                if (m && m[1]) return m[1];
+                return null;
+              }
+              var r = null;
+              try {
+                if (window.__INITIAL_STATE__ != null) r = _pick(JSON.stringify(window.__INITIAL_STATE__));
+                else if (window.__NUXT__ != null) r = _pick(JSON.stringify(window.__NUXT__));
+                else if (window.$CONFIG != null) r = _pick(JSON.stringify(window.$CONFIG));
+                else if (window.bootstrap && typeof window.bootstrap === 'object') r = _pick(JSON.stringify(window.bootstrap));
+              } catch(_e1) { /* ignore */ }
+              if (!r) try { if (typeof location !== 'undefined' && location && location.href) r = _pick(location.href); } catch(_e2) {}
+              if (!r) try {
+                if (document && document.body && document.body.innerHTML) {
+                  var m2 = String(document.body.innerHTML).match(/["'\\/]\\/u\\/(\\d{5,12})(?:\\?|["'\\/ ]|$)/);
+                  if (m2 && m2[1]) r = m2[1];
+                }
+              } catch(_e3) {}
+              if (!r) try {
+                // 读 sessionStorage/localStorage 所有 key-value
+                var keys = [], i;
+                if (typeof localStorage !== 'undefined') {
+                  for (i = 0; i < localStorage.length; i++) keys.push('LS:' + localStorage.key(i));
+                }
+                if (typeof sessionStorage !== 'undefined') {
+                  for (i = 0; i < sessionStorage.length; i++) keys.push('SS:' + sessionStorage.key(i));
+                }
+                for (i = 0; i < keys.length && !r; i++) {
+                  var k = keys[i];
+                  var v = '';
+                  try { v = k.substr(0,3)==='LS:' ? (localStorage.getItem(k.substr(3)) || '') : (sessionStorage.getItem(k.substr(3)) || ''); } catch(_e4) {}
+                  var hit = _pick(v);
+                  if (hit) r = hit;
+                }
+              } catch(_e5) {}
+              // 最终兜底：直接 document.querySelectorAll 扫所有 a[href] 含 /u/ 的
+              if (!r) try {
+                if (document && document.querySelectorAll) {
+                  var aa = document.querySelectorAll('a[href*="/u/"], a[href*="weibo.com/u/"]');
+                  for (var ai = 0; ai < aa.length && !r; ai++) {
+                    var ah = (aa[ai].getAttribute('href') || '') + ' ' + (aa[ai].href || '');
+                    var am = ah.match(/weibo\\.com\\/u\\/(\\d{5,12})/i) || String(ah).match(/[\\/"]u\\/(\\d{5,12})(?:\\?|[\\/" ]|$)/);
+                    if (am && am[1]) r = am[1];
+                  }
+                }
+              } catch(_e6) {}
+              return r;
+            } catch(e) { return '__ERR__' + String(e && e.message || e); }
+          })()
+        `);
+        log('info', 'extractPageInfo', `[阶段2.5] 页面脚本返回: ${typeof p === 'string' ? (p.length < 40 ? p : p.slice(0,40)+'…') : JSON.stringify(p)}`);
+        if (p && typeof p === 'string' && /^\d{5,12}$/.test(p)) {
+          platformAccountId = p;
+          log('info', 'extractPageInfo', `[阶段2.5] 🔴 页面__INITIAL_STATE__/storage/innerHTML 命中UID=${p}`);
+        } else if (typeof p === 'string' && p.startsWith('__ERR__')) {
+          log('warn', 'extractPageInfo', `[阶段2.5] 页面脚本执行异常: ${p}`);
+        }
+      } catch (e) {
+        log('warn', 'extractPageInfo', `[阶段2.5] 页面脚本外层异常: ${(e as Error).message}`);
+      }
+    }
+    log('info', 'extractPageInfo', `[阶段2.5 出口] platformAccountId=(${platformAccountId || '空'})`);
+
     // ---------- 阶段 3：通用兜底 ----------
     // 3.1 UID / platformAccountId：URL + 页面中 a[href*="weibo.com/u/"] + 微博号文本匹配
     if (!platformAccountId) {
@@ -496,184 +668,552 @@ async function extractPageInfo(win: BrowserWindow): Promise<ExtractedAccountInfo
     }
 
     // 3.2 提取昵称 + 头像 + 微博号 + 粉丝/关注/获赞 数（通用 DOM 兜底）
+    //   ✅ 拆分成 6 个独立小脚本，避免单个脚本语法异常导致"整个阶段3.2没值"
     try {
-      const domResult: any = await win.webContents.executeJavaScript(`
-        (function() {
-          try {
-            function _parseNumber(s) {
-              if (!s) return null;
-              var t = String(s).replace(/\\s+/g, '').replace(/,/g, '');
+      // ------- 3.2.1 昵称 -------
+      if (!nickname) {
+        try {
+          const r = await win.webContents.executeJavaScript(`
+            (function(){try{
+              var sel = ['div[class*="_name_"]','._name_v0oim_18','.user-info .name','.username','.nick-name','.screen-name','[class*="user-name"]','[class*="nickname"]','[class*="screen-name"]','.header .name','.topbar-user .name','.WD_header_name','.nameBox .name','.nameBox .userName','.person_name','.name','h1'];
+              for (var i=0;i<sel.length;i++){
+                try {
+                  var el = document.querySelector(sel[i]);
+                  if (!el) continue;
+                  var txt = ((el.innerText || el.textContent || '')+'').trim().slice(0,40);
+                  if (txt && txt.length>=1) return txt;
+                } catch(_){}
+              }
+              return '';
+            }catch(e){return '';}})()
+          `);
+          if (r && typeof r === 'string' && r.trim()) {
+            nickname = r.trim();
+            log('info', 'extractPageInfo', `[3.2.1] 兜底脚本命中昵称: "${nickname}"`);
+          }
+        } catch (e) {
+          log('warn', 'extractPageInfo', '[3.2.1] 昵称脚本异常: ' + (e as Error).message);
+        }
+      }
+      // ------- 3.2.2 头像 -------
+      if (!avatar) {
+        try {
+          const r = await win.webContents.executeJavaScript(`
+            (function(){try{
+              var sel = ['img.woo-avatar-img','img[class*="_avatar_"]','img[class*="avatar"]','img[class*="head"]','a[href*="weibo.com/u/"] img','a[href*="weibo.com/p/"] img','.avatar img','a.avatar img','.user-info img','img.avatar','.header img','.topbar-user img','.account-info img','.user-card img','.head_pic img','.W_face_radius img','img.head_pic'];
+              for (var i=0;i<sel.length;i++){
+                try {
+                  var img = document.querySelector(sel[i]);
+                  if (!img) continue;
+                  var src = img.src || img.getAttribute('src') || '';
+                  if (src && (src.indexOf('http')===0 || src.indexOf('//')===0)) return src;
+                } catch(_){}
+              }
+              return '';
+            }catch(e){return '';}})()
+          `);
+          if (r && typeof r === 'string' && (r.startsWith('http') || r.startsWith('//'))) {
+            avatar = r;
+            log('info', 'extractPageInfo', `[3.2.2] 兜底脚本命中头像: ${avatar.length} chars`);
+          }
+        } catch (e) {
+          log('warn', 'extractPageInfo', '[3.2.2] 头像脚本异常: ' + (e as Error).message);
+        }
+      }
+      // ------- 3.2.3 platformAccountId (UID/微博号) -------
+      log('info', 'extractPageInfo',
+        `[3.2.3 入口] platformAccountId=(${platformAccountId || '空'})`);
+      if (!platformAccountId) {
+        try {
+          const r: any = await win.webContents.executeJavaScript(`
+            (function(){try{
+              // 1) a 链接
+              var allLinks = document.querySelectorAll('a[href*="weibo.com/u/"], a[href^="/u/"], a[href*="/u/"]');
+              var i, href, fullHref, m;
+              for (i=0;i<allLinks.length;i++){
+                href = allLinks[i].getAttribute('href') || '';
+                fullHref = allLinks[i].href || href;
+                m = String(fullHref+' '+href).match(/weibo\\.com\\/u\\/([0-9]{5,12})/i) || href.match(/^\\/u\\/([0-9]{5,12})$/);
+                if (m && m[1]) return { platformAccountId: m[1], source: 'a-href' };
+              }
+              // 2) 正文搜"微博号"
+              if (document && document.body) {
+                var bodyText = document.body.innerText || '';
+                var am = bodyText.match(/(?:微博号|微博账号|微号)[：:\\s]*([A-Za-z0-9_\\-]{3,30})/);
+                if (am && am[1]) return { platformAccountId: am[1], source: 'body-微博号' };
+              }
+              return { platformAccountId: '', source: 'none' };
+            }catch(e){return { platformAccountId:'', source:'err:'+String(e&&e.message||e) };}})()
+          `);
+          if (r && r.platformAccountId) {
+            platformAccountId = r.platformAccountId;
+            log('info', 'extractPageInfo', `[3.2.3] 兜底脚本命中platformAccountId="${platformAccountId}" (${r.source})`);
+          }
+        } catch (e) {
+          log('warn', 'extractPageInfo', '[3.2.3] platformAccountId脚本异常: ' + (e as Error).message);
+        }
+      }
+      // ------- 3.2.4 统计数字（DOM配对方式）【加更严格标签过滤】-------
+      log('info', 'extractPageInfo',
+        `[3.2.4 入口] before: fans=${fansCount ?? 'n/a'}, follow=${followCount ?? 'n/a'}, like=${likeCount ?? 'n/a'}`);
+      try {
+        const r: any = await win.webContents.executeJavaScript(`
+          (function(){try{
+            function _pn(s){
+              if(!s) return null;
+              var t = String(s).replace(/\\s+/g,'').replace(/,/g,'');
               var base = parseFloat(t);
               if (isNaN(base)) return null;
-              if (t.indexOf('万') !== -1) base *= 10000;
-              else if (t.indexOf('千') !== -1) base *= 1000;
-              else if (t.indexOf('百') !== -1) base *= 100;
-              else if (t.indexOf('亿') !== -1) base *= 100000000;
+              if (t.indexOf('万')!==-1) base*=10000;
+              else if (t.indexOf('千')!==-1) base*=1000;
+              else if (t.indexOf('百')!==-1) base*=100;
+              else if (t.indexOf('亿')!==-1) base*=100000000;
               return Math.round(base);
             }
-            var r = { nickname: '', avatar: '', platformAccountId: '', fansCount: null, followCount: null, likeCount: null };
-
-            // ===== 昵称：按优先级尝试多个选择器（已包含新版：div[class*="_name_"] / ._name_v0oim_18）=====
-            var nickSelectors = [
-              'div[class*="_name_"]',
-              '._name_v0oim_18',
-              '.user-info .name',
-              '.username',
-              '.nick-name',
-              '.screen-name',
-              '[class*="user-name"]',
-              '[class*="nickname"]',
-              '[class*="screen-name"]',
-              '.header .name',
-              '.topbar-user .name',
-              '.WD_header_name',
-              '.nameBox .name',
-              '.nameBox .userName',
-              '.person_name',
-              '.name',
-              'h1',
-            ];
-            for (var ni = 0; ni < nickSelectors.length; ni++) {
-              try {
-                var el = document.querySelector(nickSelectors[ni]);
-                if (el && (el.innerText || el.textContent || '').trim()) {
-                  var txt = (el.innerText || el.textContent || '').trim().slice(0, 40);
-                  if (txt && txt.length >= 1) {
-                    r.nickname = txt;
-                    break;
-                  }
-                }
-              } catch(_) { /* ignore */ }
-            }
-
-            // ===== 头像：img 的 src（新版 img.woo-avatar-img / img[class*="_avatar_"] 排在最前）=====
-            var avatarSelectors = [
-              'img.woo-avatar-img',
-              'img[class*="_avatar_"]',
-              'img[class*="avatar"]',
-              'img[class*="head"]',
-              'a[href*="weibo.com/u/"] img',
-              'a[href*="weibo.com/p/"] img',
-              '.avatar img',
-              'a.avatar img',
-              '.user-info img',
-              'img.avatar',
-              '.header img',
-              '.topbar-user img',
-              '.account-info img',
-              '.user-card img',
-              '.head_pic img',
-              '.W_face_radius img',
-              'img.head_pic',
-            ];
-            for (var ai = 0; ai < avatarSelectors.length; ai++) {
-              try {
-                var img = document.querySelector(avatarSelectors[ai]);
-                var src = img ? (img.src || img.getAttribute('src') || '') : '';
-                if (src && (src.indexOf('http') === 0 || src.indexOf('//') === 0)) {
-                  r.avatar = src;
-                  break;
-                }
-              } catch(_) { /* ignore */ }
-            }
-
-            // ===== 平台账号 ID（微博号 / UID）=====
-            //   1. a[href^="/u/"] 顶栏个人 tab（登录后首页就用 PROBE 取了，这里做页面内其他 a 兜底）
-            var allUserLinks = document.querySelectorAll('a[href*="weibo.com/u/"], a[href^="/u/"]');
-            for (var li = 0; li < allUserLinks.length; li++) {
-              var href = allUserLinks[li].getAttribute('href') || '';
-              var fullHref = String(allUserLinks[li].href || href);
-              var lm = String(fullHref + ' ' + href).match(/weibo\\.com\\/u\\/([0-9]{5,12})/i) ||
-                       href.match(/^\\/u\\/([0-9]{5,12})$/);
-              if (lm && lm[1]) { r.platformAccountId = lm[1]; break; }
-            }
-            //   2. body 文本中「微博号：xxx」
-            if (!r.platformAccountId) {
-              var bodyText = document.body ? (document.body.innerText || '') : '';
-              var accountM = bodyText.match(/(?:微博号|微博账号|微号)[：:\\s]*([A-Za-z0-9_\\-]{3,30})/);
-              if (accountM && accountM[1]) r.platformAccountId = accountM[1];
-            }
-
-            // ===== 粉丝/关注/获赞/微博数 =====
-            function _setByLabel(labelText, numValue) {
-              if (numValue === null || !labelText) return false;
-              if ((/粉丝/.test(labelText)) && r.fansCount === null) { r.fansCount = numValue; return true; }
-              if (/关注/.test(labelText) && r.followCount === null) { r.followCount = numValue; return true; }
-              if ((/获赞|点赞|收藏|转评赞/.test(labelText)) && r.likeCount === null) { r.likeCount = numValue; return true; }
+            var out = { fansCount:null, followCount:null, likeCount:null };
+            // 标签黑名单：避免把"互相关注 1 人""私信 1""评论 1""转发 1"等识别为统计数
+            var BAD = /(我|人|位|条|私信|评论|转发|回复|点赞按钮|文章|视频|相册|专辑|分组|聊天|对话|消息|记录|好友|博主|话题|超话|帖子|举报|屏蔽|特别|悄悄|共同|关注的|关注他|关注她|关注我)/;
+            function _set(lab,val){
+              if (val===null || !lab) return false;
+              var L = (lab||'').trim();
+              if (L.length===0 || L.length>10) return false;
+              if (BAD.test(L)) return false;
+              if ((/粉丝/.test(L)) && out.fansCount===null) { out.fansCount=val; return true; }
+              if (/关注/.test(L) && !/互相关注|关注我|关注的人|关注TA|关注他|关注她/.test(L) && out.followCount===null) { out.followCount=val; return true; }
+              if ((/获赞|点赞数|转评赞/.test(L)) && out.likeCount===null) { out.likeCount=val; return true; }
+              // 单独"点赞"太容易被帖子点赞按钮干扰，必须在数字 >= 10 或 val 是万单位时才接受
+              if (/点赞/.test(L) && !/点赞数/.test(L) && (val>=10 || /万|千|亿/.test(lab))) {
+                if (out.likeCount===null) { out.likeCount=val; return true; }
+              }
               return false;
             }
-            var bodyText2 = document.body ? (document.body.innerText || '') : '';
-
-            // 方式 A：全局搜索 class 含 number 或 count 或 num 的数字元素
-            try {
-              var allNumEls = document.querySelectorAll('[class*="number"], [class*="count"], [class*="num"], [class*="Count"], [class*="Num"]');
-              for (var ai2 = 0; ai2 < allNumEls.length; ai2++) {
-                var aEl = allNumEls[ai2];
-                var aVal = _parseNumber(aEl.textContent || '');
-                if (aVal === null) continue;
-                var labelFound = false;
-                var aParent = aEl.parentNode;
-                if (aParent && aParent.children) {
-                  for (var bi = 0; bi < aParent.children.length; bi++) {
-                    var sib = aParent.children[bi];
-                    if (sib === aEl) continue;
-                    var lblTxt = (sib.textContent || '').trim();
-                    if (lblTxt && lblTxt.length <= 12 && /(粉丝|关注|获赞|点赞|收藏)/.test(lblTxt)) {
-                      if (_setByLabel(lblTxt, aVal)) { labelFound = true; break; }
-                    }
-                  }
-                }
-                if (labelFound) continue;
-                if (aParent) {
-                  var parentTxt = (aParent.textContent || '').replace(/\\d/g, ' ').trim();
-                  if (parentTxt) _setByLabel(parentTxt, aVal);
+            var all = document.querySelectorAll('[class*="number"], [class*="Number"], [class*="count"], [class*="Count"], [class*="num"], [class*="Num"], [class*="stat"]');
+            var i, ne, nv, np, pi, pch, ptxt;
+            for (i=0;i<all.length;i++){
+              ne = all[i];
+              nv = _pn(ne.textContent || '');
+              if (nv===null) continue;
+              np = ne.parentNode;
+              if (np && np.children) {
+                for (pi=0;pi<np.children.length;pi++){
+                  pch = np.children[pi];
+                  if (pch===ne) continue;
+                  ptxt = (pch.textContent || '').trim();
+                  if (ptxt) _set(ptxt, nv);
                 }
               }
-            } catch(_) { /* ignore */ }
-
-            // 方式 B：body 全文正则兜底（双向格式）
-            if (r.fansCount === null) {
-              var fm1 = bodyText2.match(/(粉丝|粉丝数)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百亿]?)/);
-              var fm2 = bodyText2.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)[^0-9]{0,5}(粉丝|粉丝数)/);
-              if (fm1 && fm1[2]) r.fansCount = _parseNumber(fm1[2]);
-              else if (fm2 && fm2[1]) r.fansCount = _parseNumber(fm2[1]);
             }
-            if (r.followCount === null) {
-              var fol1 = bodyText2.match(/(关注|关注数)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百亿]?)/);
-              var fol2 = bodyText2.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)[^0-9]{0,5}(关注|关注数)/);
-              if (fol1 && fol1[2]) r.followCount = _parseNumber(fol1[2]);
-              else if (fol2 && fol2[1]) r.followCount = _parseNumber(fol2[1]);
-            }
-            if (r.likeCount === null) {
-              var lk1 = bodyText2.match(/(获赞|点赞|点赞数|转评赞)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百亿]?)/);
-              var lk2 = bodyText2.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)[^0-9]{0,5}(获赞|点赞|点赞数|转评赞)/);
-              if (lk1 && lk1[2]) r.likeCount = _parseNumber(lk1[2]);
-              else if (lk2 && lk2[1]) r.likeCount = _parseNumber(lk2[1]);
-            }
-
-            return r;
-          } catch(e) {
-            return { nickname: '', avatar: '', platformAccountId: '', fansCount: null, followCount: null, likeCount: null, error: String(e && e.message || e) };
+            return out;
+          }catch(e){return { fansCount:null, followCount:null, likeCount:null, _err: String(e&&e.message||e) };}})()
+        `);
+        if (r) {
+          // 极度不信任"只命中一个字段且值为 0~2"的情况（99%是误抓）
+          const hits = [r.fansCount, r.followCount, r.likeCount].filter((x: any) => typeof x === 'number').length;
+          const tinySuspect = (x: any) => typeof x === 'number' && x >= 0 && x <= 2;
+          if (hits === 1) {
+            if (tinySuspect(r.fansCount)) r.fansCount = null;
+            if (tinySuspect(r.followCount)) r.followCount = null;
+            if (tinySuspect(r.likeCount)) r.likeCount = null;
           }
-        })()
-      `);
-
-      if (domResult) {
-        if (!nickname && domResult.nickname) nickname = domResult.nickname;
-        if (!avatar   && domResult.avatar)   avatar   = domResult.avatar;
-        if (!platformAccountId && domResult.platformAccountId) platformAccountId = domResult.platformAccountId;
-        if (fansCount === null && domResult.fansCount !== null && domResult.fansCount !== undefined) fansCount = domResult.fansCount;
-        if (followCount === null && domResult.followCount !== null && domResult.followCount !== undefined) followCount = domResult.followCount;
-        if (likeCount === null && domResult.likeCount !== null && domResult.likeCount !== undefined) likeCount = domResult.likeCount;
+          if (fansCount === null && typeof r.fansCount === 'number') fansCount = r.fansCount;
+          if (followCount === null && typeof r.followCount === 'number') followCount = r.followCount;
+          if (likeCount === null && typeof r.likeCount === 'number') likeCount = r.likeCount;
+          log('info', 'extractPageInfo',
+            `[3.2.4 出口] script=(${typeof r.fansCount === 'number' ? r.fansCount : '-'}/` +
+            `${typeof r.followCount === 'number' ? r.followCount : '-'}/` +
+            `${typeof r.likeCount === 'number' ? r.likeCount : '-'}) ` +
+            `after: fans=${fansCount ?? 'n/a'}, follow=${followCount ?? 'n/a'}, like=${likeCount ?? 'n/a'}` +
+            (r._err ? ' err=' + r._err : ''));
+        }
+      } catch (e) {
+        log('warn', 'extractPageInfo', '[3.2.4] 统计DOM配对脚本异常: ' + (e as Error).message);
+      }
+      // ------- 3.2.5 统计数字（body全文正则双向兜底）【严格标签过滤 + tiny 值不信任】-------
+      log('info', 'extractPageInfo',
+        `[3.2.5 入口] before: fans=${fansCount ?? 'n/a'}, follow=${followCount ?? 'n/a'}, like=${likeCount ?? 'n/a'}`);
+      try {
+        const r: any = await win.webContents.executeJavaScript(`
+          (function(){try{
+            function _pn(s){
+              if(!s) return null;
+              var t = String(s).replace(/\\s+/g,'').replace(/,/g,'');
+              var base = parseFloat(t);
+              if (isNaN(base)) return null;
+              if (t.indexOf('万')!==-1) base*=10000;
+              else if (t.indexOf('千')!==-1) base*=1000;
+              else if (t.indexOf('百')!==-1) base*=100;
+              else if (t.indexOf('亿')!==-1) base*=100000000;
+              return Math.round(base);
+            }
+            var b = '';
+            try { b = document.body ? (document.body.innerText || '') : ''; } catch(_) {}
+            var fans=null, fol=null, lik=null;
+            var m1=null, m2=null;
+            // ===== 粉丝（不受干扰词影响，较稳）=====
+            m1 = b.match(/(粉丝|粉丝数)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百亿]?)/);
+            m2 = b.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)[^0-9]{0,5}(粉丝|粉丝数)/);
+            if (m1 && m1[2]) fans = _pn(m1[2]);
+            else if (m2 && m2[1]) fans = _pn(m2[1]);
+            // ===== 关注（严格避免"互关|关注我|关注的|关注TA|关注他|关注她|关注一个人|我的关注"）=====
+            //   正则方向1：标签在左，数字在右 —— 前面不能有"互" / "的"；中间必须全是非"我他她TA关的"
+            m1 = b.match(/(^|[^互的的他她TA我])\\s*(关注|关注数)([^0-9我他她TA的的]{0,10})(\\d+(?:\\.\\d+)?[万千百亿]?)/);
+            //   正则方向2：数字在左，标签在右 —— 标签后面必须跟结束/空格/标点/换行，不能跟"的/人/TA"
+            m2 = b.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)([^0-9我他她TA的的]{0,10})(关注|关注数)([^人他她TA我的的]|$)/);
+            if (m1 && m1[4]) fol = _pn(m1[4]);
+            else if (m2 && m2[1]) fol = _pn(m2[1]);
+            // ===== 获赞（只用"获赞/点赞数/转评赞"，单独"点赞"太容易误抓）=====
+            m1 = b.match(/(获赞|点赞数|转评赞)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百亿]?)/);
+            m2 = b.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)[^0-9]{0,5}(获赞|点赞数|转评赞)/);
+            if (m1 && m1[2]) lik = _pn(m1[2]);
+            else if (m2 && m2[1]) lik = _pn(m2[1]);
+            return { fansCount: fans, followCount: fol, likeCount: lik };
+          }catch(e){
+            return { fansCount:null, followCount:null, likeCount:null, _err: String(e&&e.message||e) };
+          }})()
+        `);
+        if (r) {
+          // 极度不信任：只命中一个字段 + 值在 0~2 → 99% 是"关注我 1 人""私信 1 条"类干扰
+          const hits = [r.fansCount, r.followCount, r.likeCount].filter((x: any) => typeof x === 'number').length;
+          const tinySuspect = (x: any) => typeof x === 'number' && x >= 0 && x <= 2;
+          if (hits === 1) {
+            if (tinySuspect(r.fansCount)) r.fansCount = null;
+            if (tinySuspect(r.followCount)) r.followCount = null;
+            if (tinySuspect(r.likeCount)) r.likeCount = null;
+          }
+          if (fansCount === null && typeof r.fansCount === 'number') fansCount = r.fansCount;
+          if (followCount === null && typeof r.followCount === 'number') followCount = r.followCount;
+          if (likeCount === null && typeof r.likeCount === 'number') likeCount = r.likeCount;
+          log('info', 'extractPageInfo',
+            `[3.2.5 出口] script=(${typeof r.fansCount === 'number' ? r.fansCount : '-'}/` +
+            `${typeof r.followCount === 'number' ? r.followCount : '-'}/` +
+            `${typeof r.likeCount === 'number' ? r.likeCount : '-'}) hits=${hits} ` +
+            `after: fans=${fansCount ?? 'n/a'}, follow=${followCount ?? 'n/a'}, like=${likeCount ?? 'n/a'}` +
+            (r._err ? ' err=' + r._err : ''));
+        }
+      } catch (e) {
+        log('warn', 'extractPageInfo', '[3.2.5] 统计正则脚本异常: ' + (e as Error).message);
       }
     } catch (e) {
-      log('warn', 'extractPageInfo', '通用 DOM 兜底脚本执行失败: ' + (e as Error).message);
+      log('warn', 'extractPageInfo', '通用 DOM 兜底脚本外层异常: ' + (e as Error).message);
+    }
+
+    // ---------- 阶段 3.5：个人主页精确提取（粉丝/关注/点赞数） ----------
+    // 用户反馈：微博的关注/粉丝/获赞数不在首页和创作中心，必须进入个人主页
+    // URL 格式：纯数字 UID -> https://weibo.com/u/{UID}；自定义微博号 -> https://weibo.com/n/{微博号}
+    log('info', 'extractPageInfo',
+      `[阶段3.5 入口] fans=${fansCount ?? 'n/a'}, follow=${followCount ?? 'n/a'}, like=${likeCount ?? 'n/a'}` +
+      `; pid=(${platformAccountId || '空'})`);
+    const needStats = fansCount === null || followCount === null || likeCount === null;
+    const haveUid = /^\d{5,12}$/.test(platformAccountId || '');
+    const haveCustomId =
+      !haveUid &&
+      !!platformAccountId &&
+      /^[A-Za-z0-9_\-\u4e00-\u9fa5]{2,30}$/.test(platformAccountId); // 微博号允许中文/字母/数字/下划线/横线
+    if (needStats && (haveUid || haveCustomId)) {
+      let profileUrl = '';
+      // 🐛 修复末尾逗号 bug：先对 pid 做尾部清洗（去除逗号/句号/分号/空格）
+      const safePid = (platformAccountId || '').replace(/[，,.;；:：\s]+$/g, '').replace(/^[，,.;；:：\s]+/g, '');
+      if (haveUid) profileUrl = `https://weibo.com/u/${safePid}`;
+      else if (haveCustomId) profileUrl = `https://weibo.com/n/${encodeURIComponent(safePid)}`;
+      // URL 级二次兜底：剥掉路径末尾可能残留的逗号/句号等
+      if (profileUrl) profileUrl = profileUrl.replace(/([\u4e00-\u9fa5A-Za-z0-9])[，,.;；:：]+([?#]|$)/g, '$1$2');
+      if (profileUrl) {
+        try {
+          log('info', 'extractPageInfo',
+            `[阶段3.5] 进入个人主页提取统计数据 → url=${profileUrl}, ` +
+            `before: fans=${fansCount ?? 'n/a'}, follow=${followCount ?? 'n/a'}, like=${likeCount ?? 'n/a'}`);
+          // 挂接导航跟踪器，防止"页面跳转中执行JS导致 frame disposed"
+          const profileTracker = attachNavigationTracker(win, log);
+          try {
+            await win.loadURL(profileUrl);
+          } catch (loadErr) {
+            log('warn', 'extractPageInfo', `[阶段3.5] loadURL 抛错但继续: ${(loadErr as Error).message}`);
+          }
+          try {
+            await profileTracker.waitForStable(1500, 25000);
+          } catch (_) {
+            log('warn', 'extractPageInfo', '[阶段3.5] waitForStable 超时，继续（可能SPA页面已部分渲染）');
+          }
+          await sleep(1800); // 给微博个人主页顶部统计卡片留出异步渲染时间
+
+          // 个人主页统计卡片提取脚本：针对用户确认过的新版微博个人主页 DOM
+          // 原则：个人主页是**唯一权威源**，结果以这里为准 —— 先清零，再按严格策略从外向内填
+          // 用户真实页面示例（头部统计区 _h4_1yc79_82）：
+          //   <div class="_h4_1yc79_82">
+          //     <a href="/u/page/follow/{UID}?relate=fans"><span class="_h5_1yc79_100"><span>1</span>粉丝 </span></a>
+          //     <a href="/u/page/follow/{UID}?relate=">    <span class="_h5_1yc79_100"><span>50</span>关注 </span></a>
+          //     <a class="_statusCounter_1yc79_360">       <span class="_h5_1yc79_100"><span>0</span>转评赞 </span></a>
+          //   </div>
+          const statsResult: any = await win.webContents.executeJavaScript(`
+            (function() {
+              try {
+                function _pn(s) {
+                  if (!s) return null;
+                  var t = String(s).replace(/\\s+/g, '').replace(/,/g, '');
+                  var base = parseFloat(t);
+                  if (isNaN(base)) return null;
+                  if (t.indexOf('万') !== -1) base *= 10000;
+                  else if (t.indexOf('千') !== -1) base *= 1000;
+                  else if (t.indexOf('百') !== -1) base *= 100;
+                  else if (t.indexOf('亿') !== -1) base *= 100000000;
+                  return Math.round(base);
+                }
+                // ✅ 精确锁定「头部主统计卡片」：父容器 className 同时含 _box1_* + _h4_*（用户给的真实 DOM 就是这个）
+                //   真实结构：div._box1_1yc79_55
+                //               div._h3_1yc79_78 (昵称行)
+                //               div._h4_1yc79_82 ← 统计行，所有 a.relate 和 _statusCounter_ 都在里面
+                // 任何不在这个精确结构里的数字（侧边栏「1分组」「1 条消息」「关注 1 个博主」）全部排除
+                function _inProfileHeader(el) {
+                  if (!el) return false;
+                  var cur = el;
+                  for (var up = 0; up < 8 && cur; up++, cur = cur.parentElement) {
+                    var cls = (cur.className || '') + '';
+                    if (typeof cls !== 'string') continue;
+                    // 直接落在 _h4_*（统计行）或 _statusCounter_*（转评赞容器）就算命中
+                    if (/_h4_/.test(cls)) return true;
+                    if (/_statusCounter_/.test(cls)) return true;
+                  }
+                  return false;
+                }
+                var out = { fansCount: null, followCount: null, likeCount: null };
+                // 命中来源调试：每条赋值都记录，返回时一并带回给主进程打日志用
+                var src = { fans: '', follow: '', like: '' };
+                function _s(k, v, why) {
+                  if (src[k]) return;
+                  src[k] = (why || k) + '=' + v;
+                }
+                function _set(labelTxt, numVal, why) {
+                  if (numVal === null || !labelTxt) return false;
+                  if ((/粉丝/.test(labelTxt)) && out.fansCount === null) { out.fansCount = numVal; _s('fans', numVal, why || labelTxt); return true; }
+                  if (/关注/.test(labelTxt) && /关注我|互相关注|分组|特别关注|悄悄关注|共同关注|关注的人|关注TA|关注他|关注她|关注一个人|关注博主|关注用户|关注列表|的关注/.test(labelTxt) === false && out.followCount === null) { out.followCount = numVal; _s('follow', numVal, why || (labelTxt+'|关注')); return true; }
+                  if ((/获赞|转评赞|点赞数/.test(labelTxt)) && out.likeCount === null) { out.likeCount = numVal; _s('like', numVal, why || (labelTxt+'|转评赞')); return true; }
+                  // 单纯"点赞"太容易被「点赞 1」按钮误判，仅当 >=10 或含单位才接受
+                  if (/点赞/.test(labelTxt) && !/点赞数|获赞|转评赞/.test(labelTxt) && (numVal >= 10 || /万|千|亿/.test(labelTxt))) {
+                    if (out.likeCount === null) { out.likeCount = numVal; _s('like', numVal, why || (labelTxt+'|点赞')); return true; }
+                  }
+                  return false;
+                }
+
+                // ---------- 策略 1【最高优先级 · 强绑定头部容器】：_h4_* 父容器下的 span._h5_* / _statusCounter_ 内 span
+                //   新版微博个人主页唯一正确 DOM，只在这个层级里扫，避免侧边栏/页脚干扰
+                try {
+                  var headerStats = document.querySelectorAll(
+                    'div[class*="_h4_"] span[class*="_h5_"], div[class*="_h3_"] span[class*="_h5_"], a[class*="_statusCounter_"] span'
+                  );
+                  var hsi, hsEl, hsText, hsNumTxt, hsLabel, hsNum, hsInner;
+                  for (hsi = 0; hsi < headerStats.length; hsi++) {
+                    hsEl = headerStats[hsi];
+                    if (!_inProfileHeader(hsEl)) continue;
+                    hsText = (hsEl.textContent || '').trim();
+                    if (!hsText || hsText.length > 30) continue;
+                    hsNum = null;
+                    hsInner = hsEl.querySelector && hsEl.querySelector('span');
+                    if (hsInner) hsNum = _pn(hsInner.textContent);
+                    if (hsNum === null) {
+                      hsNumTxt = hsText.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)/);
+                      if (hsNumTxt && hsNumTxt[1]) hsNum = _pn(hsNumTxt[1]);
+                    }
+                    if (hsNum === null) continue;
+                    hsLabel = hsText.replace(/\\d+(?:\\.\\d+)?[万千百亿]?/g, '').trim();
+                    if (hsLabel) _set(hsLabel, hsNum, '策略1_h4_h5|' + hsLabel);
+                  }
+                } catch(_) { /* ignore */ }
+
+                // ---------- 策略 2【URL query 精确 · 强绑定头部容器】：a[href*="relate="] 在头部统计区里
+                //   ?relate=fans → 粉丝数；?relate=（空）→ 关注数；_statusCounter_ class → 转评赞
+                try {
+                  var aLinks = document.querySelectorAll('a[href*="relate="], a[class*="_statusCounter_"]');
+                  var ai, aEl, aHref, aClass, aContent, aMatch, aVal;
+                  for (ai = 0; ai < aLinks.length; ai++) {
+                    aEl = aLinks[ai];
+                    if (!_inProfileHeader(aEl)) continue;
+                    aHref = (aEl.getAttribute('href') || '').toLowerCase();
+                    aClass = aEl.className || '';
+                    aContent = aEl.textContent || '';
+                    aMatch = aContent.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)/);
+                    if (!aMatch || !aMatch[1]) continue;
+                    aVal = _pn(aMatch[1]);
+                    if (aVal === null) continue;
+                    if (/relate=fans(&|$)/.test(aHref) || aHref.indexOf('?relate=fans') !== -1) {
+                      if (out.fansCount === null) { out.fansCount = aVal; _s('fans', aVal, '策略2_relate=fans'); }
+                    } else if (/relate=(&|$)/.test(aHref) || (/relate=/.test(aHref) && !/relate=fans/.test(aHref))) {
+                      // relate=（空值）或 relate=非fans → 关注
+                      if (out.followCount === null) { out.followCount = aVal; _s('follow', aVal, '策略2_relate=空'); }
+                    }
+                    if (/_statusCounter_/.test(aClass) || /转评赞/.test(aContent)) {
+                      if (out.likeCount === null) { out.likeCount = aVal; _s('like', aVal, '策略2_statusCounter'); }
+                    }
+                  }
+                } catch(_) { /* ignore */ }
+
+                // ---------- 策略 3（兜底 · 必须在头部容器内）：兄弟节点 strong/b/em + 标签 ----------
+                try {
+                  var strongs = document.querySelectorAll('strong, b, em');
+                  var si, sb, sibCh, sibTxt, sibVal;
+                  for (si = 0; si < strongs.length; si++) {
+                    sb = strongs[si];
+                    if (!_inProfileHeader(sb)) continue;
+                    sibVal = _pn(sb.textContent || '');
+                    if (sibVal === null) continue;
+                    if (sb.parentNode && sb.parentNode.children) {
+                      for (var sbi = 0; sbi < sb.parentNode.children.length; sbi++) {
+                        sibCh = sb.parentNode.children[sbi];
+                        if (sibCh === sb) continue;
+                        sibTxt = (sibCh.textContent || '').trim();
+                        if (sibTxt && sibTxt.length <= 10) {
+                          if (_set(sibTxt, sibVal, '策略3_strong|' + sibTxt)) break;
+                        }
+                      }
+                    }
+                  }
+                } catch(_) { /* ignore */ }
+
+                // ---------- 策略 4（兜底 · 必须在头部容器内）：class 含 number/count/num/stat ----------
+                try {
+                  var numEls = document.querySelectorAll(
+                    '[class*="number"], [class*="Number"], [class*="count"], [class*="Count"], [class*="num"], [class*="Num"], [class*="stat"]'
+                  );
+                  for (var ni = 0; ni < numEls.length; ni++) {
+                    var ne = numEls[ni];
+                    if (!_inProfileHeader(ne)) continue;
+                    var nv = _pn(ne.textContent || '');
+                    if (nv === null) continue;
+                    var np = ne.parentNode;
+                    if (np && np.children) {
+                      for (var pi = 0; pi < np.children.length; pi++) {
+                        var pch = np.children[pi];
+                        if (pch === ne) continue;
+                        var ptxt = (pch.textContent || '').trim();
+                        if (ptxt && ptxt.length <= 10) _set(ptxt, nv, '策略4_number|' + ptxt);
+                      }
+                    }
+                  }
+                } catch(_) { /* ignore */ }
+
+                // ---------- 策略 5（兜底 · 必须在头部容器内）：a[href] 含 /follow /fans /like 路径 ----------
+                try {
+                  var statLinks = document.querySelectorAll('a[href*="/follow"], a[href*="/fans"], a[href*="/like"]');
+                  for (var li = 0; li < statLinks.length; li++) {
+                    var sel = statLinks[li];
+                    if (!_inProfileHeader(sel)) continue;
+                    var shref = (sel.getAttribute('href') || '').toLowerCase();
+                    var stxt = sel.textContent || '';
+                    var sm = stxt.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)/);
+                    if (sm && sm[1]) {
+                      var sv = _pn(sm[1]);
+                      if (sv !== null) {
+                        if (/\\/fans/.test(shref)) { if (out.fansCount === null) { out.fansCount = sv; _s('fans', sv, '策略5_/fans'); } }
+                        else if (/\\/follow[^a-z]/.test(shref) || /\\/follow$/.test(shref)) { if (out.followCount === null) { out.followCount = sv; _s('follow', sv, '策略5_/follow'); } }
+                        else if (/\\/like/.test(shref)) { if (out.likeCount === null) { out.likeCount = sv; _s('like', sv, '策略5_/like'); } }
+                      }
+                    }
+                  }
+                } catch(_) { /* ignore */ }
+
+                // ---------- 策略 6（最后兜底 · 仅当三项还缺至少 2 项时才用正文正则）：避免首页/侧栏误读
+                var missingCount = (out.fansCount===null?1:0) + (out.followCount===null?1:0) + (out.likeCount===null?1:0);
+                if (missingCount >= 2) {
+                  var btxt = document.body ? (document.body.innerText || '') : '';
+                  if (out.fansCount === null) {
+                    var fm1 = btxt.match(/(粉丝|粉丝数)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百亿]?)/);
+                    var fm2 = btxt.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)[^0-9]{0,5}(粉丝|粉丝数)(?!群|会|)/);
+                    if (fm1 && fm1[2]) { out.fansCount = _pn(fm1[2]); _s('fans', out.fansCount, '策略6_regex|粉丝+数字'); }
+                    else if (fm2 && fm2[1]) { out.fansCount = _pn(fm2[1]); _s('fans', out.fansCount, '策略6_regex|数字+粉丝'); }
+                  }
+                  if (out.followCount === null) {
+                    var fol1 = btxt.match(/(关注)[^0-9我他她TA的的]{0,5}(\\d+(?:\\.\\d+)?[万千百亿]?)/);
+                    var fol2 = btxt.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)[^0-9我他她TA的的]{0,5}(关注)(?!我|者|他|她|TA|的|分组|的人|一个人|博主|用户)/);
+                    if (fol1 && fol1[2]) { out.followCount = _pn(fol1[2]); _s('follow', out.followCount, '策略6_regex|关注+数字'); }
+                    else if (fol2 && fol2[1]) { out.followCount = _pn(fol2[1]); _s('follow', out.followCount, '策略6_regex|数字+关注'); }
+                  }
+                  if (out.likeCount === null) {
+                    var lk1 = btxt.match(/(获赞|点赞数|转评赞)[^0-9]{0,5}(\\d+(?:\\.\\d+)?[万千百亿]?)/);
+                    var lk2 = btxt.match(/(\\d+(?:\\.\\d+)?[万千百亿]?)[^0-9]{0,5}(获赞|点赞数|转评赞)/);
+                    if (lk1 && lk1[2]) { out.likeCount = _pn(lk1[2]); _s('like', out.likeCount, '策略6_regex|获赞+数字'); }
+                    else if (lk2 && lk2[1]) { out.likeCount = _pn(lk2[1]); _s('like', out.likeCount, '策略6_regex|数字+获赞'); }
+                  }
+                }
+                return { fansCount: out.fansCount, followCount: out.followCount, likeCount: out.likeCount, src: src };
+              } catch(e) {
+                return { fansCount: null, followCount: null, likeCount: null, error: String(e && e.message || e) };
+              }
+            })()
+          `).catch((err: Error) => {
+            log('warn', 'extractPageInfo', '[阶段3.5] 个人主页统计提取脚本异常: ' + err.message);
+            return null;
+          });
+
+          if (statsResult) {
+            // ⚠️ 个人主页是权威源，但要防止「命中后值极小(0~2)」的误判
+            //    真实示例：侧边栏"关注1个分组"被误读 → follow=1；"1条消息"被误读
+            //    2026-08-03 用户实际案例：hitCount=3 且 fans=1/follow=1/like=0（全小值），疑似仍命中策略1
+            const beforeFans = fansCount, beforeFollow = followCount, beforeLike = likeCount;
+            const rawFans: number | null = typeof statsResult.fansCount === 'number' ? statsResult.fansCount : null;
+            const rawFollow: number | null = typeof statsResult.followCount === 'number' ? statsResult.followCount : null;
+            const rawLike: number | null = typeof statsResult.likeCount === 'number' ? statsResult.likeCount : null;
+            const hitCount = (rawFans !== null ? 1 : 0) + (rawFollow !== null ? 1 : 0) + (rawLike !== null ? 1 : 0);
+            const tinySuspect = (x: number | null) => x !== null && x >= 0 && x <= 2;
+            const hadFansGood = typeof beforeFans === 'number' && beforeFans > 2;
+            const hadFollowGood = typeof beforeFollow === 'number' && beforeFollow > 2;
+            const hadLikeGood = typeof beforeLike === 'number' && beforeLike > 2;
+            const beforeAnyGood = hadFansGood || hadFollowGood || hadLikeGood;
+            let finalFans = rawFans, finalFollow = rawFollow, finalLike = rawLike;
+            let distrustReason = '';
+            const tinyCount = (tinySuspect(rawFans) ? 1 : 0) + (tinySuspect(rawFollow) ? 1 : 0) + (tinySuspect(rawLike) ? 1 : 0);
+            if (hitCount === 1) {
+              // 单字段命中 + 值极小 → 99%是误抓，保留旧有效值
+              const onlyVal = rawFans ?? rawFollow ?? rawLike;
+              if (tinySuspect(onlyVal)) {
+                distrustReason = `单字段命中(hit=${hitCount})且值=${onlyVal}∈[0,2]，视为误判，保留原值`;
+                if (rawFans !== null) finalFans = hadFansGood ? beforeFans : (beforeFans ?? null);
+                if (rawFollow !== null) finalFollow = hadFollowGood ? beforeFollow : (beforeFollow ?? null);
+                if (rawLike !== null) finalLike = hadLikeGood ? beforeLike : (beforeLike ?? null);
+              }
+            } else if (hitCount >= 2 && tinyCount >= 2) {
+              // 多字段命中，且 ≥2 个是小值（包含 tinyCount===3 的情况：3个全是0~2）
+              //   - 如果 before 已有任何有效值（>2）→ 小值字段全部走「保留原值」（旧值非空覆盖，空则保留 raw，避免新账号直接被清空）
+              //   - 如果 before 全空（第一次采集，tinyCount===3）→ 打 ⚠️告警但保留 raw 值，方便人工复核（也许真是新账号）
+              if (tinyCount === 3 && !beforeAnyGood) {
+                distrustReason = `3字段全小值(0~2)且before全空 → 疑似新账号或全误读，保留原值但⚠️标记复核`;
+              } else {
+                distrustReason = `小值字段≥2(tiny=${tinyCount}/hit=${hitCount})${beforeAnyGood?'(已有有效值→小值字段保留原值)':''}`;
+                if (tinySuspect(rawFans)) finalFans = hadFansGood ? beforeFans : (beforeFans ?? rawFans);
+                if (tinySuspect(rawFollow)) finalFollow = hadFollowGood ? beforeFollow : (beforeFollow ?? rawFollow);
+                if (tinySuspect(rawLike)) finalLike = hadLikeGood ? beforeLike : (beforeLike ?? rawLike);
+              }
+            }
+            // 应用最终值
+            if (finalFans !== null) fansCount = finalFans;
+            if (finalFollow !== null) followCount = finalFollow;
+            if (finalLike !== null) likeCount = finalLike;
+            // 命中来源 debug 日志
+            const src: any = statsResult.src || {};
+            log('info', 'extractPageInfo',
+              `[阶段3.5] 完成(权威覆盖) before=(${beforeFans ?? 'n/a'}/${beforeFollow ?? 'n/a'}/${beforeLike ?? 'n/a'}) → after=(${fansCount ?? 'n/a'}/${followCount ?? 'n/a'}/${likeCount ?? 'n/a'})` +
+              (distrustReason ? ` ⚠️不信任过滤: ${distrustReason}` : '') +
+              ` 命中来源 src=fans:${src.fans || '(无)'} / follow:${src.follow || '(无)'} / like:${src.like || '(无)'}`);
+          }
+          profileTracker.dispose && profileTracker.dispose();
+        } catch (profileErr) {
+          log('warn', 'extractPageInfo',
+            `[阶段3.5] 个人主页提取失败，保留原值: ${(profileErr as Error).message}`);
+        }
+      }
     }
 
     // ---------- 阶段 4：最终 GUARD 守卫，清洗字段 ----------
     const gNick = _cleanStr(nickname);
-    const gAvatar = _normalizeUrl(avatar) || '';
     const gPid = _cleanStr(platformAccountId);
+    // ⚠️ 2026-08-03 验证：tp3.sinaimg.cn/{uid}/180/0 永久格式已 403 废弃
+    // 现在头像策略：完整保留从 DOM 提取到的带签名的 crop URL（含 KID/Expires/ssig）
+    // Referer 头绕过：由 Electron 主进程 webRequest.onBeforeSendHeaders 统一注入 Referer: https://weibo.com/
+    // 过期处理：签名失效后用户点击"刷新账号"重新采集即可
+    let gAvatar = _normalizeUrl(avatar) || '';
+    if (!gAvatar) {
+      // 兜底：如果没从 DOM 提取到任何头像，才退化使用 tp3 永久格式（即使 403 也比空好，至少渲染层知道这是微博头像可以尝试 Referer 兼容逻辑——不过它现在也是 403，所以留空即可）
+      gAvatar = '';
+    }
+    log('info', 'extractPageInfo', `[阶段4.头像] 保留带签名的 crop URL（Referer 由主进程注入）→ raw.len=${avatar.length}, gAvatar.len=${gAvatar.length}`);
 
     // 诊断日志：如果头像疑似仍有异常字符
     if (gAvatar && (gAvatar.length < 10 || /[`"'´`'"]/.test(gAvatar) || !/^https?:\/\//i.test(gAvatar))) {

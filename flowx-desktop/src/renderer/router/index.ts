@@ -14,6 +14,8 @@ const routes: RouteRecordRaw[] = [
   { path: '/publish/article', name: 'publish-article', component: () => import('@/pages/Publish.vue'), meta: { title: '发布文章' } },
   { path: '/publish/history', name: 'publish-history', component: () => import('@/pages/History.vue'), meta: { title: '发布历史' } },
   { path: '/analytics', name: 'analytics', component: () => import('@/pages/AnalyticsPanel.vue'), meta: { title: '账号分析' } },
+  // 快速发布独立窗口专用路由：复用 Publish.vue，但隐藏顶部导航菜单
+  { path: '/quick-publish', name: 'quick-publish', component: () => import('@/pages/Publish.vue'), meta: { title: '快速发布', hideHeader: true } },
   { path: '/drafts', name: 'drafts', component: () => import('@/pages/DraftBox.vue'), meta: { title: '草稿箱' } },
   { path: '/browser', name: 'browser', component: () => import('@/pages/Browser.vue'), meta: { title: '浏览器' } },
   // 兼容旧链接：/history -> 发布历史子菜单

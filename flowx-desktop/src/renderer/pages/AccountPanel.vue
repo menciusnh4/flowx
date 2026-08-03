@@ -818,14 +818,38 @@ function cleanAvatarStr(v: unknown): string {
  *  2. 协议相对路径补 https
  *  3. 正则从噪音中提取首个 http(s) URL
  *  4. B 站自有域名 http→https
- *  5. 最后按 RFC3986 合法 URL 字符截一次（去除末尾粘的中文标点/括号等） */
-function normalizeAvatarSrc(rawInput: string): string {
+ *  5. 微博 sinaimg.cn 防盗链：⚠️2026-08-03 起 tp3 永久格式已 403 废弃，改为保留完整带签名的 URL；
+ *     Referer 注入由 Electron 主进程 BrowserEnvService.setupImageAntiHotlink() 统一加 Referer: https://weibo.com/
+ *  6. 最后按 RFC3986 合法 URL 字符截一次（去除末尾粘的中文标点/括号等） */
+function normalizeAvatarSrc(rawInput: string, platform?: string, uid?: string): string {
+  const _unused = { platform, uid }; // 保留签名兼容旧调用；2026-08-03 起不再用 platform+uid 生成 tp3 永久格式（已 403）
+  void _unused;
   const cleaned = cleanAvatarStr(rawInput);
   if (!cleaned) return '';
   if (cleaned.indexOf('data:') === 0) return cleaned; // dataURI 原样返回（前端的默认图偶尔是 dataURL）
   if (cleaned.indexOf('1x1') !== -1 && cleaned.indexOf('base64') !== -1) return '';
   if (cleaned.indexOf('transparent') !== -1 && cleaned.indexOf('base64') !== -1) return '';
   let url = cleaned;
+  // ✅ flowx-avatar 自定义协议（主进程 protocol.handle 映射到 userData/avatars/）→ 直接透传
+  if (/^flowx-avatar:\/\//i.test(url)) return url;
+  if (url.startsWith('data:')) return url;
+  // ✅ 本地文件路径（AccountService 迁移期或老版本遗留的磁盘绝对路径）→ 补 file:// 协议
+  if (url.startsWith('file://')) {
+    return url;
+  }
+  // Windows 绝对路径：C:\... 或 D:/...
+  if (/^[A-Za-z]:[\\/]/.test(url)) {
+    try {
+      const normalized = url.replace(/\\/g, '/');
+      return 'file:///' + normalized.replace(/^\/+/, '');
+    } catch {
+      return url;
+    }
+  }
+  // macOS / Linux 绝对路径 /Users/... 或 /home/...
+  if (/^\/(Users|home|usr|var|tmp|AppData|app|private|Library)\/\w/.test(url) || /^\/(Documents|Desktop|Downloads)/i.test(url)) {
+    return 'file://' + url;
+  }
   if (url.indexOf('//') === 0) url = 'https:' + url;
   if (url.indexOf('http:') !== 0 && url.indexOf('https:') !== 0) {
     const m = url.match(/https?:\/\/[^\s"'`<>【】《》（）()[\]{}，,。;；:：]+/i);
@@ -853,6 +877,11 @@ function normalizeAvatarSrc(rawInput: string): string {
         if (isBili && url.indexOf('http:') === 0) {
           url = 'https:' + url.substring(5);
         }
+        // —— 微博防盗链（2026-08-03 新策略）——
+        //   ❌ tp3.sinaimg.cn/{uid}/180/0 永久格式现已 403 废弃，不再生成
+        //   ❌ 不再剥除 KID/Expires/ssig 等签名参数（剥完 sinaimg.cn 的 crop 路径直接 403，必须带签名 + Referer 才放行）
+        //   ✅ Referer 头由 Electron 主进程 BrowserEnvService 统一注入（见 setupImageAntiHotlink weibo origins）
+        //   ✅ 历史旧数据：如果是 tp3 永久格式，还是原样返回（主进程注入 Referer 后也许放行，但大概率仍是 403，过期后用户点击刷新重新采集即可）
       }
     } catch {
       /* ignore */
@@ -937,8 +966,12 @@ function avatarSlotImgSrc(acc: AccountInfo): string {
   if (!raw) return '';
   // Step 1：hardStripBackticks 先剥反引号（B 站这轮的根因）+ 从 /bfs/face/ 抽取真路径
   const s0 = hardStripBackticks(raw, acc.platform);
-  // Step 2：normalizeAvatarSrc 补协议（//xxx → https:）+ 从噪音里提取 URL + B 站域名强制 https
-  const s1 = normalizeAvatarSrc(s0);
+  // Step 2：normalizeAvatarSrc 补协议（//xxx → https:）+ 从噪音中提取 URL + 域名强制 https
+  //         微博额外传 platform + userId 入参：
+  //           - 若 userId 是可靠 uid（^\d{5,12}$）→ 直接用永久格式 tp3.sinaimg.cn/{uid}/180/0
+  //           - 否则 sinaimg.cn 带签名 query 全部剥掉
+  const uid = acc.userId || acc.platformAccountId || '';
+  const s1 = normalizeAvatarSrc(s0, acc.platform, uid);
   // Step 3：如果 s1 还是空（因为 normalizeAvatarSrc 对一些未知协议/相对路径比较严格），
   //         但 s0 已经是合法 http(s) 开头，就直接用 s0（防御"规范化函数把值吃了"）
   let finalSrc = s1;
@@ -963,6 +996,7 @@ function avatarSlotImgSrc(acc: AccountInfo): string {
         `raw.head=[${headCh.join(' | ')}] raw.tail=[${tailCh.join(' | ')}] ` +
         `(2)strip="${s0.substring(0, 160)}" ` +
         `(3)norm="${s1.substring(0, 160)}" ` +
+        `uid_for_perm="${uid}"(usable=${/^\d{5,12}$/.test(uid) ? 'YES' : 'NO'}) ` +
         `→ finalSrc truthy=!!${!!finalSrc}` +
         (finalSrc ? `, finalSrc="${finalSrc.substring(0, 160)}"` : ''),
     );

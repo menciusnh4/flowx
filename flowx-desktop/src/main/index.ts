@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, protocol } from 'electron';
 import path from 'path';
+import fs from 'fs';
 import { registerAllIpc } from './ipc';
 import { createMainWindow, getMainWindow, getAppIcon } from './windows/MainWindow';
 import { setupLogger, logger } from './utils/logger';
@@ -11,6 +12,14 @@ import { AnalyticsService } from './services/analytics/AnalyticsService';
 import { ApiServer } from './services/ApiServer';
 import { registerMediaProtocol } from './protocols/mediaProtocol';
 import { registerNewTabProtocol } from './services/NewTabPageService';
+import { TrayService } from './services/TrayService';
+
+/** 账号头像自定义协议：`flowx-avatar://avatar/acc_{id}_{hash}.jpg`
+ *  目的：避开 MainWindow.webSecurity=true 下 http://localhost + file:// 本地图片直接加载被浏览器安全策略拦截的问题。
+ *  实际磁盘路径 = app.getPath('userData')/avatars/ + URL filename
+ */
+const FLOWX_AVATAR_SCHEME = 'flowx-avatar';
+const FLOWX_AVATAR_HOST = 'avatar';
 
 // 注册自定义协议为标准方案（必须在 app ready 之前调用）
 protocol.registerSchemesAsPrivileged([
@@ -23,7 +32,63 @@ protocol.registerSchemesAsPrivileged([
       stream: true,
     },
   },
+  {
+    scheme: FLOWX_AVATAR_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true, // 允许渲染层 fetch
+      stream: true,          // 允许以流式返回二进制图片
+      bypassCSP: true,       // 避开 Content-Security-Policy 拦截
+      corsEnabled: true,     // CORS 允许
+    },
+  },
 ]);
+
+/** 把 flowx-avatar://avatar/{filename} 请求映射到本地磁盘 userData/avatars/{filename} 文件 */
+function registerAvatarProtocol(): void {
+  protocol.handle(FLOWX_AVATAR_SCHEME, async (request) => {
+    try {
+      const url = new URL(request.url);
+      if (url.hostname !== FLOWX_AVATAR_HOST) {
+        return new Response('Bad Host', { status: 400 });
+      }
+      const avatarsDir = path.join(app.getPath('userData'), 'avatars');
+      // 安全：禁止 ".." 目录穿越
+      let fileName = decodeURIComponent(url.pathname.replace(/^\//, '').replace(/\//g, ''));
+      if (!fileName || fileName.includes('..') || /[<>:"|?*\\]/.test(fileName)) {
+        return new Response('Bad FileName', { status: 400 });
+      }
+      const filePath = path.join(avatarsDir, fileName);
+      if (!fs.existsSync(filePath)) {
+        return new Response('Not Found', { status: 404 });
+      }
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile() || stat.size < 200) {
+        return new Response('Invalid File', { status: 404 });
+      }
+      const ext = path.extname(fileName).slice(1).toLowerCase();
+      const mime: Record<string, string> = {
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+        gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', svg: 'image/svg+xml',
+      };
+      const contentType = mime[ext] || 'image/jpeg';
+      const data = fs.readFileSync(filePath);
+      return new Response(data, {
+        status: 200,
+        headers: {
+          'Content-Type': contentType,
+          'Content-Length': String(stat.size),
+          'Cache-Control': 'public, max-age=31536000, immutable',
+        },
+      });
+    } catch (e: any) {
+      logger.warn(`[AvatarProtocol] 异常: ${e?.message || String(e)}`);
+      return new Response('Error', { status: 500 });
+    }
+  });
+}
+export { FLOWX_AVATAR_SCHEME, FLOWX_AVATAR_HOST, registerAvatarProtocol };
 
 // FlowX 主进程入口
 // 负责: 窗口管理、IPC 注册、服务初始化、生命周期事件
@@ -137,6 +202,9 @@ async function bootstrap() {
   // 注册新标签页协议
   registerNewTabProtocol();
 
+  // 注册账号头像本地自定义协议（flowx-avatar://avatar/...），解决 webSecurity=true 下本地 file:// 图片加载被拦截
+  registerAvatarProtocol();
+
   // 初始化业务服务
   AccountService.init();
   PublishEngine.init();
@@ -151,6 +219,9 @@ async function bootstrap() {
   // 注册所有 IPC 监听
   registerAllIpc();
 
+  // 初始化系统托盘（必须在窗口创建之后，因为托盘需要引用主窗口）
+  TrayService.init();
+
   // 测试模式（FLOWX_TEST=1）：启动后 2 秒自动退出，用于冒烟测试
   if (process.env.FLOWX_TEST === '1') {
     setTimeout(() => {
@@ -159,11 +230,26 @@ async function bootstrap() {
     }, 2500);
   }
 
-  // 当所有窗口关闭时（macOS 除外）退出应用
+  // 当所有窗口关闭时
+  // - 如果有托盘且用户选择了托盘模式，则不退出，继续在后台运行
+  // - macOS 原有的 dock 行为保持不变
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-      app.quit();
+    if (process.platform === 'darwin') {
+      // macOS：不退出，点击 Dock 图标会在 activate 事件中重建窗口
+      return;
     }
+    // Windows/Linux：检查是否有托盘在运行
+    // 如果托盘已初始化，则保持应用在后台运行（用户可以通过托盘菜单"退出"来完全关闭）
+    // （TrayService 内部有 initialized 标志，但这里通过间接方式：
+    //  如果用户保存的关闭行为是 'tray'，或者托盘菜单已被初始化过，就不退出）
+    const savedBehavior = TrayService.getSavedCloseBehavior();
+    if (savedBehavior === 'tray') {
+      // 用户明确选择了"托盘模式"，保持后台运行
+      logger.info('[FlowX] 所有窗口已关闭，保持后台运行（托盘模式）');
+      return;
+    }
+    // 否则正常退出
+    app.quit();
   });
 
   app.on('activate', () => {

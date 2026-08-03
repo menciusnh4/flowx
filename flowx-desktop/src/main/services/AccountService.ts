@@ -1,5 +1,10 @@
-import { session, BrowserWindow } from 'electron';
+import { session, BrowserWindow, app } from 'electron';
 import crypto from 'crypto';
+import path from 'path';
+import fs from 'fs';
+import https from 'https';
+import http from 'http';
+import { URL } from 'url';
 import { getStore, encrypt, decrypt } from '../store/SecureStore';
 import { logger } from '../utils/logger';
 import { BrowserEnvService } from './BrowserEnvService';
@@ -227,7 +232,19 @@ export class AccountService {
       try {
         const extracted = await platform.extractPageInfo(win);
         if (extracted.nickname) list[idx].nickname = extracted.nickname;
-        if (extracted.avatar) list[idx].avatar = extracted.avatar;
+        // ✅ 头像先下载到本地（和 Account-Refresh / Account-Auth 两入口保持一致，避免批量检测只存远程 URL）
+        if (extracted.avatar) {
+          try {
+            list[idx].avatar = await AccountService.downloadAvatarToLocal(
+              extracted.avatar,
+              cred.id,
+              cred.platform as PlatformType,
+            );
+          } catch (dlErr) {
+            logger.warn(`[Account-Health] 头像下载失败(保留原URL): ${(dlErr as Error).message}`);
+            list[idx].avatar = extracted.avatar;
+          }
+        }
         if (extracted.platformAccountId) list[idx].platformAccountId = extracted.platformAccountId;
         if (typeof extracted.fansCount === 'number') list[idx].fansCount = extracted.fansCount;
         if (typeof extracted.followCount === 'number') list[idx].followCount = extracted.followCount;
@@ -664,6 +681,15 @@ export class AccountService {
           }
 
           // -------- Step 6: 构造凭证并持久化 --------
+          // ✅ 头像先下载到本地（彻底避免 sinaimg.cn/xhscdn 等防盗链+签名过期导致列表头像 403）
+          let finalAvatar: string | undefined = avatar || undefined;
+          try {
+            if (finalAvatar) {
+              finalAvatar = await AccountService.downloadAvatarToLocal(finalAvatar, accountId, platformKey);
+            }
+          } catch (dlErr) {
+            logger.warn(`[Account-Auth] 头像下载失败(保留原URL): ${(dlErr as Error).message}`);
+          }
           const credential: AccountCredential = {
             id: accountId,
             platform: platformKey,
@@ -681,7 +707,7 @@ export class AccountService {
               })),
             userId,
             nickname: finalNick,
-            avatar: avatar || undefined,
+            avatar: finalAvatar,
             platformAccountId: platformAccountId || undefined,
             followCount,
             fansCount,
@@ -958,7 +984,15 @@ export class AccountService {
 
       // 更新凭证：优先用新提取的信息，保留已有字段
       const newNick = (nickname || c.nickname).trim() || c.nickname;
-      const newAvatar = avatar || c.avatar;
+      let newAvatar: string | undefined = avatar || c.avatar;
+      // ✅ 新头像下载到本地（彻底避免 sinaimg.cn/xhscdn 等防盗链+签名过期导致列表头像 403）
+      try {
+        if (avatar) { // 本次有新采集到头像才下载，没有就用原有的
+          newAvatar = await AccountService.downloadAvatarToLocal(avatar, c.id, c.platform as PlatformType);
+        }
+      } catch (dlErr) {
+        logger.warn(`[Account-Refresh] 头像下载失败(保留原URL): ${(dlErr as Error).message}`);
+      }
       const newPid = platformAccountId || c.platformAccountId;
       const newFollow = typeof followCount === 'number' ? followCount : c.followCount;
       const newFans = typeof fansCount === 'number' ? fansCount : c.fansCount;
@@ -1051,6 +1085,191 @@ export class AccountService {
   private static saveCredentials(list: AccountCredential[]): void {
     const store = getStore();
     store.set(STORAGE_KEY, list);
+  }
+
+  /** 账号头像本地持久化目录：{userData}/avatars/（不做过期清理，因为账号数据要长期显示） */
+  private static getAvatarsDir(): string {
+    const dir = path.join(app.getPath('userData'), 'avatars');
+    if (!fs.existsSync(dir)) {
+      try { fs.mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
+    }
+    return dir;
+  }
+
+  /** 自定义协议前缀：flowx-avatar://avatar/{filename} */
+  private static readonly AVATAR_SCHEME = 'flowx-avatar';
+  private static readonly AVATAR_HOST = 'avatar';
+  /** 账号头像文件前缀：avatar_{accountId}.{ext} —— 一个账号永远只有这一份文件 */
+  private static readonly AVATAR_FILE_PREFIX = 'avatar_';
+
+  /** 根据磁盘文件名构造 flowx-avatar:// 自定义协议 URL */
+  private static avatarFileToUrl(fileName: string): string {
+    return `${this.AVATAR_SCHEME}://${this.AVATAR_HOST}/${encodeURIComponent(fileName)}`;
+  }
+
+  /**
+   * 删除账号的历史头像文件（所有扩展名），确保「一个账号只保留一个头像文件」。
+   * 即使扩展名从 jpg 变 webp（content-type 变化），旧文件也会被清理。
+   * 同时清理老版本遗留的 `acc_{id}_{hash}.{ext}` 命名格式文件。
+   */
+  private static cleanupOldAvatarsFor(accountId: string): void {
+    try {
+      const dir = this.getAvatarsDir();
+      const files = fs.readdirSync(dir);
+      const newPrefix = `${this.AVATAR_FILE_PREFIX}${accountId}.`;
+      const legacyPrefix = `acc_${accountId}_`;
+      for (const fn of files) {
+        if (fn.startsWith(newPrefix) || fn.startsWith(legacyPrefix)) {
+          try {
+            const fp = path.join(dir, fn);
+            const st = fs.statSync(fp);
+            if (st.isFile()) fs.unlinkSync(fp);
+          } catch { /* ignore */ }
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  /**
+   * 下载 HTTP(S) 远程头像到本地 userData/avatars/ 目录，返回 flowx-avatar:// 自定义协议 URL。
+   * 彻底解决：sinaimg.cn / xhscdn.com / bilibili 等防盗链（Referer+签名过期）+ 本地 file:// 被 webSecurity 拦截。
+   * 文件名固定为 `avatar_{accountId}.{ext}`，下载前先删该账号所有历史文件 → 一个账号只保留一个头像。
+   * 下载失败则返回原 remoteUrl，不影响账号保存流程。
+   */
+  private static async downloadAvatarToLocal(
+    remoteUrl: string | undefined,
+    accountId: string,
+    platformKey: PlatformType,
+  ): Promise<string | undefined> {
+    if (!remoteUrl) return undefined;
+    // 已经是 flowx-avatar:// 自定义协议 → 直接透传（但刷新时也应该重新下载，所以这里判断并覆盖）
+    //   ——用户明确点击了刷新就应该覆盖本地头像，因此把协议 URL 解析回文件名，并跳过 download 逻辑（避免重复网络请求）是不合理的
+    //   所以 flowx-avatar:// 过来时也直接走 download 流程（远程 URL 可能已更换）
+    // 已经是本地文件路径（迁移期兼容）：如果是我们自己管理的 acc_/avatar_ 前缀，也应该重新下载
+    let parsed: URL;
+    try {
+      // flowx-avatar:// 或 file:// 都不是 http(s)，尝试解析真实远程 URL 失败时就回退为直接返回
+      if (remoteUrl.startsWith(`${this.AVATAR_SCHEME}://`)) {
+        // flowx-avatar:// 通常是上次保存的结果，如果用户是点刷新，传入的 remoteUrl 应该是这次从 DOM 新拿到的 http(s) URL，不该是 flowx-avatar，
+        // 所以走到这里一般是异常场景：直接透传即可。
+        return remoteUrl;
+      }
+      parsed = new URL(remoteUrl);
+    } catch { return remoteUrl; }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      // 本地磁盘路径 / dataURI / 其他协议 → 不处理，直接返回
+      return remoteUrl;
+    }
+
+    // 根据平台确定 Referer（微博必须带 Referer+签名才放行；小红书默认 referer 也填官方域名）
+    let referer = parsed.origin + '/';
+    if (platformKey === 'weibo') referer = 'https://weibo.com/';
+    else if (platformKey === 'xiaohongshu') referer = 'https://www.xiaohongshu.com/';
+    else if (platformKey === 'douyin') referer = 'https://www.douyin.com/';
+    else if (platformKey === 'bilibili') referer = 'https://www.bilibili.com/';
+    else if (platformKey === 'kuaishou') referer = 'https://www.kuaishou.com/';
+    else if (platformKey === 'wechat_channels' || platformKey === 'wechat_official') referer = 'https://channels.weixin.qq.com/';
+    else if (platformKey === 'zhihu') referer = 'https://www.zhihu.com/';
+
+    // 先猜一个扩展名（根据 URL），下载后再按 Content-Type 修正
+    let initialExt = path.extname(parsed.pathname).slice(1).toLowerCase();
+    if (!initialExt || !['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(initialExt)) {
+      initialExt = 'jpg';
+    }
+    const dir = this.getAvatarsDir();
+    // ✅ 每个账号只留一个文件：先删掉这个账号历史所有头像
+    this.cleanupOldAvatarsFor(accountId);
+
+    const initialFilename = `${this.AVATAR_FILE_PREFIX}${accountId}.${initialExt}`;
+    const initialPath = path.join(dir, initialFilename);
+
+    const isHttps = parsed.protocol === 'https:';
+    const timeoutMs = 12000;
+    return new Promise<string | undefined>((resolve) => {
+      try {
+        const requester = isHttps ? https : http;
+        const req = requester.request({
+          hostname: parsed.hostname,
+          port: parsed.port || (isHttps ? 443 : 80),
+          path: parsed.pathname + parsed.search,
+          method: 'GET',
+          timeout: timeoutMs,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            'Referer': referer,
+          },
+        }, (res) => {
+          if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 303 || res.statusCode === 307 || res.statusCode === 308) {
+            const loc = res.headers.location;
+            if (loc) {
+              // 重定向：因为 cleanupOldAvatarsFor 已经删过一次，递归时不要再删（否则会把刚写的临时文件删了）——
+              // 实际上递归开始时不会走到 finish 写文件，所以重复 cleanup 也 OK，但为了安全直接在递归调用里跳过清理：
+              // 简单做法：不走递归，当前返回原 remoteUrl fallback
+              // （如果一定要支持重定向，需要封装内部 _download 不做 cleanup，外部 wrapper 清一次。这里保持简单：重定向直接 fallback 不处理）
+              logger.warn(`[Account-Avatar] 跳过重定向(${res.statusCode}): ${String(loc).slice(0, 80)}`);
+              resolve(remoteUrl);
+              return;
+            }
+          }
+          if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+            logger.warn(`[Account-Avatar] 下载失败 HTTP ${res.statusCode}: ${remoteUrl.slice(0, 100)}`);
+            resolve(remoteUrl);
+            return;
+          }
+          const ct = (res.headers['content-type'] || '').toLowerCase();
+          if (ct && !ct.startsWith('image/')) {
+            logger.warn(`[Account-Avatar] 返回非图片 Content-Type: ${ct}, url=${remoteUrl.slice(0, 80)}`);
+            resolve(remoteUrl);
+            return;
+          }
+          // 按 content-type 修正最终扩展名
+          let realExt = initialExt;
+          if (ct.includes('webp')) realExt = 'webp';
+          else if (ct.includes('png')) realExt = 'png';
+          else if (ct.includes('gif')) realExt = 'gif';
+          else if (ct.includes('jpeg') || ct.includes('jpg')) realExt = 'jpg';
+          const finalFilename = `${this.AVATAR_FILE_PREFIX}${accountId}.${realExt}`;
+          const finalPath = path.join(dir, finalFilename);
+          // 如果 content-type 修正后扩展名不同，再对 finalPath 做一次同账号清理（避免 jpg 和 webp 两份都留着）
+          if (finalFilename !== initialFilename) {
+            try {
+              if (fs.existsSync(initialPath)) fs.unlinkSync(initialPath);
+            } catch { /* ignore */ }
+          }
+          const ws = fs.createWriteStream(finalPath);
+          res.pipe(ws);
+          ws.on('finish', () => {
+            try {
+              ws.close();
+              const st = fs.statSync(finalPath);
+              if (st.size < 200) {
+                try { fs.unlinkSync(finalPath); } catch { /* ignore */ }
+                resolve(remoteUrl);
+                return;
+              }
+              logger.info(`[Account-Avatar] 头像保存本地成功: ${finalFilename} (${st.size}bytes, id=${accountId}, platform=${platformKey})`);
+              resolve(this.avatarFileToUrl(finalFilename));
+            } catch {
+              resolve(remoteUrl);
+            }
+          });
+          ws.on('error', () => {
+            try { fs.unlinkSync(finalPath); } catch { /* ignore */ }
+            resolve(remoteUrl);
+          });
+        });
+        req.on('timeout', () => { req.destroy(); resolve(remoteUrl); });
+        req.on('error', (e) => {
+          logger.warn(`[Account-Avatar] 请求失败: ${e.message}, url=${remoteUrl.slice(0, 80)}`);
+          resolve(remoteUrl);
+        });
+        req.end();
+      } catch (e) {
+        logger.warn(`[Account-Avatar] 异常: ${(e as Error).message}`);
+        resolve(remoteUrl);
+      }
+    });
   }
 
   private static saveCredential(cred: AccountCredential): void {
