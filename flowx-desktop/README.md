@@ -135,6 +135,13 @@ flowx-desktop/
 - 微博基于 `SUB` cookie 登录态 + 访客态（visitorSign）+ 个人tab/创作中心头像结构识别三重判断，`me.weibo.com` 创作中心支持「微博号（自定义）」和纯数字 UID 双 ID 提取，自有 CDN 域名强制升级 https；已完整支持视频发布（`weibo.com/upload/channel`，含封面生成等待 10 张候选图）和图文/纯文本发布（`weibo.com` 首页发布卡片，图片上传后校验缩略图+删除按钮）
 - 支持刷新 token、编辑备注、删除账号
 - 支持点击"打开创作中心"直接跳到对应平台后台
+- **账号头像本地持久化（v0.1.5）**：
+  - 三个入口统一覆盖：账号授权、刷新账号、批量健康检测都会把远程头像下载到本地
+  - 每个账号只保留一份文件：`{userData}/avatars/avatar_{accountId}.{ext}`，下载前自动清理同账号所有历史头像（含旧 `acc_{id}_{hash}.{ext}` 命名格式）
+  - **`flowx-avatar://` 自定义协议**：`flowx-avatar://avatar/{filename}` 由主进程 `protocol.handle` 拦截并直接返回本地文件二进制 Buffer，绕过 `webSecurity=true` 下 `file://` 在 `http://localhost`/生产窗口里被浏览器安全策略拦截的问题
+  - **平台级 Referer 注入下载**：微博（weibo.com）、小红书（xiaohongshu.com）、抖音（douyin.com）、B站（bilibili.com）、快手（kuaishou.com）、微信视频号/公众号（channels.weixin.qq.com）、知乎（zhihu.com）都携带正确 Referer + 通用 UA 下载，绕过 sinaimg.cn/xhscdn 等域名的防盗链 + 短期签名校验
+  - 失败自动 fallback：任何网络异常、非 2xx、非图片 Content-Type、<200 字节小文件都回退原远程 URL，绝不影响账号保存流程
+  - 渲染层兜底：`AccountPanel.vue` / `AnalyticsPanel.vue` 的 normalize 函数优先识别 `flowx-avatar://` 协议透传，兼容 `file:///C:/...` 磁盘绝对路径、`data:` URI、`//xxx` 协议相对 URL
 
 ### ✅ 账号数据分析
 
@@ -241,6 +248,42 @@ flowx-desktop/
 - 不同账号的 cookies、LocalStorage、IndexedDB 完全隔离
 - 切换账号不会互相踢下线
 - 在账号浏览器窗口中也能正常使用平台后台
+
+### 头像本地持久化（Anti-Hotlink + Custom Protocol）
+
+解决 sinaimg.cn / xhscdn.com 等 CDN 域名的「防盗链 Referer + 短期签名（KID/Expires/ssig）」导致账号列表头像 403/回退首字占位的问题。
+
+```
+采集阶段（主进程）：
+  平台 DOM extractPageInfo() → 拿到带签名的 crop URL
+        ↓
+  AccountService.downloadAvatarToLocal(url, id, platform)
+        ↓ （携带对应平台 Referer + UA 直连 CDN）
+  userData/avatars/avatar_{accountId}.{ext}   ← 每个账号只保留这一份
+        ↓
+  SecureStore.avatar = "flowx-avatar://avatar/avatar_weibo_xxx.jpg"
+
+渲染阶段（前端）：
+  <img :src="normalizeAvatarSrc(cred.avatar)">
+        ↓
+  img src = "flowx-avatar://avatar/avatar_weibo_xxx.jpg"
+        ↓ （主进程 protocol.handle 拦截）
+  Response(buffer, { Content-Type: image/jpeg, Cache-Control: immutable })
+        ↓
+  页面显示本地文件二进制，完全绕过防盗链 + 签名过期
+```
+
+- **三入口覆盖**：账号授权（`beginAuthorization` Step6）、刷新账号（`refreshAccount`）、批量健康检测（`checkAccountHealth` 登录成功分支）都会走下载逻辑
+- **一账号一文件**：`cleanupOldAvatarsFor()` 每次下载前删掉该账号所有旧文件（新 `avatar_` 前缀 + 旧 `acc_` 前缀都清理）
+- **自定义协议注册**：`index.ts` 里通过 `registerSchemesAsPrivileged` 声明 `flowx-avatar`（standard + secure + supportFetchAPI + stream + bypassCSP + corsEnabled），`app.whenReady` 后 `protocol.handle` 拦截；文件名严格校验禁止 `..` 目录穿越
+- **Referer 精确映射**：
+  - weibo → `https://weibo.com/`
+  - xiaohongshu → `https://www.xiaohongshu.com/`
+  - douyin → `https://www.douyin.com/`
+  - bilibili → `https://www.bilibili.com/`
+  - kuaishou → `https://www.kuaishou.com/`
+  - wechat_channels / wechat_official → `https://channels.weixin.qq.com/`
+  - zhihu → `https://www.zhihu.com/`
 
 ### 平台适配器模式
 

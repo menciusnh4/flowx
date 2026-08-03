@@ -4,6 +4,37 @@ import { session, net } from 'electron';
 import type { ProxyConfig, BrowserEnvironment, ProxyTestResult } from '../../types';
 
 const IMAGE_ANTI_HOTLINK_CONFIG: Record<string, { referer: string; origins: string[] }> = {
+  weibo: {
+    referer: 'https://weibo.com/',
+    origins: [
+      'sinaimg.cn',
+      'tva1.sinaimg.cn',
+      'tva2.sinaimg.cn',
+      'tva3.sinaimg.cn',
+      'tva4.sinaimg.cn',
+      'tvax1.sinaimg.cn',
+      'tvax2.sinaimg.cn',
+      'tvax3.sinaimg.cn',
+      'tvax4.sinaimg.cn',
+      'tp1.sinaimg.cn',
+      'tp2.sinaimg.cn',
+      'tp3.sinaimg.cn',
+      'tp4.sinaimg.cn',
+      'wx1.sinaimg.cn',
+      'wx2.sinaimg.cn',
+      'wx3.sinaimg.cn',
+      'wx4.sinaimg.cn',
+      'h5.sinaimg.cn',
+      'ww1.sinaimg.cn',
+      'ww2.sinaimg.cn',
+      'ww3.sinaimg.cn',
+      'ww4.sinaimg.cn',
+      'ss1.bdstatic.com',
+      'ss2.bdstatic.com',
+      'ss3.bdstatic.com',
+      'weibocdn.com',
+    ],
+  },
   xiaohongshu: {
     referer: 'https://www.xiaohongshu.com/',
     origins: [

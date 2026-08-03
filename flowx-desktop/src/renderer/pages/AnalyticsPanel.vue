@@ -426,6 +426,22 @@ const avatarLoadError = ref<Record<string, boolean>>({});
 function normalizeAvatarUrl(src: string | undefined | null): string {
   if (!src || typeof src !== 'string') return '';
   const s = src.trim();
+  if (!s) return '';
+  // ✅ flowx-avatar 自定义协议：主进程 protocol.handle 映射到 userData/avatars/，直接透传
+  if (/^flowx-avatar:\/\//i.test(s)) return s;
+  if (s.startsWith('file://')) return s;
+  if (s.startsWith('data:')) return s;
+  // Windows 绝对路径 C:\xxx 或 D:/xxx → 补 file:/// 协议（账号头像本地持久化迁移期兼容）
+  if (/^[A-Za-z]:[\\/]/.test(s)) {
+    try {
+      const normalized = s.replace(/\\/g, '/');
+      return 'file:///' + normalized.replace(/^\/+/, '');
+    } catch { /* ignore */ }
+  }
+  // macOS / Linux 绝对路径
+  if (/^\/(Users|home|usr|var|tmp|AppData|app|private|Library)\/\w/.test(s) || /^\/(Documents|Desktop|Downloads)/i.test(s)) {
+    return 'file://' + s;
+  }
   if (s.startsWith('//')) return 'https:' + s;
   return s;
 }
