@@ -129,6 +129,31 @@ export class TrayServiceClass {
     }
   }
 
+  /** 统一弹提示框：优先以主窗口为父（让提示模态），主窗口不可用则用无主提示 */
+  private showHint(
+    type: 'info' | 'warning' | 'error',
+    title: string,
+    message: string,
+    detail?: string,
+  ): void {
+    try {
+      const win = getMainWindow();
+      const validWin = (win && !win.isDestroyed()) ? win : null;
+      const opts: Electron.MessageBoxOptions = {
+        type,
+        title,
+        message,
+        detail: detail || '',
+        buttons: ['确定'],
+        noLink: true,
+      };
+      (validWin ? dialog.showMessageBox(validWin, opts) : dialog.showMessageBox(opts))
+        .catch(() => {});
+    } catch (e) {
+      logger.debug('[TrayService] showHint 失败:', e instanceof Error ? e.message : String(e));
+    }
+  }
+
   /** 构建授权新账号的二级菜单（submenu 形式，由 Electron 原生弹出，避免 popup 冲突） */
   private buildAuthSubmenu(): Electron.MenuItemConstructorOptions['submenu'] {
     try {
@@ -139,16 +164,45 @@ export class TrayServiceClass {
       return platforms.map((p) => ({
         label: `${p.name}${p.platformAccountLabel ? `（${p.platformAccountLabel}）` : ''}`,
         click: () => {
+          const platformLabel = p.name;
           logger.info(`[TrayService] 从托盘开始授权平台: ${p.key}`);
-          AccountService.beginAuthorization(p.key as PlatformType).then((account) => {
-            logger.info(`[TrayService] 授权成功: ${account.nickname || account.id}`);
-          }).catch((err) => {
-            if (err?.message?.includes('用户取消')) {
-              logger.info(`[TrayService] 用户取消授权 (${p.key})`);
-            } else {
-              logger.warn(`[TrayService] 授权失败 (${p.key}):`, err?.message || String(err));
-            }
-          });
+          AccountService.beginAuthorization(p.key as PlatformType)
+            .then((account) => {
+              const displayName = account.nickname || account.platformAccountId || account.id;
+              logger.info(`[TrayService] 授权成功: ${displayName}`);
+              this.showHint(
+                'info',
+                '授权成功',
+                `已成功添加 ${platformLabel} 账号`,
+                `账号：${displayName}`,
+              );
+            })
+            .catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              const isCancel =
+                msg.includes('用户取消') ||
+                msg.includes('取消授权') ||
+                msg.includes('closed by user');
+
+              if (isCancel) {
+                logger.info(`[TrayService] 用户取消授权 (${p.key})`);
+                // 用户主动关了授权窗口未完成登录：给一个静默提示，避免"点了没反应"的感知
+                this.showHint(
+                  'info',
+                  '已取消授权',
+                  `${platformLabel} 授权未完成`,
+                  '您关闭了授权窗口，尚未添加新账号。如需继续使用请再次发起授权。',
+                );
+              } else {
+                logger.warn(`[TrayService] 授权失败 (${p.key}):`, msg);
+                this.showHint(
+                  'error',
+                  '授权失败',
+                  `${platformLabel} 账号授权失败`,
+                  msg || '未知错误，请查看日志获取详情后重试。',
+                );
+              }
+            });
         },
       }));
     } catch (e) {

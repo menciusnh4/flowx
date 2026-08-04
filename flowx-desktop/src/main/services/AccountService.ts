@@ -415,23 +415,90 @@ export class AccountService {
     );
 
     return new Promise<AccountInfo>((resolve, reject) => {
-      // ===== 关键安全标志：防止 trySave 被重复触发（用户点按钮+关窗会两次调用）=====
+      // ===== 关键安全标志 =====
       let isTryingToSave = false;
+      // Promise 是否已 settled：保证 resolve/reject 只调用一次，避免 IPC reply 永不返回或重复调用
+      let isSettled = false;
+      // 清所有活动定时器的统一入口（避免窗口关闭后残留导致 Promise 悬停）
+      const allTimers: { clear: () => void }[] = [];
+      const safeClear = <T extends { hasRef?: () => boolean } | undefined>(t: T, kind: 'Timeout' | 'Interval') => {
+        if (!t) return;
+        try {
+          if (kind === 'Timeout') clearTimeout(t as unknown as NodeJS.Timeout);
+          else clearInterval(t as unknown as NodeJS.Timeout);
+        } catch {
+          /* ignore */
+        }
+      };
+
+      // 安全 resolve/reject：只生效第一次，**一定顺手 teardown 关窗口 + 清定时器**
+      // （保证哪怕 trySave 卡死在某一步、由兜底分支触发 settle，窗口也能真正销毁）
+      const finishResolve = (info: AccountInfo) => {
+        if (isSettled) return;
+        isSettled = true;
+        logger.debug('[Account-Auth] Promise settled → resolve');
+        try { teardownAuthWin(); } catch { /* ignore */ }
+        resolve(info);
+      };
+      const finishReject = (err: unknown) => {
+        if (isSettled) return;
+        isSettled = true;
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.debug('[Account-Auth] Promise settled → reject:', msg);
+        try { teardownAuthWin(); } catch { /* ignore */ }
+        reject(err instanceof Error ? err : new Error(msg));
+      };
+      // 所有轮询/超时定时器统一清理
+      const cleanupAllTimers = () => {
+        for (const t of allTimers) {
+          try { t.clear(); } catch { /* ignore */ }
+        }
+        allTimers.length = 0;
+      };
+
+      // 统一销毁授权窗口 + 清定时器
+      const teardownAuthWin = () => {
+        cleanupAllTimers();
+        try { if (authWin && !authWin.isDestroyed()) authWin.destroy(); } catch { /* ignore */ }
+      };
+
+      // 任意 Promise 加超时：避免 detectLoggedIn / cookies.get / executeJavaScript 卡住导致 reply was never sent
+      const withTimeout = <T>(name: string, promise: Promise<T>, timeoutMs = 10000): Promise<T> => {
+        return new Promise<T>((res, rej) => {
+          let finished = false;
+          const timer = setTimeout(() => {
+            if (finished) return;
+            finished = true;
+            rej(new Error(`[${name}] 操作超时（${timeoutMs}ms）`));
+          }, timeoutMs);
+          allTimers.push({ clear: () => clearTimeout(timer) });
+          promise.then((r) => {
+            if (finished) return;
+            finished = true;
+            try { clearTimeout(timer); } catch { /* ignore */ }
+            res(r);
+          }).catch((e) => {
+            if (finished) return;
+            finished = true;
+            try { clearTimeout(timer); } catch { /* ignore */ }
+            rej(e);
+          });
+        });
+      };
+
       // 每次 loadURL 超时限制（避免网络慢时 Promise 悬停）
       const loadWithTimeout = (url: string, timeoutMs = 10000) => {
-        return new Promise<boolean>((done) => {
-          let finished = false;
+        return withTimeout<boolean>('loadWithTimeout', new Promise<boolean>((done) => {
           authWin.loadURL(url)
-            .then(() => { if (!finished) { finished = true; done(true); } })
-            .catch(() => { if (!finished) { finished = true; done(false); } });
-          setTimeout(() => { if (!finished) { finished = true; done(false); } }, timeoutMs);
-        });
+            .then(() => done(true))
+            .catch(() => done(false));
+        }), timeoutMs).catch(() => false);
       };
 
       const trySave = async (fromClose = false) => {
         // ===== 1. 防抖：正在处理中则直接跳过 =====
-        if (isTryingToSave) {
-          logger.info('[Account-Auth] ⏳ trySave 已在执行中，跳过重复调用');
+        if (isTryingToSave || isSettled) {
+          logger.info('[Account-Auth] ⏳ trySave 已在执行中或 Promise 已结算，跳过重复调用');
           return;
         }
         isTryingToSave = true;
@@ -445,11 +512,12 @@ export class AccountService {
           let isLoggedIn = false;
           const maxTries = fromClose ? 1 : 2; // 关闭窗口时只检测一次，不重试导航
           let tries = 0;
-          while (tries < maxTries && !authWin.isDestroyed()) {
+          while (tries < maxTries && !authWin.isDestroyed() && !isSettled) {
             const currentUrl = authWin.webContents.getURL();
             logger.info(`[Account-Auth] 当前 URL: ${currentUrl}`);
 
-            const check = await platform.detectLoggedIn(authWin);
+            // detectLoggedIn 可能会卡死（cookies.get / 大脚本 executeJavaScript）
+            const check = await withTimeout('detectLoggedIn', platform.detectLoggedIn(authWin), 8000);
             logger.info(`[Account-Auth]   → 平台检测结果: loggedIn=${check.loggedIn}, 命中关键字=${check.matchedKeywords?.join(', ') ?? '(无)'}`);
 
             if (check.loggedIn) {
@@ -463,7 +531,7 @@ export class AccountService {
             tries++;
             logger.info(`[Account-Auth]   → 尝试导航到创作者中心首页 (第 ${tries} 次): ${strategy.homeUrl}`);
             const loaded = await loadWithTimeout(strategy.homeUrl, 8000);
-            if (loaded) await sleep(2000);
+            if (loaded) await withTimeout('sleep', sleep(2000), 3000).catch(() => {});
           }
 
           // ========== 关键修复：强制登录态检查 ==========
@@ -480,7 +548,7 @@ export class AccountService {
             );
           }
 
-          // -------- Step 2: 让平台适配器从当前窗口 DOM 提取账号信息 --------
+          // -------- Step 2: 让平台适配器从当前窗口 DOM 提取账号信息（加超时，防止卡死） --------
           let nickname = '';
           let avatar = '';
           let platformAccountId = '';
@@ -489,7 +557,7 @@ export class AccountService {
           let likeCount: number | undefined;
           let extractedUserId = '';
           try {
-            const extracted = await platform.extractPageInfo(authWin);
+            const extracted = await withTimeout('extractPageInfo', platform.extractPageInfo(authWin), 10000);
             nickname = extracted.nickname;
             avatar = extracted.avatar || '';
             platformAccountId = extracted.platformAccountId || '';
@@ -502,11 +570,11 @@ export class AccountService {
             logger.warn(`[Account-Auth]   → DOM 提取失败: ${(e as Error).message}`);
           }
 
-          // -------- Step 3: 收集 cookies --------
+          // -------- Step 3: 收集 cookies（加超时，防止极端情况卡死） --------
           const sess = session.fromPartition(partition);
           let rawCookies: any[] = [];
           try {
-            rawCookies = await sess.cookies.get({});
+            rawCookies = await withTimeout('cookies.get', Promise.resolve().then(() => sess.cookies.get({})), 6000);
           } catch (e) {
             logger.warn(`[Account-Auth]   → 读取 cookies 失败: ${(e as Error).message}`);
           }
@@ -648,10 +716,15 @@ export class AccountService {
 
           // -------- Step 6: 构造凭证并持久化 --------
           // ✅ 头像先下载到本地（彻底避免 sinaimg.cn/xhscdn 等防盗链+签名过期导致列表头像 403）
+          //     给头像下载加超时，避免网络异常时 Promise 悬停
           let finalAvatar: string | undefined = avatar || undefined;
           try {
             if (finalAvatar) {
-              finalAvatar = await AccountService.downloadAvatarToLocal(finalAvatar, accountId, platformKey);
+              finalAvatar = await withTimeout(
+                'downloadAvatarToLocal',
+                AccountService.downloadAvatarToLocal(finalAvatar, accountId, platformKey),
+                15000,
+              );
             }
           } catch (dlErr) {
             logger.warn(`[Account-Auth] 头像下载失败(保留原URL): ${(dlErr as Error).message}`);
@@ -708,21 +781,22 @@ export class AccountService {
           logger.info(`  authorizedAt = ${new Date(credential.authorizedAt).toLocaleString()}`);
           logger.info('='.repeat(70) + '\n');
 
-          try { clearInterval(btnReinject); } catch { /* ignore */ }
-          try { if (!authWin.isDestroyed()) authWin.destroy(); } catch { /* ignore */ }
-          resolve(this.toInfo(persisted));
+          safeClear(btnReinject, 'Interval');
+          teardownAuthWin();
+          finishResolve(this.toInfo(persisted));
         } catch (err) {
           logger.error(`\n[Account-Auth] ❌ 授权失败: ${(err as Error).message}`);
           logger.error(`  堆栈: ${(err as Error).stack?.split('\n').slice(0, 3).join('\n')}`);
-          try { clearInterval(btnReinject); } catch { /* ignore */ }
-          try { if (!authWin.isDestroyed()) authWin.destroy(); } catch { /* ignore */ }
-          reject(err);
+          safeClear(btnReinject, 'Interval');
+          teardownAuthWin();
+          finishReject(err);
         }
       };
 
       // ================ 核心保存信号（多机制并发监听，任何一个命中即触发）================
       // 机制 1: page-title-updated（对小红书等简单页面有效）
       authWin.on('page-title-updated', (evt, title) => {
+        if (isSettled) return;
         if (title === SAVE_TITLE_MAGIC) {
           evt.preventDefault();
           logger.info(`[Account-Auth] 🎯 捕获保存信号 [title] → 开始保存流程`);
@@ -732,6 +806,7 @@ export class AccountService {
 
       // 机制 2: did-navigate-in-page（hash 变更，对 SPA/框架页面更可靠）
       authWin.webContents.on('did-navigate-in-page', (_evt, url) => {
+        if (isSettled) return;
         if (url.includes(SAVE_HASH_MAGIC)) {
           logger.info(`[Account-Auth] 🎯 捕获保存信号 [hash] → 开始保存流程 (url=${url})`);
           trySave();
@@ -741,13 +816,18 @@ export class AccountService {
       // 机制 3: 轮询兜底（每 500ms 通过 executeJavaScript 检查信号标记）
       //    应对任何事件机制都无法触发的平台（如强 CSP 或特殊 iframe 结构）
       const signalPoller = setInterval(() => {
-        if (isTryingToSave || authWin.isDestroyed()) return;
-        authWin.webContents
-          .executeJavaScript(
-            `(function(){ try { return { t: document.title, h: location.hash, f: window.__FLOWX_SAVE_NOW__ }; } catch(e) { return {}; } })()`,
-          )
-          .then((info: any) => {
-            if (!info || isTryingToSave) return;
+        if (isSettled || isTryingToSave || authWin.isDestroyed()) return;
+        withTimeout<{ t?: string; h?: string; f?: number } | undefined>(
+          'signalPoller',
+          authWin.webContents
+            .executeJavaScript(
+              `(function(){ try { return { t: document.title, h: location.hash, f: window.__FLOWX_SAVE_NOW__ }; } catch(e) { return {}; } })()`,
+            )
+            .catch(() => undefined),
+          3000,
+        )
+          .then((info) => {
+            if (!info || isSettled || isTryingToSave) return;
             const hit =
               info.t === SAVE_TITLE_MAGIC ||
               (info.h && info.h.includes(SAVE_HASH_MAGIC.replace('#', ''))) ||
@@ -759,35 +839,69 @@ export class AccountService {
           })
           .catch(() => { /* 忽略轮询过程中的临时错误 */ });
       }, 500);
+      allTimers.push({ clear: () => clearInterval(signalPoller) });
 
-      // 用户手动关闭窗口（点击 X 按钮）→ 尝试保存，但只检测一次，不重试导航
-      authWin.on('close', (e) => {
+      // 用户手动关闭窗口（点击 X 按钮）
+      // 关键改动：永不 preventDefault，确保用户"点一下 X 窗口立刻消失"的直觉体验
+      // 1) 立刻 hide：视觉上 0 延迟消失（哪怕后续 trySave 卡住也要先让用户感知"关了"）
+      // 2) 若未 trySave → 异步 trySave(true)，trySave 内部 await 检测登录态后正常 finishResolve/finishReject
+      // 3) 再加 1.5s 硬兜底 destroy：万一 close→closed 因页面卡顿没有立刻触发，也能保证窗口彻底销毁
+      // 4) 最终由 closed 事件的 guardTimer（30ms）兜底，保证 Promise 一定结算（避免 "reply was never sent"）
+      authWin.on('close', () => {
+        if (isSettled) return;
+
+        // Step 1：立即 hide——用户视觉上"点 X 立刻关了"，不等任何异步操作
+        try {
+          if (authWin && !authWin.isDestroyed() && authWin.isVisible()) {
+            authWin.hide();
+          }
+        } catch { /* ignore */ }
+
+        // Step 2：如果还没开始 trySave，就异步启动（不阻塞 close 流程）
         if (!isTryingToSave) {
-          e.preventDefault();
           logger.info(`[Account-Auth] 收到窗口关闭事件 → 尝试保存登录态...`);
-          trySave(true);
+          // 不 await，让 close 事件处理立刻返回，原生关闭流程继续走 → 窗口能立刻 closed
+          void trySave(true).catch(() => { /* trySave 内部已做 isSettled 守护，外层只吞异常 */ });
         }
+
+        // Step 3：硬兜底 1.5s 强制 destroy（应对页面/进程卡死，导致 close 后迟迟不触发 closed）
+        const hardDestroy = setTimeout(() => {
+          if (isSettled) return;
+          try {
+            if (authWin && !authWin.isDestroyed()) {
+              logger.warn('[Account-Auth] close 后 1.5s 窗口仍存活，强制 destroy');
+              authWin.destroy();
+            }
+          } catch { /* ignore */ }
+        }, 1500);
+        allTimers.push({ clear: () => clearTimeout(hardDestroy) });
       });
 
-      // 兜底超时（10 分钟）
+      // 兜底超时（10 分钟）：无论当前是否正在 trySave 中，超时都强制结算 Promise
+      // （修复原先 if(!isTryingToSave) 才 reject 导致的 "reply was never sent"）
       const timeoutHandle = setTimeout(() => {
-        if (!authWin.isDestroyed()) {
-          logger.warn(`[Account-Auth] ⏰ 授权超时，强制结束`);
-          // 如果 trySave 还没开始，直接 reject
-          if (!isTryingToSave) {
-            isTryingToSave = true;
-            clearInterval(signalPoller);
-            try { if (!authWin.isDestroyed()) authWin.destroy(); } catch { /* ignore */ }
-            reject(new Error('授权超时（10 分钟内未完成登录操作）'));
-          }
-        }
+        if (isSettled) return;
+        logger.warn(`[Account-Auth] ⏰ 授权超时，强制结束（isTryingToSave=${isTryingToSave}）`);
+        finishReject(new Error('授权超时（10 分钟内未完成登录操作）'));
       }, 10 * 60 * 1000);
+      allTimers.push({ clear: () => clearTimeout(timeoutHandle) });
 
       // 窗口被销毁时清定时器
       authWin.on('closed', () => {
-        clearTimeout(timeoutHandle);
-        clearInterval(btnReinject);
-        clearInterval(signalPoller);
+        safeClear(btnReinject, 'Interval');
+        cleanupAllTimers();
+        // 兜底：关闭/销毁后 30ms 仍未 settled（典型是 trySave 里某一步 await 卡死，
+        // 或 trySave 压根还没来得及把 isTryingToSave 置 true），
+        // 强制按"用户关闭授权窗口"语义 reject，保证 IPC reply 永不丢失 + 释放资源
+        const guardTimer = setTimeout(() => {
+          if (isSettled) return;
+          logger.warn('[Account-Auth] 窗口已关闭但 Promise 未结算，强制按"用户取消授权"兜底 reject');
+          finishReject(new Error('用户取消授权'));
+        }, 30);
+        // guardTimer 本身属于"窗口关了之后"的尾债，不需要放入 allTimers（cleanupAllTimers 已清过），
+        // 这里单独记下来：finish* 里 teardown 清不到它，没关系——定时器数量为 1 且最多 30ms，
+        // 但为了保险起见，在 finish* 里 settled=true 时 guard 内部会 isSettled 短路返回
+        void guardTimer;
       });
     });
   }
