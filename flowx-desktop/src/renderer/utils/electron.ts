@@ -205,6 +205,10 @@ export const electronApi = {
   async openFileDialog(opts?: { mode?: 'file' | 'files'; filters?: Electron.FileFilter[] }): Promise<{ canceled: boolean; filePaths: string[] }> {
     return invokeElectron('system.openFileDialog', 'system:openFileDialog', opts);
   },
+  /** 授权错误提示：统一主窗口与托盘的未登录提示（原生对话框） */
+  async showErrorBox(title: string, content: string): Promise<boolean> {
+    return invokeElectron('system.showErrorBox', 'system:showErrorBox', title, content);
+  },
   async minimizeWindow(): Promise<boolean> {
     return invokeElectron('system.minimizeWindow', 'system:minimizeWindow');
   },

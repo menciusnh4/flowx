@@ -1053,9 +1053,14 @@ async function startAuth() {
     await accountStore.refreshAccounts();
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    // 用户主动关闭窗口取消授权，不弹错误提示
-    if (msg !== '用户取消授权') {
-      ElMessage.error(msg);
+    if (msg === '用户取消授权') {
+      ElMessage.info('已取消授权');
+    } else {
+      const title = '授权失败';
+      const content = msg.includes('未检测到')
+        ? `未检测到有效登录态\n\n原因：授权窗口内未检测到平台登录状态。\n\n解决方法：\n1. 在授权窗口完成扫码或短信登录\n2. 确认已进入平台创作者中心页面\n3. 点击窗口右上角红色「保存账号」按钮\n\n仍无法解决？\n· 刷新授权窗口页面后重试\n· 关闭窗口，重新开始授权`
+        : msg;
+      electronApi.showErrorBox(title, content);
     }
   } finally {
     authing.value = false;

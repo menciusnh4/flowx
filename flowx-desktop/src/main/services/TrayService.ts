@@ -139,15 +139,24 @@ export class TrayServiceClass {
         label: `${p.name}${p.platformAccountLabel ? `（${p.platformAccountLabel}）` : ''}`,
         click: () => {
           logger.info(`[TrayService] 从托盘开始授权平台: ${p.key}`);
-          AccountService.beginAuthorization(p.key as PlatformType).then((account) => {
-            logger.info(`[TrayService] 授权成功: ${account.nickname || account.id}`);
-          }).catch((err) => {
-            if (err?.message?.includes('用户取消')) {
-              logger.info(`[TrayService] 用户取消授权 (${p.key})`);
-            } else {
-              logger.warn(`[TrayService] 授权失败 (${p.key}):`, err?.message || String(err));
-            }
-          });
+          // 先导航到账号管理页面，等页面渲染后再弹出授权窗口
+          this.navigateTo('/accounts');
+          setTimeout(() => {
+            AccountService.beginAuthorization(p.key as PlatformType).then((account) => {
+              logger.info(`[TrayService] 授权成功: ${account.nickname || account.id}`);
+            }).catch((err) => {
+              if (err?.message?.includes('用户取消')) {
+                logger.info(`[TrayService] 用户取消授权 (${p.key})`);
+              } else {
+                logger.warn(`[TrayService] 授权失败 (${p.key}):`, err?.message || String(err));
+                const rawMsg = err?.message || String(err);
+                const displayMsg = rawMsg.includes('未检测到')
+                  ? `未检测到有效登录态\n\n原因：授权窗口内未检测到平台登录状态。\n\n解决方法：\n1. 在授权窗口完成扫码或短信登录\n2. 确认已进入平台创作者中心页面\n3. 点击窗口右上角红色「保存账号」按钮\n\n仍无法解决？\n· 刷新授权窗口页面后重试\n· 关闭窗口，重新开始授权`
+                  : `${p.name} 授权失败\n\n${rawMsg}`;
+                dialog.showErrorBox('授权失败', displayMsg);
+              }
+            });
+          }, 600);
         },
       }));
     } catch (e) {
@@ -334,10 +343,9 @@ export class TrayServiceClass {
     this.navigateTo('/browser');
   }
 
-  /** 查看发布队列：导航到历史/仪表盘 */
+  /** 查看发布队列：导航到发布历史页 */
   openPublishQueue(): void {
-    // 优先导航到仪表盘，那里有发布队列信息
-    this.navigateTo('/dashboard');
+    this.navigateTo('/publish/history');
   }
 
   /** 显示关闭提示对话框：最小化到托盘 vs 退出 */

@@ -56,6 +56,12 @@ export function registerSystemIpc(): void {
     return dialog.showSaveDialog(win!, options);
   });
 
+  // 授权错误提示（统一主窗口与托盘的未登录/授权失败提示）
+  safeInvoke('system:showErrorBox', (title: string, content: string) => {
+    dialog.showErrorBox(title, content);
+    return true;
+  });
+
   // 最小化/关闭主窗口（供自定义 titlebar 使用）
   safeInvoke('system:minimizeWindow', () => {
     getMainWindow()?.minimize();

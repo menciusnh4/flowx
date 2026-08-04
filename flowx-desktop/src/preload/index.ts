@@ -173,6 +173,9 @@ contextBridge.exposeInMainWorld('electron', {
       options?: Electron.SaveDialogOptions,
     ): Promise<{ canceled: boolean; filePath?: string }> =>
       invoke('system:showSaveDialog', options),
+    /** 授权错误提示：统一主窗口与托盘的未登录/授权失败提示（原生对话框） */
+    showErrorBox: (title: string, content: string): Promise<boolean> =>
+      invoke('system:showErrorBox', title, content),
     minimizeWindow: (): Promise<boolean> => invoke('system:minimizeWindow'),
     closeWindow: (): Promise<boolean> => invoke('system:closeWindow'),
     // 窗口最大化/还原（toggle）
