@@ -70,7 +70,7 @@ flowx-desktop/
 │   │   │       ├── zhihu.ts          # 知乎
 │   │   │       ├── wechat_channels.ts # 微信视频号
 │   │   │       ├── wechat_official.ts # 微信公众号（仅账号管理）
-│   │   │       ├── toutiao.ts        # 今日头条（仅账号管理）
+│   │   │       ├── toutiao.ts        # 今日头条（账号管理 + 微头条图文一键发布）
 │   │   │       ├── x.ts              # X/Twitter（仅账号管理）
 │   │   │       ├── bilibili.ts       # B站（哔哩哔哩，仅账号管理）
 │   │   │       └── weibo.ts          # 微博（账号管理 + 视频发布 + 图文/纯文本发布）
@@ -114,6 +114,7 @@ flowx-desktop/
 │       └── index.ts                  # 全局共享类型（PublishRequest / PlatformMeta 等）
 ├── docs/
 │   └── 抖音发布稳定性修复方案.md      # 关键问题解决记录（Electron 28 → 31）
+│   └── 今日头条微头条图文发布技术文档.md  # 今日头条微头条接入（草稿撤销 / 话题匹配 / 图片去重）
 ├── package.json                      # Electron 31.7.7
 ├── vite.config.ts                    # Vite 配置
 ├── electron-builder.yml              # 打包配置（NSIS）
@@ -160,6 +161,12 @@ flowx-desktop/
 ### ✅ 一键发布
 
 - 选择多个账号 → 上传素材 → 填写标题/话题 → 一键发布
+- **今日头条微头条图文发布**（`mp.toutiao.com/profile_v4/weitoutiao/publish`）：
+  - ProseMirror 富文本编辑器正文填写（含零宽字符/换行清理）
+  - CDP 真实键盘逐个输入话题 `#文字` → 浮层推荐第一项匹配校验（连续 2 轮 firstItemText 稳定才判定 ready）→ 匹配成功点选，不匹配按官方提示「敲空格可取消插入话题」，绝不删文本/按 ESC（避免 ProseMirror 回退撤销前一个已插入话题）
+  - 图片上传抽屉：CDP `DOM.setFileInputFiles` 注入本地文件 → `Runtime.callFunctionOn` 派发 change/input 事件 → 上传抽屉 success 标记 + `data-e2e="imageUploadConfirm-btn"` 确定按钮点击
+  - 草稿撤销弹窗处理：「已恢复上次编辑未保存的内容」撤销按钮点击（33 轮轮询），清理残留图片（编辑器/抽屉/预览区）
+  - 图片三道防线：抽屉内多余图片点 `.image-item-remove` 删除 → 抽屉确认后 `div.upload-list` 预览缩略图区 background-image URL 去重点 `i.image-remove-btn`（同 URL 只保留 1 张，绝不 removeChild 破坏 Vue DOM）
 - **测试模式**：点击"测试发布"，仅填写表单不真正发布，高亮标记发布按钮，窗口保持打开供检查
 - **测试结果检测**：自动检测标题/内容/标签/封面是否填写，发布按钮是否找到，生成可视化测试报告
 - **文章摘要**：文章发布支持独立的摘要字段（抖音 30 字，小红书 1000 字）
@@ -323,7 +330,7 @@ Vue 响应式更新 → 进度面板刷新
 ## 后续扩展
 
 - ✍️ 内容创作模块（草稿管理 / 内容模板）
-- 🌐 更多平台发布功能（B 站视频投稿 / 微博头条文章 / 头条文章 / 微信公众号文章）
+- 🌐 更多平台发布功能（B 站视频投稿 / 微博头条文章 / 微信公众号文章）
 - 🔗 更多网站内容提取适配规则
 - ⚡ 提取结果缓存 / 预提取优化
 - 🔄 自动更新（electron-updater，需要配置私有发布地址）
@@ -355,6 +362,7 @@ Vue 响应式更新 → 进度面板刷新
 - **B站平台接入技术文档**：[`docs/B站平台接入技术文档.md`](./docs/B站平台接入技术文档.md)（账号管理完整接入，SESSDATA + DedeUserID，发布功能占位）
 - **微博平台接入技术文档**：[`docs/微博平台接入技术文档.md`](./docs/微博平台接入技术文档.md)（账号管理 + 视频发布 + 图文发布完整实现，SUB + 结构识别登录态）
 - **微博自动发布技术文档**：[`docs/微博自动发布技术文档.md`](./docs/微博自动发布技术文档.md)（视频发布：FileChooser拦截 + 真实input注入 + 10张封面候选图轮询 / 图文发布：首页卡片 + 缩略图渲染校验）
+- **今日头条微头条图文发布技术文档**：[`docs/今日头条微头条图文发布技术文档.md`](./docs/今日头条微头条图文发布技术文档.md)（草稿撤销弹窗 / 浮层推荐话题稳定匹配 / ProseMirror 正文填写 / 图片抽屉 + 预览缩略图区重复去重）
 - **抖音发布稳定性修复方案**：[`docs/抖音发布稳定性修复方案.md`](./docs/抖音发布稳定性修复方案.md)
 - **platforms/ 目录**：[`src/main/services/platforms/`](./src/main/services/platforms/)（多平台独立实现 + shared.ts 共享工具）
 - **PlatformDispatcher.ts**：[`src/main/services/platforms/PlatformDispatcher.ts`](./src/main/services/platforms/PlatformDispatcher.ts)（工厂方法分发器）
