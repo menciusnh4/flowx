@@ -2312,9 +2312,119 @@ function buildProbeXiguaPosterDialogStateScript(): string {
               }
             }
             const footer: any = mDialog.querySelector('.footer');
-            const nextBtn: any = footer ? footer.querySelector('.m-button.red, .m-button.primary, button.primary, button.red, .footer .m-button:last-child') : null;
-            const nextDisabled = nextBtn ? (!!nextBtn.disabled || (nextBtn.getAttribute && nextBtn.getAttribute('disabled') !== null) || /opacity:\s*0(\.0)?\s*;/.test(String(nextBtn.style && nextBtn.style.cssText || ''))) : true;
+            // ★ 真实DOM里下一步是 <div class="m-button red cannot-click"> — 必须包含 .m-button 本身（不局限 button 元素）
+            const nextBtn: any = footer ? footer.querySelector('.m-button.red, .m-button.primary, button.primary, button.red, .footer .m-button, .footer .m-button:last-child') : null;
+            // ★ nextDisabled 更完整检测（核心：真实DOM禁用态 class=cannot-click）
+            let nextDisabled = true;
+            let nextComputedOpacity = 1, nextPointerEvents = 'auto', nextAriaDisabled = '';
+            let nextHasCannotClick = false, nextCls = '';
+            if (nextBtn) {
+              nextCls = String(nextBtn.className || '').slice(0, 200);
+              nextHasCannotClick = /cannot-click|cannotclick|disabled/i.test(nextCls); // ★★ 核心：真实禁用 class
+              const attrsDisabled = !!nextBtn.disabled || (nextBtn.getAttribute && nextBtn.getAttribute('disabled') !== null);
+              nextAriaDisabled = nextBtn.getAttribute ? String(nextBtn.getAttribute('aria-disabled') || '') : '';
+              const ariaDisabled = nextAriaDisabled === 'true';
+              const cssText = String(nextBtn.style && nextBtn.style.cssText || '');
+              const inlineOpacityZero = /opacity:\s*0(\.0)?\s*;/.test(cssText);
+              const inlinePE = /pointer-events:\s*none\s*;/.test(cssText);
+              let computedOpacityOk = true, computedPEOk = true;
+              try {
+                if (typeof window !== 'undefined' && window.getComputedStyle) {
+                  const cs = window.getComputedStyle(nextBtn);
+                  nextComputedOpacity = parseFloat(String(cs.opacity || '1'));
+                  nextPointerEvents = String(cs.pointerEvents || 'auto');
+                  if (isNaN(nextComputedOpacity)) nextComputedOpacity = 1;
+                  if (nextComputedOpacity < 0.5) computedOpacityOk = false;
+                  if (nextPointerEvents === 'none') computedPEOk = false;
+                }
+              } catch (_) { /* ignore */ }
+              nextDisabled = nextHasCannotClick || attrsDisabled || ariaDisabled || inlineOpacityZero || inlinePE || !computedOpacityOk || !computedPEOk;
+            }
             const fileInputs = mDialog.querySelectorAll ? mDialog.querySelectorAll('input[type="file"]') : [];
+            // ★ snapshotReady：封面截取 tab 下的预览缩略图是否真正加载好（真实DOM：解析中→.m-loading，解析成功→.m-one-peace > ul.img-list > li > img）
+            let snapshotReady = false;
+            let snapshotHasPreview = false;
+            let snapshotLoadingVisible = false;
+            let snapshotHasOnePeace = false;   // 真实DOM：解析成功才出现的容器 class
+            let snapshotHasMLoading = false;    // 真实DOM：解析中的 class=m-loading
+            let snapshotPreviewW = 0, snapshotPreviewH = 0;
+            let snapshotThumbImgs = 0, snapshotThumbCanvas = 0, snapshotThumbBgImg = 0;
+            try {
+              // ★ 真实DOM层级：m-poster-upgrade > .m-content > .content > .body > .detail > [.m-loading / .m-one-peace]
+              //   必须优先查 .detail 内部才是真正内容区
+              const contentArea: any = mDialog.querySelector('.body .detail, .detail, .body .m-one-peace, .m-one-peace, .content, .body, .m-content, .snapshot-area, .poster-snapshot, .snapshot-wrap, .cover-snapshot, .preview-area');
+              if (contentArea) {
+                try { const r = contentArea.getBoundingClientRect(); snapshotPreviewW = r.width | 0; snapshotPreviewH = r.height | 0; } catch (_) {}
+                // ★ 真实DOM显式 class 判定：
+                snapshotHasOnePeace = !!contentArea.querySelector('.m-one-peace');
+                snapshotHasMLoading = false;
+                const mLoadingEls = contentArea.querySelectorAll('.m-loading');
+                if (mLoadingEls && mLoadingEls.length > 0) {
+                  for (let li2 = 0; li2 < mLoadingEls.length; li2++) {
+                    const l2: any = mLoadingEls[li2];
+                    try {
+                      if (typeof window !== 'undefined' && window.getComputedStyle) {
+                        const cs = window.getComputedStyle(l2);
+                        if (cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0.1) {
+                          const r2 = l2.getBoundingClientRect();
+                          if (r2.width > 2 && r2.height > 2) { snapshotHasMLoading = true; break; }
+                        }
+                      }
+                    } catch (_) { /* ignore */ }
+                  }
+                }
+                // 找真实图片（真实DOM：ul.img-list li img + img.select-img）
+                const imgs = contentArea.querySelectorAll ? contentArea.querySelectorAll('img') : [];
+                for (let ii = 0; ii < imgs.length; ii++) {
+                  const img = imgs[ii] as any;
+                  const s = String(img.src || (img.getAttribute && img.getAttribute('src')) || '').trim();
+                  // blob: 链接 + http(s) 外链都算真实图，排除 svg loading/base64 占位
+                  if (s && s.length > 8 && !/^data:image\/svg.*loading|^data:image.*placeholder|about:blank|^$/i.test(s)) {
+                    snapshotThumbImgs++;
+                  }
+                }
+                const canvases = contentArea.querySelectorAll ? contentArea.querySelectorAll('canvas') : [];
+                snapshotThumbCanvas = canvases ? canvases.length : 0;
+                const divs = contentArea.querySelectorAll ? contentArea.querySelectorAll('div[style], div.bg, div.poster-bg, div.snapshot-item, div.thumb-item, div.frame-item') : [];
+                for (let di = 0; di < divs.length; di++) {
+                  const d = divs[di] as any;
+                  const st = String((d.style && d.style.cssText) || (d.getAttribute && d.getAttribute('style')) || '');
+                  if (/background-image\s*:\s*url\(/i.test(st)) {
+                    if (!/url\(\s*["']?\s*data:image\/svg.*loading|url\(\s*["']?\s*data:image.*placeholder|url\(\s*["']?\s*about:blank|url\(\s*["']?\s*["']?\s*\)/i.test(st)) {
+                      snapshotThumbBgImg++;
+                    }
+                  }
+                }
+                snapshotHasPreview = (snapshotThumbImgs + snapshotThumbCanvas + snapshotThumbBgImg) > 0;
+                // loading 类（宽泛 + .m-loading 已单独判定）
+                const loaders = contentArea.querySelectorAll ? contentArea.querySelectorAll('.loading:not(.m-loading), .spinner, .spin, .loader, [class*="loading-spinner"], [class*="spinner"], [class*="spin-"]') : [];
+                if (loaders && loaders.length > 0) {
+                  for (let li = 0; li < loaders.length; li++) {
+                    const l = loaders[li] as any;
+                    try {
+                      if (typeof window !== 'undefined' && window.getComputedStyle) {
+                        const cs = window.getComputedStyle(l);
+                        if (cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0.1) {
+                          const r2 = l.getBoundingClientRect();
+                          if (r2.width > 2 && r2.height > 2) { snapshotLoadingVisible = true; break; }
+                        }
+                      }
+                    } catch (_) { /* ignore */ }
+                  }
+                }
+                // .m-loading 也纳入 loading 可见
+                if (snapshotHasMLoading) snapshotLoadingVisible = true;
+              }
+            } catch (_) { /* ignore */ }
+            // snapshotReady 组合判定（当前 tab 是 snapshot）：
+            //   真实DOM等价：出现 .m-one-peace 且 没有 .m-loading 可见 且 有 img
+            if (selectedTab === 'snapshot') {
+              if ((snapshotHasPreview || snapshotHasOnePeace) && !snapshotLoadingVisible && !snapshotHasMLoading && (snapshotHasOnePeace || snapshotThumbImgs > 0 || snapshotThumbCanvas > 0 || snapshotThumbBgImg > 0)) {
+                snapshotReady = true;
+              }
+            } else {
+              snapshotReady = false;
+            }
             res.dialog1 = {
               visible: true,
               selectedTab,
@@ -2322,7 +2432,22 @@ function buildProbeXiguaPosterDialogStateScript(): string {
               hasNext: !!nextBtn,
               nextDisabled,
               nextText: String((nextBtn && (nextBtn.innerText || nextBtn.textContent || '')) || '').slice(0, 30),
+              nextComputedOpacity,
+              nextPointerEvents,
+              nextAriaDisabled,
+              nextHasCannotClick,
+              nextCls,
               fileInputs: fileInputs ? fileInputs.length : 0,
+              snapshotReady,
+              snapshotHasPreview,
+              snapshotLoadingVisible,
+              snapshotHasOnePeace,
+              snapshotHasMLoading,
+              snapshotPreviewW,
+              snapshotPreviewH,
+              snapshotThumbImgs,
+              snapshotThumbCanvas,
+              snapshotThumbBgImg,
             };
           }
         }
@@ -2337,7 +2462,7 @@ function buildProbeXiguaPosterDialogStateScript(): string {
  * 操作封面弹窗：切换 tab / 点「下一步」/ 点「编辑器确定」/ 点「二次确认弹窗确定」
  *   action: 'switch-local' | 'click-next' | 'click-confirm' | 'click-final-confirm'
  */
-function buildClickXiguaPosterDialogActionScript(action: 'switch-local' | 'click-next' | 'click-confirm' | 'click-final-confirm'): string {
+function buildClickXiguaPosterDialogActionScript(action: 'switch-local' | 'click-next' | 'click-confirm' | 'click-final-confirm' | 'select-snapshot-thumb'): string {
   const runner = function (act: string) {
     const res: any = { err: null, found: false, clicked: false, reason: null };
     try {
@@ -2407,7 +2532,7 @@ function buildClickXiguaPosterDialogActionScript(action: 'switch-local' | 'click
         const mDialog: any = container.querySelector('.m-xigua-dialog.m-poster-upgrade');
         if (!mDialog) continue;
         const isEditor = /xigua-image-editor-core/.test(String(mDialog.className || ''));
-        if (act === 'switch-local' || act === 'click-next') {
+        if (act === 'switch-local' || act === 'click-next' || act === 'select-snapshot-thumb') {
           if (isEditor) continue;
           res.found = true;
           if (act === 'switch-local') {
@@ -2429,9 +2554,75 @@ function buildClickXiguaPosterDialogActionScript(action: 'switch-local' | 'click
                 }
               }
             }
+          } else if (act === 'select-snapshot-thumb') {
+            // ★ 兜底：点击封面截取内容区的第一张缩略图/帧/预览（真实DOM：.body .detail .m-one-peace > ul.img-list > li > img）
+            const contentArea: any = mDialog.querySelector('.body .detail, .detail, .body .m-one-peace, .m-one-peace, .content, .body, .m-content, .snapshot-area, .poster-snapshot, .snapshot-wrap, .cover-snapshot, .preview-area');
+            let target: any = null;
+            if (contentArea) {
+              // 优先级按真实 DOM 走：
+              //   ① ul.img-list li 里的 <img>（真实有 22 张）
+              //   ② img.select-img（上方大预览图）
+              //   ③ .m-one-peace 内部其他 img
+              const frameSelectors = [
+                'ul.img-list li img',
+                '.img-list img',
+                'img.select-img',
+                '.m-one-peace img',
+                '.snapshot-item:not(.empty):not(.placeholder)',
+                '.thumb-item, .frame-item',
+                'img:not([src=""]):not([src^="data:image/svg"])',
+                'canvas',
+                'li[class*="item"]',
+                'div[style*="background-image"]',
+              ];
+              for (const sel of frameSelectors) {
+                try {
+                  const cs = contentArea.querySelectorAll(sel);
+                  for (let csi = 0; cs && csi < cs.length; csi++) {
+                    const el: any = cs[csi];
+                    try {
+                      const r = el.getBoundingClientRect();
+                      if (r.width > 10 && r.height > 10) { target = el; break; }
+                    } catch (_) { /* ignore */ }
+                    if (target) break;
+                    if (!target) target = el;
+                  }
+                } catch (_) { /* ignore */ }
+                if (target) break;
+              }
+            }
+            if (!target) {
+              try {
+                const allImgs = mDialog.querySelectorAll('img, canvas, div[style*="background-image"]');
+                for (let ai = 0; allImgs && ai < allImgs.length; ai++) {
+                  const el: any = allImgs[ai];
+                  try {
+                    const r = el.getBoundingClientRect();
+                    if (r.width > 20 && r.height > 20 && r.top > 20 && !el.closest('.header') && !el.closest('.footer')) { target = el; break; }
+                  } catch (_) { /* ignore */ }
+                }
+              } catch (_) { /* ignore */ }
+            }
+            if (target) {
+              try {
+                res.targetInfo = { tag: target.tagName, cls: String(target.className || '').slice(0, 100) };
+                target.click();
+                if (typeof target.dispatchEvent === 'function') {
+                  try { target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); } catch (_) { /* ignore */ }
+                  try { target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); } catch (_) { /* ignore */ }
+                  try { target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })); } catch (_) { /* ignore */ }
+                  try { target.dispatchEvent(new MouseEvent('click', { bubbles: true })); } catch (_) { /* ignore */ }
+                }
+                res.clicked = true;
+              } catch (e: any) { res.reason = 'click-thumb-err:' + String(e && e.message || e).slice(0, 100); }
+            } else {
+              res.reason = 'no-snapshot-thumb-found';
+            }
           } else { // click-next
+            // ★ 真实DOM：<div class="footer undefined"><div class="m-button red cannot-click">下一步</div></div>
+            //   按钮是 <div class="m-button"> 而非 <button>，必须包含 .m-button 本身
             const footer: any = mDialog.querySelector('.footer');
-            const btn: any = footer ? footer.querySelector('.m-button.red, .m-button.primary, button.primary, button.red') : null;
+            const btn: any = footer ? footer.querySelector('.m-button.red, .m-button.primary, .footer .m-button, button.primary, button.red, .footer .m-button:last-child') : null;
             if (btn) {
               try {
                 btn.click();
@@ -2750,8 +2941,10 @@ const PosterStep: XiguaFormStep = {
           };
         }
       } else {
-        // 无 coverCandidate：保持默认封面截取 tab（用户截图里默认就选封面截取）→ 直接点「下一步」（红色 .m-button.red）
-        log('info', 'poster-dialog', `未提供 coverImage / 图片，保持「封面截取」tab，点下一步…`);
+        // 无 coverCandidate：保持默认封面截取 tab → 必须等待「snapshotReady=true（缩略图/帧真实加载好，无 loading）+ nextDisabled=false」同时满足，再点下一步
+        //   ★ 从用户日志看：nextDisabled=false 从一开始就满足，但点击无反应 → 真正的阻塞条件是「封面截取的缩略图还没加载好」，这是Vue/React的"软 disabled"
+        //   兜底：如果一直不 ready，先尝试点击一张缩略图（选中某帧）再点下一步
+        log('info', 'poster-dialog', `未提供 coverImage / 图片，保持「封面截取」tab，等待 snapshotReady=true + nextDisabled=false 后再点下一步…`);
         // 最多 2 次点「下一步」
         for (let np = 0; np < 2; np++) {
           // 点之前再确保 tab 正确（有些情况初始 tab 可能为其他）
@@ -2785,12 +2978,80 @@ const PosterStep: XiguaFormStep = {
               } catch (_) { /* ignore */ }
             }
           }
+          // ★ 轮询等待：必须 snapshotReady && !nextDisabled 才视为真可点击
+          //   封面截取加载视频帧可能较慢：最多 32 次 × 400ms ≈ 12.8s
+          let readyToClickNext = false;
+          let lastPolled: any = null;
+          for (let poll = 0; poll < 32; poll++) {
+            await new Promise((r) => setTimeout(r, 400));
+            const pRaw: any = await evalJS(win, buildProbeXiguaPosterDialogStateScript(), 'poster-dialog-poll-next-snap-' + np + '-' + poll, log).catch(() => null);
+            const p: any = parseSafeResult(pRaw, { anyVisible: false, dialog1: null, dialog2: null });
+            lastPolled = p;
+            if (p && p.anyVisible) {
+              if (p.dialog2 && p.dialog2.visible) { readyToClickNext = true; break; } // 已自动跳编辑器
+              if (p.dialog1 && p.dialog1.hasNext && !p.dialog1.nextDisabled) {
+                // ★ 核心条件：必须 snapshotReady=true（或非 snapshot tab 才用 !nextDisabled 单条件）
+                const isSnapshot = p.dialog1.selectedTab === 'snapshot' || p.dialog1.snapshotIdx >= 0;
+                if (!isSnapshot) {
+                  readyToClickNext = true; break;
+                } else if (p.dialog1.snapshotReady === true) {
+                  readyToClickNext = true; break;
+                } else {
+                  // snapshot tab 但 snapshotReady=false → 继续等待（每 5 次打一条中间日志）
+                  if (poll % 5 === 0) {
+                    log('info', 'poster-dialog', `封面截取加载中（np=${np},poll=${poll}）：snapshotReady=${String(p.dialog1.snapshotReady)} hasPreview=${String(p.dialog1.snapshotHasPreview)} loading=${String(p.dialog1.snapshotLoadingVisible)} imgs=${String(p.dialog1.snapshotThumbImgs)} canvas=${String(p.dialog1.snapshotThumbCanvas)} bgImg=${String(p.dialog1.snapshotThumbBgImg)} W=${String(p.dialog1.snapshotPreviewW)} H=${String(p.dialog1.snapshotPreviewH)}`);
+                  }
+                }
+              }
+            }
+            if (!p || !p.anyVisible) break; // 弹窗异常关闭
+          }
+          log('info', 'poster-dialog', `封面截取场景轮询后 readyToClickNext=${readyToClickNext}（np=${np}）`);
+          // ★ 兜底：如果 readyToClickNext 仍为 false，但 hasPreview=true 只是 snapshotReady 判定条件太严，
+          //   先尝试点击一张缩略图（让前端确认选中了某帧），再继续点下一步
+          if (!readyToClickNext && lastPolled && lastPolled.dialog1 && lastPolled.dialog1.selectedTab === 'snapshot' && lastPolled.dialog1.snapshotHasPreview && !lastPolled.dialog1.nextDisabled) {
+            log('warn', 'poster-dialog', `snapshotReady 一直为 false 但已有预览内容，兜底：先点击一张缩略图，再继续尝试下一步（np=${np}）`);
+            const thRaw: any = await evalJS(win, buildClickXiguaPosterDialogActionScript('select-snapshot-thumb'), 'poster-dialog-select-thumb-' + np, log).catch(() => null);
+            const thr: any = parseSafeResult(thRaw, { found: false, clicked: false, targetInfo: null, reason: null });
+            log('info', 'poster-dialog', `点击封面缩略图兜底：found=${thr && thr.found} clicked=${thr && thr.clicked} reason=${thr && thr.reason || ''} info=${thr && thr.targetInfo ? JSON.stringify(thr.targetInfo).slice(0, 200) : ''}`);
+            if (thr && thr.clicked) {
+              await new Promise((r) => setTimeout(r, 600));
+              // 点击缩略图后，再短暂轮询（最多 5 次）看 snapshotReady 是否变成 true
+              for (let poll2 = 0; poll2 < 5; poll2++) {
+                await new Promise((r) => setTimeout(r, 300));
+                const pRaw2: any = await evalJS(win, buildProbeXiguaPosterDialogStateScript(), 'poster-dialog-poll-after-thumb-' + np + '-' + poll2, log).catch(() => null);
+                const p2: any = parseSafeResult(pRaw2, { anyVisible: false, dialog1: null, dialog2: null });
+                if (p2 && p2.dialog2 && p2.dialog2.visible) { readyToClickNext = true; break; }
+                if (p2 && p2.dialog1 && p2.dialog1.hasNext && !p2.dialog1.nextDisabled && (p2.dialog1.snapshotReady || p2.dialog1.selectedTab !== 'snapshot')) { readyToClickNext = true; break; }
+              }
+              // 即使没 ready，也兜底放行（已经有预览 + 已手动点过缩略图）
+              if (!readyToClickNext) readyToClickNext = true;
+            }
+          }
+          if (!readyToClickNext) {
+            log('warn', 'poster-dialog', `封面截取场景仍未就绪，跳过本次点击下一步（np=${np}）。最后一次 poll=${lastPolled ? JSON.stringify(lastPolled.dialog1 && {nextDisabled:lastPolled.dialog1.nextDisabled,snapshotReady:lastPolled.dialog1.snapshotReady,hasPreview:lastPolled.dialog1.snapshotHasPreview,loading:lastPolled.dialog1.snapshotLoadingVisible,selected:lastPolled.dialog1.selectedTab}).slice(0,300) : '无'}`);
+            continue;
+          }
           const nxRaw: any = await evalJS(win, buildClickXiguaPosterDialogActionScript('click-next'), 'poster-dialog-next-' + np, log).catch(() => null);
           const nx: any = parseSafeResult(nxRaw, { clicked: false });
           log('info', 'poster-dialog', `点下一步 #${np}: ${JSON.stringify(nx || null).slice(0, 200)}`);
           dialog1Processed = true;
-          await new Promise((r) => setTimeout(r, 1200));
+          await new Promise((r) => setTimeout(r, 1500));
           dialogState = parseSafeResult(await evalJS(win, buildProbeXiguaPosterDialogStateScript(), 'poster-dialog-probe-next-' + np, log).catch(() => null), { anyVisible: false });
+          // ★ 如果这次点击下一步没跳（还是停在 Dialog1），在 np=0 结束时立即做一次兜底：先点击缩略图再点下一步
+          if (np === 0 && dialogState && dialogState.dialog1 && dialogState.dialog1.visible && !(dialogState.dialog2 && dialogState.dialog2.visible)) {
+            log('warn', 'poster-dialog', `点下一步 #${np} 后仍停在 Dialog1，兜底：点缩略图 → 再点一次下一步`);
+            const thRaw2: any = await evalJS(win, buildClickXiguaPosterDialogActionScript('select-snapshot-thumb'), 'poster-dialog-select-thumb-retry-' + np, log).catch(() => null);
+            const thr2: any = parseSafeResult(thRaw2, { clicked: false });
+            if (thr2 && thr2.clicked) {
+              await new Promise((r) => setTimeout(r, 500));
+              const nxRaw2: any = await evalJS(win, buildClickXiguaPosterDialogActionScript('click-next'), 'poster-dialog-next-retry-' + np, log).catch(() => null);
+              const nx2: any = parseSafeResult(nxRaw2, { clicked: false });
+              log('info', 'poster-dialog', `兜底：点缩略图后再点下一步：${JSON.stringify(nx2 || null).slice(0, 200)}`);
+              await new Promise((r) => setTimeout(r, 1500));
+              dialogState = parseSafeResult(await evalJS(win, buildProbeXiguaPosterDialogStateScript(), 'poster-dialog-probe-retry-next-' + np, log).catch(() => null), { anyVisible: false });
+            }
+          }
           if (dialogState && dialogState.dialog2 && dialogState.dialog2.visible) break; // 已进入编辑器
           if (dialogState && !dialogState.anyVisible) break;
         }
