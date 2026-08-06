@@ -104,7 +104,7 @@ flowx/
 │   │   │   ├── pages/              # 页面（账号管理/发布/仪表盘）
 │   │   │   └── stores/             # Pinia 状态管理
 │   │   └── types/                  # 共享类型定义
-│   ├── docs/                       # 详细文档（抖音发布修复方案等）
+│   ├── docs/                       # 平台技术文档 + 设计方案文档
 │   ├── package.json                # Electron 31.7.7
 │   └── vite.config.ts              # Vite 构建配置
 ├── 设计文档.md                     # 完整架构与模块设计文档
@@ -149,21 +149,15 @@ flowx/
 | **第四阶段-高级特性设计方案** | [`flowx-desktop/docs/第四阶段-高级特性设计方案.html`](./flowx-desktop/docs/第四阶段-高级特性设计方案.html) | 缓存优化 / 预提取 / 用户反馈 / 统计分析 |
 | **内容提取优化设计文档** | [`flowx-desktop/docs/内容提取优化设计文档.html`](./flowx-desktop/docs/内容提取优化设计文档.html) | 多策略提取引擎 / 图片智能过滤 / 置信度评分 |
 | **浏览器提取设计文档** | [`flowx-desktop/docs/浏览器提取设计文档.html`](./flowx-desktop/docs/浏览器提取设计文档.html) | 多标签浏览器 / 分栏布局 / 右键菜单提取 |
-| **小红书自动发布技术文档** | [`flowx-desktop/docs/小红书自动发布技术文档.md`](./flowx-desktop/docs/小红书自动发布技术文档.md) | Closed Shadow DOM / xhs-publish-btn / CDP 穿透点击 |
-| **小红书图文发布技术文档** | [`flowx-desktop/docs/小红书图文发布技术文档.md`](./flowx-desktop/docs/小红书图文发布技术文档.md) | 图文发布专用：标题/正文/封面上传，发布按钮 shadow DOM 穿透 |
-| **快手自动发布技术文档** | [`flowx-desktop/docs/快手自动发布技术文档.md`](./flowx-desktop/docs/快手自动发布技术文档.md) | Element UI / contenteditable / user-cnt__item 粉丝数解析 |
-| **快手图文发布技术文档** | [`flowx-desktop/docs/快手图文发布技术文档.md`](./flowx-desktop/docs/快手图文发布技术文档.md) | 图文发布专用：URL 切换 / 标签限制（最多4个） / 标题字数 |
 | **账号分析功能设计方案** | [`flowx-desktop/docs/账号分析功能设计方案.md`](./flowx-desktop/docs/账号分析功能设计方案.md) | 多平台作品数据采集 / 多条件筛选 / 真分页 / 平台账号ID筛选 / 微信视频号图文采集 |
-| **抖音发布稳定性修复方案** | [`flowx-desktop/docs/抖音发布稳定性修复方案.md`](./flowx-desktop/docs/抖音发布稳定性修复方案.md) | Electron 28→31 升级完整记录，含问题分析、测试用例、经验总结 |
-| **抖音图文发布技术文档** | [`flowx-desktop/docs/抖音图文发布技术文档.md`](./flowx-desktop/docs/抖音图文发布技术文档.md) | 图文发布专用：`default-tab=3` URL / `button-dhlUZE primary-button` 发布按钮 / ProseMirror 富文本 |
-| **抖音文章发布技术文档** | [`flowx-desktop/docs/抖音文章发布技术文档.md`](./flowx-desktop/docs/抖音文章发布技术文档.md) | 文章发布专用：`default-tab=5` URL / 标题 30 字 / 正文 8000 字 / React 受控组件 |
-| **小红书文章发布技术文档** | [`flowx-desktop/docs/小红书文章发布技术文档.md`](./flowx-desktop/docs/小红书文章发布技术文档.md) | 文章发布专用：`target=article` URL / 三步点击（一键排版 → 下一步 → 发布） / 标题 64 字 / 正文无限制 |
-| **知乎视频发布技术文档** | [`flowx-desktop/docs/知乎视频发布技术文档.md`](./flowx-desktop/docs/知乎视频发布技术文档.md) | 视频发布专用：upload-video 页面 / 视频标记 Modal 弹窗 / Draft.js 富文本描述 / 标题 50 字 |
-| **知乎图文发布技术文档** | [`flowx-desktop/docs/知乎图文发布技术文档.md`](./flowx-desktop/docs/知乎图文发布技术文档.md) | 图文发布专用：发想法功能 / css-1lkz3hi 激活编辑器 / ImageArea 图片区域 / Draft.js 正文填充 |
-| **B站平台接入技术文档** | [`flowx-desktop/docs/B站平台接入技术文档.md`](./flowx-desktop/docs/B站平台接入技术文档.md) | 账号管理：SESSDATA Cookie 登录态 / DedeUserID 取UID / 28 种类引号字符严格净化 / 平台元信息与排错指南 |
-| **微博平台接入技术文档** | [`flowx-desktop/docs/微博平台接入技术文档.md`](./flowx-desktop/docs/微博平台接入技术文档.md) | 账号管理 + 发布：SUB Cookie + 结构识别登录态 / 视频发布（upload/channel + 封面等待）/ 图文发布（首页卡片 + 缩略图校验） |
-| **微博自动发布技术文档** | [`flowx-desktop/docs/微博自动发布技术文档.md`](./flowx-desktop/docs/微博自动发布技术文档.md) | 视频发布：FileChooser拦截+真实input注入+封面候选图10张轮询 / 图文发布：首页卡片+图片缩略图渲染校验+删除按钮检测 |
-| **今日头条微头条发布技术文档（综合版）** | [`flowx-desktop/docs/今日头条微头条发布技术文档.md`](./flowx-desktop/docs/今日头条微头条发布技术文档.md) | 账号接入 + 微头条图文 + 西瓜视频 **合并为一份**：登录态 detectLoggedIn / 信息提取 / 微头条草稿撤销 / 话题稳定匹配 / 图片三道防线 / xigua 上传转码表单三阶段 / 横版vs竖版 small-video 差异（portrait .bg + 替换按钮 + 上传中 30s 轮询）/ 长文占位 |
+| **小红书平台技术文档** | [`flowx-desktop/docs/小红书平台技术文档.md`](./flowx-desktop/docs/小红书平台技术文档.md) | 账号 + 视频 + 图文 + 文章：Closed Shadow DOM 穿透 / ProseMirror 富文本 / 三步排版流程 |
+| **抖音平台技术文档** | [`flowx-desktop/docs/抖音平台技术文档.md`](./flowx-desktop/docs/抖音平台技术文档.md) | 视频 + 图文 + 文章，含 Electron 28→31 稳定性修复方案 / WebAssembly 崩溃根因 / 五层封面上传架构 |
+| **快手平台技术文档** | [`flowx-desktop/docs/快手平台技术文档.md`](./flowx-desktop/docs/快手平台技术文档.md) | 账号 + 视频 + 图文：Element UI / contenteditable / user-cnt__item 粉丝数解析 |
+| **微博平台技术文档** | [`flowx-desktop/docs/微博平台技术文档.md`](./flowx-desktop/docs/微博平台技术文档.md) | 账号 + 视频 + 图文：SUB Cookie 登录态 / FileChooser 拦截 + 真实 input 注入 / 10 张封面候选图轮询 / 首页卡片图文发布 |
+| **知乎平台技术文档** | [`flowx-desktop/docs/知乎平台技术文档.md`](./flowx-desktop/docs/知乎平台技术文档.md) | 账号 + 图文发布：ProseMirror 富文本编辑器原理 / execCommand 兼容性优势 |
+| **B站平台技术文档** | [`flowx-desktop/docs/B站平台技术文档.md`](./flowx-desktop/docs/B站平台技术文档.md) | 账号管理：SESSDATA Cookie / DedeUserID 取 UID / 28 种类引号字符严格净化 |
+| **今日头条平台技术文档** | [`flowx-desktop/docs/今日头条平台技术文档.md`](./flowx-desktop/docs/今日头条平台技术文档.md) | 账号 + 微头条图文 + 西瓜视频：detectLoggedIn 四重判断 / 话题稳定匹配 / 图片三道防线 / xigua 三阶段 / 横版竖版适配 |
+| **微信视频号平台技术文档** | [`flowx-desktop/docs/微信视频号平台技术文档.md`](./flowx-desktop/docs/微信视频号平台技术文档.md) | 账号 + 视频 + 图文：微信扫码登录 / 创作者主页发布 |
 | **平台适配器目录** | `flowx-desktop/src/main/services/platforms/` | xiaohongshu.ts / douyin.ts / kuaishou.ts / zhihu.ts / weibo.ts / toutiao.ts（独立实现 + 共享 shared.ts） |
 | **平台分发器** | `flowx-desktop/src/main/services/platforms/PlatformDispatcher.ts` | createExecutor(platform, contentType) — 工厂方法模式的核心 |
 | **发布引擎实现** | `flowx-desktop/src/main/services/PublishEngine.ts` | 并发控制 / IPC 推送 / 重启恢复 / 任务状态管理 |
