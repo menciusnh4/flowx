@@ -4,7 +4,7 @@ All notable changes to the FlowX Desktop project will be documented in this file
 
 ---
 
-## [v0.1.5.1] - 2026-08-06
+## [v0.1.6] - 2026-08-06
 
 > 微博视频+图文双发布 · 今日头条微头条+西瓜视频 · 系统托盘 · 账号头像本地持久化 · B站接入 · 8平台文档体系重构
 
