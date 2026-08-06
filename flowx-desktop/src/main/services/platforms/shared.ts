@@ -882,17 +882,50 @@ export async function uploadViaCDP(
                 for (var i2 = 0; i2 < inputs.length; i2++) allFileInputs.push(inputs[i2]);
                 var shadowInputs = getShadowInputs(document.documentElement);
                 for (var j2 = 0; j2 < shadowInputs.length; j2++) allFileInputs.push(shadowInputs[j2]);
-                // 对所有有文件的 input 触发事件
+                // 去重（因为 document.querySelectorAll + shadow root 遍历可能重复）
+                var seen = {};
+                var uniq = [];
+                for (var _u = 0; _u < allFileInputs.length; _u++) {
+                  var _fi = allFileInputs[_u];
+                  var _okey = 'f';
+                  try { _okey = (_fi && _fi.dataset && _fi.dataset.traeUploadKey) || String(_fi.id || '') + '|' + String((_fi.getAttribute('accept') || '')) + '|' + _u; } catch (_e2) { _okey = 'f' + _u; }
+                  if (_fi && !seen[_okey]) { seen[_okey] = 1; uniq.push(_fi); }
+                }
+                allFileInputs = uniq;
+                // 判断 input 是否「与目标视频/媒体匹配」（accept 含常见视频后缀 或 accept=video/*）
+                function acceptMatchesVideo(fi) {
+                  try {
+                    var a = String(fi.getAttribute('accept') || '').toLowerCase();
+                    if (!a) return false;
+                    if (a.indexOf('video/*') !== -1) return true;
+                    if (/\.mp4|\.flv|\.wmv|\.avi|\.mov|\.mkv|\.m4v|\.mpeg|\.mpg|\.webm|\.m2ts|\.3gp|\.ts|\.rm|\.rmvb|\.vob|\.qt|\.asf|\.dat/.test(a)) return true;
+                    // 包含任意视频扩展名关键字
+                    var exts = a.split(',').map(function (s) { return s.trim(); });
+                    for (var i = 0; i < exts.length; i++) if (/^video\//i.test(exts[i])) return true;
+                    return false;
+                  } catch (_e) { return false; }
+                }
+                // 对所有 input 触发事件：
+                //   1) files.length>0 一定触发
+                //   2) accept 匹配视频（byte-upload 会在读取后立即清空 files）也触发，避免 triggered=0 误判
                 var triggered = 0;
+                var triggeredReason = [];
                 for (var m = 0; m < allFileInputs.length; m++) {
                   var fi = allFileInputs[m];
-                  if (fi.files && fi.files.length > 0) {
+                  var hasFiles = !!(fi.files && fi.files.length > 0);
+                  var videoAccept = acceptMatchesVideo(fi);
+                  if (hasFiles || videoAccept) {
                     try { fi.dispatchEvent(new Event('change', { bubbles: true })); } catch (e1) {}
                     try { fi.dispatchEvent(new Event('input', { bubbles: true })); } catch (e2) {}
                     triggered++;
+                    triggeredReason.push(hasFiles ? 'files>0' : 'video-accept');
+                    // byte-upload / 虚拟上传 经常需要多触发一次（组件内部做了 debounce），
+                    // 这里额外补一轮更"强"的事件，确保 React/Vue 的受控 value 也能感知。
+                    try { fi.dispatchEvent(new Event('change', { bubbles: true, cancelable: true })); } catch (e3) {}
+                    try { fi.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, data: null })); } catch (e4) {}
                   }
                 }
-                return { triggered: triggered, total: allFileInputs.length };
+                return { triggered: triggered, total: allFileInputs.length, reason: triggeredReason };
               } catch (e) { return { error: String(e) }; }
             })();
           `;

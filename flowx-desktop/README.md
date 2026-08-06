@@ -70,7 +70,7 @@ flowx-desktop/
 │   │   │       ├── zhihu.ts          # 知乎
 │   │   │       ├── wechat_channels.ts # 微信视频号
 │   │   │       ├── wechat_official.ts # 微信公众号（仅账号管理）
-│   │   │       ├── toutiao.ts        # 今日头条（账号管理 + 微头条图文一键发布）
+│   │   │       ├── toutiao.ts        # 今日头条（账号管理 + 微头条图文一键发布 + 西瓜视频一键发布）
 │   │   │       ├── x.ts              # X/Twitter（仅账号管理）
 │   │   │       ├── bilibili.ts       # B站（哔哩哔哩，仅账号管理）
 │   │   │       └── weibo.ts          # 微博（账号管理 + 视频发布 + 图文/纯文本发布）
@@ -115,6 +115,7 @@ flowx-desktop/
 ├── docs/
 │   └── 抖音发布稳定性修复方案.md      # 关键问题解决记录（Electron 28 → 31）
 │   └── 今日头条微头条图文发布技术文档.md  # 今日头条微头条接入（草稿撤销 / 话题匹配 / 图片去重）
+│   └── 今日头条西瓜视频发布技术文档.md    # 今日头条视频发布（xigua/upload-video / CDP上传 / 上传-转码-表单3阶段）
 ├── package.json                      # Electron 31.7.7
 ├── vite.config.ts                    # Vite 配置
 ├── electron-builder.yml              # 打包配置（NSIS）
@@ -167,6 +168,9 @@ flowx-desktop/
   - 图片上传抽屉：CDP `DOM.setFileInputFiles` 注入本地文件 → `Runtime.callFunctionOn` 派发 change/input 事件 → 上传抽屉 success 标记 + `data-e2e="imageUploadConfirm-btn"` 确定按钮点击
   - 草稿撤销弹窗处理：「已恢复上次编辑未保存的内容」撤销按钮点击（33 轮轮询），清理残留图片（编辑器/抽屉/预览区）
   - 图片三道防线：抽屉内多余图片点 `.image-item-remove` 删除 → 抽屉确认后 `div.upload-list` 预览缩略图区 background-image URL 去重点 `i.image-remove-btn`（同 URL 只保留 1 张，绝不 removeChild 破坏 Vue DOM）
+- **今日头条西瓜视频发布**（`mp.toutiao.com/profile_v4/xigua/upload-video`）：
+  - 10 步标准流程：加载发布页 → 登录检测（未登录显示窗口等待 120s）→ 页面结构就绪校验（`wrapper/anchor/fileInput` 任一命中或 fallback 找 input[type=file]）→ CDP 视频文件注入 → 上传/转码进度轮询（最多 10 分钟，`uploading → scanning → finish` 阶段 + 表单渲染就绪才算完成，未达 100% 但表单就绪宽限通过）→ 标题自动补齐（最短 5 字最长 30 字，不足追加"精彩内容"）→ 简介填写（content 映射到 `.form-item-abstract`，可选）→ 发布按钮 3 次重试检测 disabled + 点击（footer 作用域加权）→ 发布结果轮询（成功关键词 / URL 跳转 / 无 fail 宽限）→ 结果返回
+  - 基于字节系统一 `xigua_upload-video-wrapper / garr-video-container / video-form-basic` 框架，和抖音创作平台发布结构同源
 - **测试模式**：点击"测试发布"，仅填写表单不真正发布，高亮标记发布按钮，窗口保持打开供检查
 - **测试结果检测**：自动检测标题/内容/标签/封面是否填写，发布按钮是否找到，生成可视化测试报告
 - **文章摘要**：文章发布支持独立的摘要字段（抖音 30 字，小红书 1000 字）
@@ -363,6 +367,7 @@ Vue 响应式更新 → 进度面板刷新
 - **微博平台接入技术文档**：[`docs/微博平台接入技术文档.md`](./docs/微博平台接入技术文档.md)（账号管理 + 视频发布 + 图文发布完整实现，SUB + 结构识别登录态）
 - **微博自动发布技术文档**：[`docs/微博自动发布技术文档.md`](./docs/微博自动发布技术文档.md)（视频发布：FileChooser拦截 + 真实input注入 + 10张封面候选图轮询 / 图文发布：首页卡片 + 缩略图渲染校验）
 - **今日头条微头条图文发布技术文档**：[`docs/今日头条微头条图文发布技术文档.md`](./docs/今日头条微头条图文发布技术文档.md)（草稿撤销弹窗 / 浮层推荐话题稳定匹配 / ProseMirror 正文填写 / 图片抽屉 + 预览缩略图区重复去重）
+- **今日头条西瓜视频发布技术文档**：[`docs/今日头条西瓜视频发布技术文档.md`](./docs/今日头条西瓜视频发布技术文档.md)（10 步标准流程 / 上传-转码-表单3阶段就绪判定 / 表单渲染宽限 / 发布按钮 footer 作用域加权）
 - **抖音发布稳定性修复方案**：[`docs/抖音发布稳定性修复方案.md`](./docs/抖音发布稳定性修复方案.md)
 - **platforms/ 目录**：[`src/main/services/platforms/`](./src/main/services/platforms/)（多平台独立实现 + shared.ts 共享工具）
 - **PlatformDispatcher.ts**：[`src/main/services/platforms/PlatformDispatcher.ts`](./src/main/services/platforms/PlatformDispatcher.ts)（工厂方法分发器）

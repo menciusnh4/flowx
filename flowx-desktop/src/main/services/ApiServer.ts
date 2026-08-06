@@ -454,6 +454,10 @@ export class ApiServer {
         titleLimit = meta.articleLimits.title;
         contentLimit = meta.articleLimits.content;
         minContent = meta.articleLimits.minContent;
+      } else if (contentType === 'video' && meta.videoLimits) {
+        // ★ 视频发布：优先 meta.videoLimits（如头条视频标题 30 / 简介 400）
+        titleLimit = meta.videoLimits.title;
+        contentLimit = meta.videoLimits.content;
       } else if (meta.contentLimits) {
         titleLimit = meta.contentLimits.title;
         contentLimit = meta.contentLimits.content;

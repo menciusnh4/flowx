@@ -245,6 +245,7 @@ function disabledScheduledDate(time: Date) {
 const platformContentLimit = computed(() => {
   const ids = getSelectedIds()
   const isArticle = contentType.value === 'article'
+  const isVideo = contentType.value === 'video'
   if (ids.length === 0) {
     return { min: isArticle ? 100000 : 1000, platforms: [] }
   }
@@ -259,6 +260,15 @@ const platformContentLimit = computed(() => {
       if (typeof meta.articleLimits?.content === 'number') {
         limits.add(meta.articleLimits.content)
         plats.push({ platform: a.platform, limit: meta.articleLimits.content })
+      }
+    } else if (isVideo) {
+      // 视频发布：优先 videoLimits（如头条视频简介 400 字），没有就回退 contentLimits
+      if (typeof meta.videoLimits?.content === 'number') {
+        limits.add(meta.videoLimits.content)
+        plats.push({ platform: a.platform, limit: meta.videoLimits.content })
+      } else if (typeof meta.contentLimits?.content === 'number') {
+        limits.add(meta.contentLimits.content)
+        plats.push({ platform: a.platform, limit: meta.contentLimits.content })
       }
     } else {
       if (typeof meta.contentLimits?.content === 'number') {
@@ -275,6 +285,7 @@ const platformContentLimit = computed(() => {
 const titleMaxLength = computed(() => {
   const ids = getSelectedIds()
   const isArticle = contentType.value === 'article'
+  const isVideo = contentType.value === 'video'
   if (ids.length === 0) return isArticle ? 64 : 80
   let min = Infinity
   for (const id of ids) {
@@ -285,6 +296,15 @@ const titleMaxLength = computed(() => {
     let limit: number | undefined
     if (isArticle) {
       limit = meta.articleLimits?.title
+    } else if (isVideo) {
+      // 视频发布：优先 videoLimits.title（如头条 30 字），没有就回退
+      if (a.platform === 'wechat_channels') {
+        limit = 16
+      } else if (typeof meta.videoLimits?.title === 'number') {
+        limit = meta.videoLimits.title
+      } else {
+        limit = meta.contentLimits?.title
+      }
     } else {
       if (a.platform === 'wechat_channels' && contentType.value === 'video') {
         limit = 16
@@ -630,7 +650,21 @@ async function submitPublish() {
     const meta = accountStore.platforms.find((p) => p.key === a.platform)
     if (!meta) continue
     
-    if (meta.contentLimits) {
+    if (contentType.value === 'video') {
+      // ★ 视频发布：优先用 videoLimits（如头条视频简介 400 字，之前误用 contentLimits 的 2000 字）
+      const titleMax = typeof meta.videoLimits?.title === 'number' ? meta.videoLimits.title : meta.contentLimits?.title
+      const contentMax = typeof meta.videoLimits?.content === 'number' ? meta.videoLimits.content : meta.contentLimits?.content
+      const contentLen = content.value.length
+      const totalContentLen = contentLen + tagsTotalLen
+      if ((typeof titleMax === 'number' && title.value.length > titleMax) ||
+          (typeof contentMax === 'number' && totalContentLen > contentMax)) {
+        overLimitPlats.push({
+          platform: a.platform,
+          titleLen: title.value.length, contentLen, tagsLen: tagsTotalLen, totalLen: totalContentLen,
+          titleMax, contentMax,
+        })
+      }
+    } else if (meta.contentLimits && contentType.value !== 'article') {
       const tMax = meta.contentLimits.title
       const cMax = meta.contentLimits.content
       const contentLen = content.value.length
@@ -1178,6 +1212,15 @@ function iconOf(platform?: string): string {
                 if (typeof t === 'number') return `标题${t}字 / 正文不限`;
                 if (typeof c === 'number') return `正文最多 ${c} 字（换行不计）`;
                 return '字数不限';
+              }
+              if (contentType === 'video') {
+                // 视频：优先显示 videoLimits（标题/简介），没有就回退 contentLimits
+                const t = typeof meta.videoLimits?.title === 'number' ? meta.videoLimits.title : meta.contentLimits?.title;
+                const c = typeof meta.videoLimits?.content === 'number' ? meta.videoLimits.content : meta.contentLimits?.content;
+                if (typeof t === 'number' && typeof c === 'number') return `标题${t}字 / 简介${c}字`;
+                if (typeof t === 'number') return `标题最多 ${t} 字`;
+                if (typeof c === 'number') return `简介最多 ${c} 字`;
+                return '';
               }
               return meta.contentLimits?.content ? `正文最多 ${meta.contentLimits.content} 字` : '';
             })() }}
