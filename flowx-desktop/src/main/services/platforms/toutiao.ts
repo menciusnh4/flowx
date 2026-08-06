@@ -1698,6 +1698,23 @@ function buildProbeXiguaVideoPosterScript(): string {
             } catch (_) { /* ignore */ }
           }
         }
+        // ★ 竖版 portrait 封面编辑器：<div class="xigua-poster-editor portrait"><div class="bg" style="background-image: url('blob:.../xxx')"></div></div>
+        //   封面 blob 不在 <img>，而在 div.bg 的 background-image 里，必须解析 style
+        if (!res.hasImage) {
+          const bgDivs = ed.querySelectorAll ? ed.querySelectorAll('.bg, [class*="bg"], [style*="background-image"]') : [];
+          for (let bi = 0; bi < bgDivs.length; bi++) {
+            try {
+              const d: any = bgDivs[bi];
+              const styleStr = String(((d.currentStyle || d.style) && ((d.currentStyle && d.currentStyle.backgroundImage) || (d.style && d.style.backgroundImage))) || (d.getAttribute && d.getAttribute('style') || ''));
+              const bgMatch = styleStr.match(/url\(\s*['"]?\s*(blob:[^'")\s]+|https?:[^'")\s]+|data:[^'")\s]+)/i);
+              if (bgMatch && bgMatch[1]) {
+                res.hasImage = true; res.imageSrc = String(bgMatch[1]).slice(0, 200);
+                res.diag.portraitBgStyle = styleStr.slice(0, 200);
+                break;
+              }
+            } catch (_) { /* ignore */ }
+          }
+        }
         // 其他可作为「已上传」的节点（字节常用）
         if (!res.hasImage) {
           const cls = String(ed.className || ed.innerHTML || '');
@@ -1705,6 +1722,19 @@ function buildProbeXiguaVideoPosterScript(): string {
             res.hasImage = true;
           }
         }
+        // ★ 竖版：记录是否含替换按钮（用户提供真实 DOM 有「替换」按钮说明已经有封面编辑器）
+        try {
+          const modifyBars = ed.querySelectorAll ? ed.querySelectorAll('.xigua-image-modify, .image-modify-btn') : [];
+          res.diag.portraitModifyBarCount = modifyBars ? modifyBars.length : 0;
+          if (modifyBars && modifyBars.length) {
+            const t: string[] = [];
+            for (let mi = 0; mi < modifyBars.length; mi++) {
+              const txt = String((modifyBars[mi].innerText || modifyBars[mi].textContent || '')).replace(/\s+/g, '').trim().slice(0, 10);
+              if (txt) t.push(txt);
+            }
+            res.diag.portraitModifyBtn = t.join('|');
+          }
+        } catch (_) { /* ignore */ }
         res.hasDeleteBtn = !!ed.querySelector('.btn.delete, .delete-btn, [class*="delete"], svg[name="icon-close"]');
         const fIns = ed.querySelectorAll('input[type="file"]');
         res.fileInputs = fIns ? fIns.length : 0;
@@ -2108,12 +2138,40 @@ function buildOpenXiguaPosterDialogScript(scope: 'coverEntry' | 'localUploadArea
         }
         return JSON.stringify(res);
       }
-      // coverEntry: 表单里「上传封面」trigger
+      // coverEntry: 表单里「上传封面」trigger（竖版 small-video 时，编辑器已经 portrait 渲染好了，需要点「替换」而不是 fakeUploadTrigger）
       try {
         const d1 = document.querySelector('.Dialog-container .m-xigua-dialog.m-poster-upgrade');
         res.beforeDialogVisible = !!d1;
       } catch (_) { /* ignore */ }
       if (res.beforeDialogVisible) return JSON.stringify(res);
+      // ★ 优先：竖版 portrait 编辑器（small-video）已经渲染时，点「.xigua-image-modify .image-modify-btn」文本='替换'
+      //   用户真实 DOM：<div class="xigua-image-modify portrait"><span class="image-modify-btn">编辑</span>...<span class="image-modify-btn">替换</span></div>
+      const portraitModifys = document.querySelectorAll('.form-item-poster .xigua-image-modify .image-modify-btn, .form-item-poster .image-modify-btn');
+      if (portraitModifys && portraitModifys.length) {
+        let pickedPortraitBtn: any = null;
+        const allBtns: string[] = [];
+        for (let mbi = 0; mbi < portraitModifys.length; mbi++) {
+          const b: any = portraitModifys[mbi];
+          const txt = String((b.innerText || b.textContent || '')).replace(/\s+/g, '').trim();
+          allBtns.push(txt.slice(0, 10));
+          if (/替换|换封面|换图|修改|重新上传|更换封面/.test(txt)) { pickedPortraitBtn = b; break; }
+        }
+        if (pickedPortraitBtn) {
+          res.foundTrigger = true;
+          res.diag = { portraitBtn: allBtns.join('|') };
+          try {
+            if (typeof pickedPortraitBtn.focus === 'function') { try { pickedPortraitBtn.focus(); } catch (_) {} }
+            try { pickedPortraitBtn.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window, button: 0 })); } catch (_) {}
+            try { pickedPortraitBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, button: 0, buttons: 1 })); } catch (_) {}
+            try { if (typeof pickedPortraitBtn.click === 'function') { pickedPortraitBtn.click(); res.clicked = true; } } catch (_) {}
+            try { pickedPortraitBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, button: 0 })); } catch (_) {}
+            try { pickedPortraitBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, button: 0 })); res.clicked = true; } catch (_) {}
+            try { pickedPortraitBtn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window, button: 0 })); } catch (_) {}
+          } catch (_) { /* ignore */ }
+          return JSON.stringify(res);
+        }
+      }
+      // 兜底：横版/未上传过封面的 fakeUploadTrigger 入口
       const triggerCandidates = [
         '.form-item-poster .fake-upload-trigger',
         '.form-item-poster .xigua-poster-editor .fake-upload-trigger',
@@ -2739,16 +2797,17 @@ const PosterStep: XiguaFormStep = {
       }
     }
 
-    // 4) 从 Dialog1 进入 Dialog2（编辑器）：点确定（最多 2 次）
+    // 4) 从 Dialog1 进入 Dialog2（编辑器）：点确定；若确定按钮点击后文本变「上传中」，需要轮询等上传完成（最多 30s）
     let confirmOk = false;
     for (let cp = 0; cp < 2; cp++) {
       if (dialogState && dialogState.dialog2 && dialogState.dialog2.visible) {
         if (dialogState.dialog2.hasConfirm && !dialogState.dialog2.confirmDisabled) {
+          const btnTextBefore = String((dialogState.dialog2 && dialogState.dialog2.confirmText) || '');
           const cRaw: any = await evalJS(win, buildClickXiguaPosterDialogActionScript('click-confirm'), 'poster-dialog-confirm-' + cp, log).catch(() => null);
           const cr: any = parseSafeResult(cRaw, { clicked: false });
-          log('info', 'poster-dialog', `点编辑器确定 #${cp}: ${JSON.stringify(cr || null).slice(0, 200)}`);
+          log('info', 'poster-dialog', `点编辑器确定 #${cp}: 按钮文本前="${btnTextBefore.slice(0,20)} ${JSON.stringify(cr || null).slice(0, 150)}`);
           confirmOk = !!(cr && cr.clicked);
-          await new Promise((r) => setTimeout(r, 1500));
+          await new Promise((r) => setTimeout(r, 1200));
         } else {
           log('warn', 'poster-dialog', `编辑器确定按钮未就绪: hasConfirm=${dialogState.dialog2.hasConfirm} disabled=${dialogState.dialog2.confirmDisabled}，继续等待…`);
           await new Promise((r) => setTimeout(r, 1500));
@@ -2756,6 +2815,38 @@ const PosterStep: XiguaFormStep = {
       }
       // ★ 点完编辑器确定后，立即检查是否弹出了「完成后无法继续编辑，是否确定完成？」二次确认弹窗
       dialogState = parseSafeResult(await evalJS(win, buildProbeXiguaPosterDialogStateScript(), 'poster-dialog-probe-confirm-' + cp, log).catch(() => null), { anyVisible: false });
+      // ★★ 如果 Dialog2 的确定按钮现在显示「上传中 / 处理中 / 保存中 / 同步中」，进入 30s 轮询等待，不能继续直接点下一次确定（白点！）
+      if (dialogState && dialogState.dialog2 && dialogState.dialog2.visible && typeof dialogState.dialog2.confirmText === 'string') {
+        const ct: string = dialogState.dialog2.confirmText.replace(/\s+/g, '').trim();
+        if (/上传中|处理中|保存中|同步中|提交中|生成中|解析中|加载中|请稍候|稍候|等待中/.test(ct)) {
+          log('info', 'poster-dialog-uploading', `检测到编辑器确定按钮进入"上传/处理中"态: confirmText=${ct}，开始轮询等待上传完成（最多 38 次 × 800ms ≈ 30s）…`);
+          let uploadingDone = false;
+          for (let upl = 0; upl < 38; upl++) {
+            await new Promise((r) => setTimeout(r, 800));
+            const upRaw: any = await evalJS(win, buildProbeXiguaPosterDialogStateScript(), 'poster-dialog-uploading-' + cp + '-' + upl, log).catch(() => null);
+            const up: any = parseSafeResult(upRaw, { anyVisible: false });
+            if (!up || !up.anyVisible) { uploadingDone = true; log('info', 'poster-dialog-uploading', `上传中轮询 #${upl}: 弹窗已关闭，视为完成`); break; }
+            // dialogFinal 已弹出 = 上传完了
+            if (up.dialogFinal && up.dialogFinal.visible && up.dialogFinal.hasOk) { uploadingDone = true; log('info', 'poster-dialog-uploading', `上传中轮询 #${upl}: 检测到二次确认弹窗 dialogFinal 弹出，停止等待上传`); break; }
+            // Dialog2 还在，看 confirmText
+            if (up.dialog2 && up.dialog2.visible) {
+              const ctNow: string = String((up.dialog2.confirmText || '')).replace(/\s+/g, '').trim();
+              const stillUploading = /上传中|处理中|保存中|同步中|提交中|生成中|解析中|加载中|请稍候|稍候|等待中/.test(ctNow);
+              log('info', 'poster-dialog-uploading', `上传中轮询 #${upl}: confirmText="${ctNow}" stillUploading=${stillUploading} disabled=${up.dialog2.confirmDisabled}`);
+              if (!stillUploading) {
+                // confirmText 不是「上传中」了，不管变成啥（确定 / 完成 / 使用 / 保存 / 成功等），就退出等待
+                uploadingDone = true;
+                break;
+              }
+            } else {
+              uploadingDone = true; break;
+            }
+          }
+          log('info', 'poster-dialog-uploading', `上传中轮询结束: done=${uploadingDone}，继续后续流程`);
+          // 刷新 dialogState
+          dialogState = parseSafeResult(await evalJS(win, buildProbeXiguaPosterDialogStateScript(), 'poster-dialog-uploading-done-' + cp, log).catch(() => null), { anyVisible: false });
+        }
+      }
       if (dialogState && dialogState.dialogFinal && dialogState.dialogFinal.visible && dialogState.dialogFinal.hasOk) {
         // 先等 800ms 让按钮就绪
         await new Promise((r) => setTimeout(r, 800));
