@@ -33,7 +33,7 @@ FlowX 是一款基于 Electron 的跨平台桌面客户端，旨在帮助内容�
 | 微信视频号 | ✅ | ✅ | ❌ | ✅ | ✅ |
 | 微信公众号 | ❌ | ❌ | ❌ | ✅ | ✅ |
 | 知乎 | ✅ | ✅ | ❌ | ✅ | ✅ |
-| 今日头条 | ❌ | ❌ | ❌ | ✅ | ✅ |
+| 今日头条 | ✅ | ✅ | ❌ | ✅ | ✅ |
 | X（Twitter） | ❌ | ❌ | ❌ | ✅ | ✅ |
 | B站（哔哩哔哩） | ❌ | ❌ | ❌ | ✅ | ✅ |
 | 微博 | ✅ | ✅ | ❌ | ✅ | ✅ |
@@ -42,7 +42,7 @@ FlowX 是一款基于 Electron 的跨平台桌面客户端，旨在帮助内容�
 
 > **文章发布**：支持抖音和小红书的长文创作。抖音文章标题 30 字、正文 8000 字、**封面图必填（已解决动态input上传问题）**；小红书文章标题 64 字、正文不限制。小红书文章需走"一键排版 → 下一步 → 发布"的三步点击流程。抖音文章封面上传采用 JS DataTransfer 直接注入 + CDP 五层拦截架构，解决无持久化 input 元素的问题。
 
-> **仅账号管理平台**：微信公众号、今日头条、X（Twitter）、B 站（哔哩哔哩）目前仅支持账号管理（登录态检测、账号信息提取、打开创作中心），发布功能待开发。微信公众号因需要管理员扫码确认发布，暂不支持自动发布。知乎已支持视频发布和图文发布功能。**微博已完整支持视频发布（`weibo.com/upload/channel`，含封面生成等待）和图文/纯文本发布（首页发布卡片）**，头条文章待接入。X 平台优先从 `window.__INITIAL_STATE__` 提取昵称/头像/handle，同时支持 `SideNav_AccountSwitcher_Button`、`UserAvatar-Container-<handle>` 等多数据源兜底。B站使用 SESSDATA 核心 cookie + DedeUserID 读取 UID，并与微信视频号共享相同级别的 28 种字符黑名单严格净化。微博使用 SUB cookie 核心登录态 + 访客态（visitorSign）+ 个人tab/创作中心头像结构识别三重判断，支持 me.weibo.com 创作中心提取微博号/UID 及粉丝数据。
+> **仅账号管理平台**：微信公众号、X（Twitter）、B 站（哔哩哔哩）目前仅支持账号管理（登录态检测、账号信息提取、打开创作中心），发布功能待开发。微信公众号因需要管理员扫码确认发布，暂不支持自动发布。知乎已支持视频发布和图文发布功能。**微博已完整支持视频发布（`weibo.com/upload/channel`，含封面生成等待）和图文/纯文本发布（首页发布卡片）**。**今日头条（头条号）已完整支持：微头条图文发布（`weitoutiao/publish`，含 ProseMirror 正文 + 话题浮层稳定匹配 + 图片三道防线去重）和 西瓜视频发布（`xigua/upload-video`，含横版/竖版封面 portrait 适配 + 上传中轮询等待 + 作品声明 checkbox）**。X 平台优先从 `window.__INITIAL_STATE__` 提取昵称/头像/handle，同时支持 `SideNav_AccountSwitcher_Button`、`UserAvatar-Container-<handle>` 等多数据源兜底。B站使用 SESSDATA 核心 cookie + DedeUserID 读取 UID，并与微信视频号共享相同级别的 28 种字符黑名单严格净化。微博使用 SUB cookie 核心登录态 + 访客态（visitorSign）+ 个人tab/创作中心头像结构识别三重判断，支持 me.weibo.com 创作中心提取微博号/UID 及粉丝数据。
 
 > **自定义站点规则**：支持用户通过可视化方式自定义网页内容提取规则。在浏览器中右键选择"添加自定义规则"，或在右侧"提取规则"面板中新建规则，点击拾取按钮后在网页上点选目标元素（标题、正文、图片、话题等），系统自动推断 CSS 选择器。规则支持域名匹配和正则匹配，支持图文/视频/文章多内容类型匹配，自定义规则优先级高于内置规则。
 
@@ -163,7 +163,8 @@ flowx/
 | **B站平台接入技术文档** | [`flowx-desktop/docs/B站平台接入技术文档.md`](./flowx-desktop/docs/B站平台接入技术文档.md) | 账号管理：SESSDATA Cookie 登录态 / DedeUserID 取UID / 28 种类引号字符严格净化 / 平台元信息与排错指南 |
 | **微博平台接入技术文档** | [`flowx-desktop/docs/微博平台接入技术文档.md`](./flowx-desktop/docs/微博平台接入技术文档.md) | 账号管理 + 发布：SUB Cookie + 结构识别登录态 / 视频发布（upload/channel + 封面等待）/ 图文发布（首页卡片 + 缩略图校验） |
 | **微博自动发布技术文档** | [`flowx-desktop/docs/微博自动发布技术文档.md`](./flowx-desktop/docs/微博自动发布技术文档.md) | 视频发布：FileChooser拦截+真实input注入+封面候选图10张轮询 / 图文发布：首页卡片+图片缩略图渲染校验+删除按钮检测 |
-| **平台适配器目录** | `flowx-desktop/src/main/services/platforms/` | xiaohongshu.ts / douyin.ts / kuaishou.ts / zhihu.ts / weibo.ts（独立实现 + 共享 shared.ts） |
+| **今日头条微头条发布技术文档（综合版）** | [`flowx-desktop/docs/今日头条微头条发布技术文档.md`](./flowx-desktop/docs/今日头条微头条发布技术文档.md) | 账号接入 + 微头条图文 + 西瓜视频 **合并为一份**：登录态 detectLoggedIn / 信息提取 / 微头条草稿撤销 / 话题稳定匹配 / 图片三道防线 / xigua 上传转码表单三阶段 / 横版vs竖版 small-video 差异（portrait .bg + 替换按钮 + 上传中 30s 轮询）/ 长文占位 |
+| **平台适配器目录** | `flowx-desktop/src/main/services/platforms/` | xiaohongshu.ts / douyin.ts / kuaishou.ts / zhihu.ts / weibo.ts / toutiao.ts（独立实现 + 共享 shared.ts） |
 | **平台分发器** | `flowx-desktop/src/main/services/platforms/PlatformDispatcher.ts` | createExecutor(platform, contentType) — 工厂方法模式的核心 |
 | **发布引擎实现** | `flowx-desktop/src/main/services/PublishEngine.ts` | 并发控制 / IPC 推送 / 重启恢复 / 任务状态管理 |
 

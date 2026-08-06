@@ -70,7 +70,7 @@ flowx-desktop/
 │   │   │       ├── zhihu.ts          # 知乎
 │   │   │       ├── wechat_channels.ts # 微信视频号
 │   │   │       ├── wechat_official.ts # 微信公众号（仅账号管理）
-│   │   │       ├── toutiao.ts        # 今日头条（账号管理 + 微头条图文一键发布 + 西瓜视频一键发布）
+│   │   │       ├── toutiao.ts        # 今日头条（头条号）：账号管理 + 微头条图文 + 西瓜视频合并版（detectLoggedIn 4 重判断 + 信息提取 4 字段 + weitoutiao 14 步 + xigua 10 步 + portrait 封面适配 + 上传中 30s 轮询）
 │   │   │       ├── x.ts              # X/Twitter（仅账号管理）
 │   │   │       ├── bilibili.ts       # B站（哔哩哔哩，仅账号管理）
 │   │   │       └── weibo.ts          # 微博（账号管理 + 视频发布 + 图文/纯文本发布）
@@ -113,9 +113,18 @@ flowx-desktop/
 │   └── types/
 │       └── index.ts                  # 全局共享类型（PublishRequest / PlatformMeta 等）
 ├── docs/
-│   └── 抖音发布稳定性修复方案.md      # 关键问题解决记录（Electron 28 → 31）
-│   └── 今日头条微头条图文发布技术文档.md  # 今日头条微头条接入（草稿撤销 / 话题匹配 / 图片去重）
-│   └── 今日头条西瓜视频发布技术文档.md    # 今日头条视频发布（xigua/upload-video / CDP上传 / 上传-转码-表单3阶段）
+│   ├── 平台技术文档（每平台一份，含账号接入+视频+图文+文章）
+│   │   ├── 小红书平台技术文档.md
+│   │   ├── 抖音平台技术文档.md       # 含稳定性修复方案（Electron 28 → 31）
+│   │   ├── 快手平台技术文档.md
+│   │   ├── 微博平台技术文档.md
+│   │   ├── 知乎平台技术文档.md
+│   │   ├── B站平台技术文档.md
+│   │   ├── 今日头条平台技术文档.md   # 账号接入 + 微头条图文 + 西瓜视频 + 长文占位
+│   │   └── 微信视频号平台技术文档.md
+│   ├── 账号分析功能设计方案.md
+│   ├── 用户自定义站点规则设计方案.md
+│   └── 文章发布Markdown编辑器优化方案.md
 ├── package.json                      # Electron 31.7.7
 ├── vite.config.ts                    # Vite 配置
 ├── electron-builder.yml              # 打包配置（NSIS）
@@ -169,8 +178,8 @@ flowx-desktop/
   - 草稿撤销弹窗处理：「已恢复上次编辑未保存的内容」撤销按钮点击（33 轮轮询），清理残留图片（编辑器/抽屉/预览区）
   - 图片三道防线：抽屉内多余图片点 `.image-item-remove` 删除 → 抽屉确认后 `div.upload-list` 预览缩略图区 background-image URL 去重点 `i.image-remove-btn`（同 URL 只保留 1 张，绝不 removeChild 破坏 Vue DOM）
 - **今日头条西瓜视频发布**（`mp.toutiao.com/profile_v4/xigua/upload-video`）：
-  - 10 步标准流程：加载发布页 → 登录检测（未登录显示窗口等待 120s）→ 页面结构就绪校验（`wrapper/anchor/fileInput` 任一命中或 fallback 找 input[type=file]）→ CDP 视频文件注入 → 上传/转码进度轮询（最多 10 分钟，`uploading → scanning → finish` 阶段 + 表单渲染就绪才算完成，未达 100% 但表单就绪宽限通过）→ 标题自动补齐（最短 5 字最长 30 字，不足追加"精彩内容"）→ 简介填写（content 映射到 `.form-item-abstract`，可选）→ 发布按钮 3 次重试检测 disabled + 点击（footer 作用域加权）→ 发布结果轮询（成功关键词 / URL 跳转 / 无 fail 宽限）→ 结果返回
-  - 基于字节系统一 `xigua_upload-video-wrapper / garr-video-container / video-form-basic` 框架，和抖音创作平台发布结构同源
+  - 10 步标准流程：加载发布页 → 登录检测（未登录显示窗口等待 120s）→ 页面结构就绪校验 → CDP 视频文件注入 → 上传/转码进度轮询（最多 10 分钟，`uploading → scanning → finish` 阶段 + 表单渲染就绪才算完成，未达 100% 但表单就绪宽限通过）→ 标题自动补齐（最短 5 字最长 30 字，不足追加"精彩内容"）→ 简介填写（可选，竖版 small-video 表单可能无该字段）→ 话题（可选，竖版 small-video 可能无）→ **封面上传（横版 fakeUploadTrigger / 竖版 portrait .xigua-image-modify 「替换」按钮双路径 + Dialog2「上传中」30s 独立轮询等待）** → 发布按钮 3 次重试检测 disabled + 点击（footer 作用域加权）→ 发布结果轮询
+  - 基于字节系统一 `xigua_upload-video-wrapper / garr-video-container / video-form-basic` 框架，和抖音创作平台发布结构同源；横版/竖版（small-video）自动适配（竖版封面 div.bg 存 background-image，无简介无话题）
 - **测试模式**：点击"测试发布"，仅填写表单不真正发布，高亮标记发布按钮，窗口保持打开供检查
 - **测试结果检测**：自动检测标题/内容/标签/封面是否填写，发布按钮是否找到，生成可视化测试报告
 - **文章摘要**：文章发布支持独立的摘要字段（抖音 30 字，小红书 1000 字）
@@ -246,7 +255,7 @@ flowx-desktop/
 - Electron 31.7.7（Chromium 126）
 - 禁用 GPU 加速 + 软件渲染 fallback
 - 发布窗口 `render-process-gone` 后自动 reload 1 次兜底
-- 10 条测试用例全部通过（详见 `docs/抖音发布稳定性修复方案.md`）
+- 10 条测试用例全部通过（详见 `docs/抖音平台技术文档.md` 第三章）
 
 ---
 
@@ -353,22 +362,16 @@ Vue 响应式更新 → 进度面板刷新
 - **浏览器与内容提取设计文档**：[`../content-extraction-optimization/content-extraction-optimization.html`](../content-extraction-optimization/content-extraction-optimization.html)
 - **浏览器提取设计文档**：[`docs/浏览器提取设计文档.html`](./docs/浏览器提取设计文档.html)
 - **内容提取优化设计文档**：[`docs/内容提取优化设计文档.html`](./docs/内容提取优化设计文档.html)
-- **小红书自动发布技术文档**：[`docs/小红书自动发布技术文档.md`](./docs/小红书自动发布技术文档.md)（Closed Shadow DOM / CDP 穿透）
-- **小红书图文发布技术文档**：[`docs/小红书图文发布技术文档.md`](./docs/小红书图文发布技术文档.md)（ProseMirror 富文本 / 多图上传）
-- **小红书文章发布技术文档**：[`docs/小红书文章发布技术文档.md`](./docs/小红书文章发布技术文档.md)（多步排版 / 摘要填写 / 话题插入）
-- **快手自动发布技术文档**：[`docs/快手自动发布技术文档.md`](./docs/快手自动发布技术文档.md)（Element UI / contenteditable / user-cnt__item 提取）
-- **快手图文发布技术文档**：[`docs/快手图文发布技术文档.md`](./docs/快手图文发布技术文档.md)
-- **抖音图文发布技术文档**：[`docs/抖音图文发布技术文档.md`](./docs/抖音图文发布技术文档.md)
-- **抖音文章发布技术文档**：[`docs/抖音文章发布技术文档.md`](./docs/抖音文章发布技术文档.md)（封面上传 / 话题弹窗 / 摘要字段）
+- **平台技术文档（每平台一份，含账号接入+视频+图文+文章）**：
+  - **小红书**：[`docs/小红书平台技术文档.md`](./docs/小红书平台技术文档.md)（账号 + 视频 + 图文 + 文章，Shadow DOM 穿透 / ProseMirror / 多步排版）
+  - **抖音**：[`docs/抖音平台技术文档.md`](./docs/抖音平台技术文档.md)（视频 + 图文 + 文章，含 Electron 28→31 稳定性修复方案 / WebAssembly 崩溃根因）
+  - **快手**：[`docs/快手平台技术文档.md`](./docs/快手平台技术文档.md)（账号 + 视频 + 图文）
+  - **微博**：[`docs/微博平台技术文档.md`](./docs/微博平台技术文档.md)（账号 + 视频 + 图文，FileChooser 拦截 + 真实 input 注入 + 10 张封面候选图）
+  - **知乎**：[`docs/知乎平台技术文档.md`](./docs/知乎平台技术文档.md)（图文发布，ProseMirror 富文本编辑器原理）
+  - **B站**：[`docs/B站平台技术文档.md`](./docs/B站平台技术文档.md)（账号管理完整接入，SESSDATA + DedeUserID，发布功能占位）
+  - **今日头条**：[`docs/今日头条平台技术文档.md`](./docs/今日头条平台技术文档.md)（账号 + 微头条图文 + 西瓜视频 + 长文占位）
+  - **微信视频号**：[`docs/微信视频号平台技术文档.md`](./docs/微信视频号平台技术文档.md)（账号 + 视频 + 图文）
 - **文章发布 Markdown 编辑器**：[`docs/文章发布Markdown编辑器优化方案.md`](./docs/文章发布Markdown编辑器优化方案.md)（Markdown 编辑 / 分栏预览 / 平台文件上传）
-- **微信视频号图文技术文档**：[`docs/微信视频图文技术文档.md`](./docs/微信视频图文技术文档.md)（微前端 iframe / CDP 物理点击）
-- **知乎视频发布技术文档**：[`docs/知乎视频发布技术文档.md`](./docs/知乎视频发布技术文档.md)（Draft.js / 视频标记 Modal / React 受控组件）
-- **B站平台接入技术文档**：[`docs/B站平台接入技术文档.md`](./docs/B站平台接入技术文档.md)（账号管理完整接入，SESSDATA + DedeUserID，发布功能占位）
-- **微博平台接入技术文档**：[`docs/微博平台接入技术文档.md`](./docs/微博平台接入技术文档.md)（账号管理 + 视频发布 + 图文发布完整实现，SUB + 结构识别登录态）
-- **微博自动发布技术文档**：[`docs/微博自动发布技术文档.md`](./docs/微博自动发布技术文档.md)（视频发布：FileChooser拦截 + 真实input注入 + 10张封面候选图轮询 / 图文发布：首页卡片 + 缩略图渲染校验）
-- **今日头条微头条图文发布技术文档**：[`docs/今日头条微头条图文发布技术文档.md`](./docs/今日头条微头条图文发布技术文档.md)（草稿撤销弹窗 / 浮层推荐话题稳定匹配 / ProseMirror 正文填写 / 图片抽屉 + 预览缩略图区重复去重）
-- **今日头条西瓜视频发布技术文档**：[`docs/今日头条西瓜视频发布技术文档.md`](./docs/今日头条西瓜视频发布技术文档.md)（10 步标准流程 / 上传-转码-表单3阶段就绪判定 / 表单渲染宽限 / 发布按钮 footer 作用域加权）
-- **抖音发布稳定性修复方案**：[`docs/抖音发布稳定性修复方案.md`](./docs/抖音发布稳定性修复方案.md)
 - **platforms/ 目录**：[`src/main/services/platforms/`](./src/main/services/platforms/)（多平台独立实现 + shared.ts 共享工具）
 - **PlatformDispatcher.ts**：[`src/main/services/platforms/PlatformDispatcher.ts`](./src/main/services/platforms/PlatformDispatcher.ts)（工厂方法分发器）
 - **PublishEngine.ts**：[`src/main/services/PublishEngine.ts`](./src/main/services/PublishEngine.ts)
